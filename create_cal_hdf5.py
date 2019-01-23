@@ -15,7 +15,6 @@ import numpy as np
 from astropy.io import fits
 import fitsio
 from input_utils import setup_logging
-from astropy.table import Table
 
 
 def build_path(reduction_folder, instr, date, obsid, expn):
@@ -27,7 +26,7 @@ def build_path(reduction_folder, instr, date, obsid, expn):
 def get_files(args):
     files = glob.glob(op.join(args.rootdir, args.date, 'virus',
                               'virus%07d' % int(args.observation),
-                              'exp*', 'virus', 'multi_*.fits'))
+                              'exp01', 'virus', 'multi_*.fits'))
     return files
 
 
@@ -41,7 +40,7 @@ class VIRUSImage(tb.IsDescription):
     amp = tb.StringCol(2)
 
 
-def append_fibers_to_table(fib, im, fn, cnt, T):
+def append_fibers_to_table(im, fn):
     F = fits.open(fn)
     imattr = ['wavelength', 'trace', 'ifupos']
     for att in imattr:
@@ -78,6 +77,7 @@ def main(argv=None):
     parser.add_argument('-of', '--outfilename', type=str,
                         help='''Relative or absolute path for output HDF5
                         file.''', default=None)
+
     parser.add_argument('-a', '--append',
                         help='''Appending to existing file.''',
                         action="count", default=0)
@@ -97,28 +97,14 @@ def main(argv=None):
     else:
         fileh = tb.open_file(args.outfilename, 'w')
         group = fileh.create_group(fileh.root, 'Info',
-                                   'VIRUS Fiber Data and Metadata')
-        dummytable = fileh.create_table(group, 'Images', VIRUSImage, 'Image Info')
+                                   'Cal Data and Metadata')
+        imagetable = fileh.create_table(group, 'Cals', VIRUSImage, 'Cal Info')
 
-    # Grab the fiber table and amplifier table for writing
-    imagetable = fileh.root.Info.Images
-
-    if does_exist:
-        cnt = shottable[-1]['obsind']
-    else:
-        cnt = 1
-
-    shot = shottable.row
-    success = append_shot_to_table(shot, files[0], cnt)
-    if success:
-        shottable.flush()
     for fn in files:
         args.log.info('Working on %s' % fn)
-        fib = fibtable.row
         im = imagetable.row
-        success = append_fibers_to_table(fib, im, fn, cnt, T)
+        success = append_fibers_to_table(im, fn)
         if success:
-            fibtable.flush()
             imagetable.flush()
 
     fileh.close()
