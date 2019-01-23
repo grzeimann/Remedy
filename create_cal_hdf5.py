@@ -24,7 +24,7 @@ def get_files(args):
     files = glob.glob(op.join(args.rootdir, args.date, 'virus',
                               'virus%07d' % int(args.observation),
                               'exp01', 'virus', 'multi_*.fits'))
-    return files
+    return sorted(files)
 
 
 class VIRUSImage(tb.IsDescription):
