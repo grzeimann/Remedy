@@ -31,7 +31,7 @@ class VIRUSImage(tb.IsDescription):
     wavelength = tb.Float32Col((112, 1032))
     trace = tb.Float32Col((112, 1032))
     ifupos = tb.Float32Col((112, 2))
-    ifuslot = tb.Integer32Col(3)
+    ifuslot = tb.Int32Col(3)
     ifuid = tb.StringCol(3)
     specid = tb.StringCol(3)
     amp = tb.StringCol(2)
