@@ -5,15 +5,12 @@ Created on Wed Nov 29 09:52:35 2017
 @author: gregz
 """
 import glob
-import re
 
 import tables as tb
 import argparse as ap
 import os.path as op
-import numpy as np
 
 from astropy.io import fits
-import fitsio
 from input_utils import setup_logging
 
 
