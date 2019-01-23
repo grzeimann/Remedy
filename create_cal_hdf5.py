@@ -104,7 +104,6 @@ def main(argv=None):
         if success:
             imagetable.flush()
     
-#    indexrows = imagetable.cols.ifuslot.create_index()
     fileh.close()
 
 
