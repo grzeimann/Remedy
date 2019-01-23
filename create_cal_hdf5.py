@@ -31,7 +31,7 @@ class VIRUSImage(tb.IsDescription):
     wavelength = tb.Float32Col((112, 1032))
     trace = tb.Float32Col((112, 1032))
     ifupos = tb.Float32Col((112, 2))
-    ifuslot = tb.StringCol(3)
+    ifuslot = tb.Integer32Col(3)
     ifuid = tb.StringCol(3)
     specid = tb.StringCol(3)
     amp = tb.StringCol(2)
@@ -45,7 +45,7 @@ def append_fibers_to_table(im, fn):
             im[att] = F['PRIMARY'].data * 1.
         else:
             im[att] = F[att].data * 1.
-    im['ifuslot'] = '%03d' % int(F[0].header['IFUSLOT'])
+    im['ifuslot'] = int(F[0].header['IFUSLOT'])
     im['ifuid'] = '%03d' % int(F[0].header['IFUID'])
     im['specid'] = '%03d' % int(F[0].header['SPECID'])
     im['amp'] = '%s' % F[0].header['amp'][:2]
@@ -103,7 +103,8 @@ def main(argv=None):
         success = append_fibers_to_table(im, fn)
         if success:
             imagetable.flush()
-
+    
+    indexrows = imagetable.cols.ifuslot.create_index()
     fileh.close()
 
 
