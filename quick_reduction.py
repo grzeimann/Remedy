@@ -174,8 +174,8 @@ def get_script_path():
 def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
     sci_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
     twi_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
-    N = array_flt.shape[1]
-    x = np.arange(N)
+    N = array_flt.shape[0]
+    x = np.arange(array_flt.shape[1])
     for fiber in np.arange(array_trace.shape[0]):
         if array_trace[fiber].min() < 0.:
             continue
@@ -186,8 +186,9 @@ def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
         tw = array_flt[indl, x] / 2. + array_flt[indh, x] / 2.
         twi_spectrum[fiber] = np.interp(def_wave, wave[fiber], tw, left=0.0,
                                         right=0.0)
-        sw = (array_sci[indl, x] / array_flt[indl, x] +
-              array_sci[indh, x] / array_flt[indh, x])
+        #sw = (array_sci[indl, x] / array_flt[indl, x] +
+        #      array_sci[indh, x] / array_flt[indh, x])
+        sw = array_sci[indl, x] + array_sci[indh, x]
         sci_spectrum[fiber] = np.interp(def_wave, wave[fiber], sw, left=0.0,
                                         right=0.0)
     twi_spectrum[~np.isfinite(twi_spectrum)] = 0.0
