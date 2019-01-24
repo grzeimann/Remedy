@@ -45,7 +45,7 @@ parser.add_argument("-r", "--rootdir",
                     (just before date folders)''',
                     type=str, default='/work/03946/hetdex/maverick')
 
-parser.add_argument("-hf", "--h5file",
+parser.add_argument("-hf", "--hdf5file",
                     help='''HDF5 calibration file''',
                     type=str, default=None)
 
