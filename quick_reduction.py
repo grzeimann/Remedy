@@ -199,7 +199,7 @@ def reduce_ifuslot(ifuloop, h5table):
             log.info('Found twi files on %s and using them for %s' %
                      (newdate, args.date))
         log.info('Making mastertwi for %s%s' % (ifuslot, amp))
-        masterflt, norm = get_mastertwi(twibase, masterbias)
+        masterflt = get_mastertwi(twibase, masterbias)
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
 
         filenames = build_path(args.rootdir, args.date, args.observation,
