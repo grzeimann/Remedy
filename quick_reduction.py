@@ -19,7 +19,7 @@ from input_utils import setup_logging
 from scipy.interpolate import griddata
 from tables import open_file
 from bokeh.plotting import figure, output_file, save
-from bokeh.models.mappers import LogColorMapper
+from bokeh.models.mappers import LinearColorMapper
 from bokeh.models import ColorBar, LogTicker
 
 
@@ -221,7 +221,7 @@ def make_plot(image):
     G = Gaussian2DKernel(7)
     image = convolve(image, G, boundary='extend')
     image[:] -= np.median(image)
-    color_mapper = LogColorMapper(palette="Viridis256",
+    color_mapper = LinearColorMapper(palette="Viridis256",
                                   low=np.percentile(image, 2),
                                   high=np.percentile(image, 98))
     p = figure(x_range=(-25, 25), y_range=(-25, 25),
