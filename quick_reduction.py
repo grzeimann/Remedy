@@ -59,7 +59,7 @@ def build_path(rootdir, date, obs, ifuslot, amp, base='sci', exp='exp*',
                instrument='virus'):
     if obs != '*':
         obs = '%07d' % obs
-    path = op.join(rootdir, date, '%s%s' % (instrument, obs),
+    path = op.join(rootdir, date, instrument, '%s%s' % (instrument, obs),
                    exp, instrument, '2*%s%s*%s.fits' % (ifuslot, amp, base))
     return path
     
