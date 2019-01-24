@@ -51,7 +51,7 @@ parser.add_argument("-hf", "--hdf5file",
 
 parser.add_argument("-i", "--ifuslot",
                     help='''If ifuslot is not provided, then all are reduced''',
-                    type=str, default=None)
+                    type=int, default=None)
 
 args = parser.parse_args(args=None)
 
