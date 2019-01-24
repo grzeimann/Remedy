@@ -254,8 +254,8 @@ if args.hdf5file is None:
 h5file = open_file(args.hdf5file, mode='r')
 h5table = h5file.root.Info.Cals
 
-grid_x, grid_y = np.meshgrid(np.linspace(-25, 25, 101),
-                             np.linspace(-25, 25, 101))
+grid_x, grid_y = np.meshgrid(np.linspace(-25, 25, 401),
+                             np.linspace(-25, 25, 401))
 
 ifuslots = h5table.cols.ifuslot[:]
 if args.ifuslot is not None:
