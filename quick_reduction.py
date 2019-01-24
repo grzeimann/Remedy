@@ -231,7 +231,9 @@ def reduce_ifuslot(ifuloop, h5table):
     return p, t, s
             
 def make_plot(image):
-    color_mapper = LogColorMapper(palette="Viridis256", low=150, high=500)
+    color_mapper = LogColorMapper(palette="Viridis256",
+                                  low=np.percentile(image, 2),
+                                  high=np.percentile(image, 98))
     p = figure(x_range=(-25, 25), y_range=(-25, 25),
                tooltips=[("x", "$x"), ("y", "$y"), ("value", "@image")])
 
