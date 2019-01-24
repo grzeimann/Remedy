@@ -232,11 +232,12 @@ def reduce_ifuslot(ifuloop, h5table):
             
 def make_plot(image):
     color_mapper = LogColorMapper(palette="Viridis256", low=150, high=500)
-    p = figure(x_range=(-25, 25), y_range=(-25, 25), color_mapper=color_mapper,
+    p = figure(x_range=(-25, 25), y_range=(-25, 25),
                tooltips=[("x", "$x"), ("y", "$y"), ("value", "@image")])
 
     # must give a vector of image data for image parameter
-    p.image(image=[image], x=-25, y=-25, dw=50, dh=50)
+    p.image(image=[image], x=-25, y=-25, dw=50, dh=50,
+            color_mapper=color_mapper)
     color_bar = ColorBar(color_mapper=color_mapper, ticker=LogTicker(),
                          label_standoff=12, border_line_color=None, 
                          location=(0,0))
