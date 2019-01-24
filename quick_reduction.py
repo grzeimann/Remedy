@@ -132,7 +132,7 @@ def get_mastertwi(twi_path, masterbias):
         listtwi.append(a)
     twi_array = np.array(listtwi, dtype=float)
     norm = np.median(twi_array, axis=(1, 2))[:, np.newaxis, np.newaxis]
-    return np.median(twi_array / norm, axis=0), np.median(norm)
+    return np.median(twi_array / norm, axis=0) * np.median(norm)
 
 
 def get_cal_path(pathname, date):
@@ -210,7 +210,7 @@ def reduce_ifuslot(ifuloop, h5table):
             sciimage[:] = sciimage - masterbias
             twi, spec = get_spectra(sciimage, masterflt, trace, wave, def_wave)
             pos = amppos + dither_pattern[j]
-            for x, i in zip([p, t, s], [pos, twi, spec / norm]):
+            for x, i in zip([p, t, s], [pos, twi, spec]):
                 x.append(i * 1.)
     p, t, s = [np.vstack(j) for j in [p, t, s]]
     return p, t, s 
@@ -252,6 +252,8 @@ else:
 
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
 pos, twispectra, scispectra = reduce_ifuslot(ifuloop, h5table)
+average_twi = np.median(twispectra, axis=0)
+scispectra = scispectra * average_twi
 color = color_dict['red']
 image = np.mean(scispectra[:, color[2]:color[3]], axis=1)
 log.info('Done base reduction for ifuslot: %03d' % args.ifuslot)
