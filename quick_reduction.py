@@ -214,8 +214,7 @@ def reduce_ifuslot(ifuloop, h5table):
         filenames = build_path(args.rootdir, args.date, args.observation,
                                ifuslot, amp)
         filenames = sorted(glob.glob(filenames))
-        print(filenames)
-        for fn, j in enumerate(filenames):
+        for j, fn in enumerate(filenames):
             sciimage, scierror = base_reduction(fn)
             sciimage[:] = sciimage - masterbias
             twi, spec = get_spectra(sciimage, masterflt, def_wave)
