@@ -206,8 +206,8 @@ def reduce_ifuslot(ifuloop, h5table):
             masterbias = h5table[ind]['masterbias']
         except:
             masterbias = 0.0
-        twibase = build_path(args.rootdir, args.date, '*', ifuslot, amp,
-                             base='twi')
+        twibase = build_path(args.rootdir, args.date, 15, ifuslot, amp,
+                             base='sci')
         twibase, newdate = get_cal_path(twibase, args.date)
     
         if newdate != args.date:
