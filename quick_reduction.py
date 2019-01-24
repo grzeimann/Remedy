@@ -211,7 +211,7 @@ def reduce_ifuslot(ifuloop, h5table):
         if newdate != args.date:
             log.info('Found twi files on %s and using them for %s' %
                      (newdate, args.date))
-    
+        log.info('Making mastertwi for %s%s' % (ifuslot, amp))
         masterflt = get_mastertwi(twibase, masterbias)
         filenames = build_path(args.rootdir, args.date, args.observation,
                                ifuslot, amp)
