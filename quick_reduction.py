@@ -18,6 +18,8 @@ from input_utils import setup_logging
 from scipy.interpolate import griddata
 from tables import open_file
 from bokeh.plotting import figure, output_file, save
+from bokeh.models.mappers import LogColorMapper
+from bokeh.models import ColorBar, LogTicker
 
 
 # Configuration    
@@ -229,12 +231,15 @@ def reduce_ifuslot(ifuloop, h5table):
     return p, t, s
             
 def make_plot(image):
-    p = figure(x_range=(-25, 25), y_range=(-25, 25),
+    color_mapper = LogColorMapper(palette="Viridis256", low=150, high=500)
+    p = figure(x_range=(-25, 25), y_range=(-25, 25), color_mapper=color_mapper,
                tooltips=[("x", "$x"), ("y", "$y"), ("value", "@image")])
 
     # must give a vector of image data for image parameter
     p.image(image=[image], x=-25, y=-25, dw=50, dh=50)
-
+    color_bar = ColorBar(color_mapper=color_mapper, ticker=LogTicker(),
+                         label_standoff=12, border_line_color=None, 
+                         location=(0,0))
     output_file("image.html", title="image.py example")
     save(p)
 
