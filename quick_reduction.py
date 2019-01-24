@@ -260,5 +260,7 @@ log.info('Done base reduction for ifuslot: %03d' % args.ifuslot)
 
 grid_z0 = griddata(pos, image, (grid_x, grid_y), method='nearest')
 make_plot(grid_z0)
+
+h5file.close()
     
         
