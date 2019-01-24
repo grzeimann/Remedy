@@ -223,7 +223,7 @@ def reduce_ifuslot(ifuloop, h5table):
             sciimage[:] = sciimage - masterbias
             twi, spec = get_spectra(sciimage, masterflt, trace, wave, def_wave)
             pos = amppos + dither_pattern[j]
-            for x, i in zip([p, t, s], [pos, spec, twi]):
+            for x, i in zip([p, t, s], [pos, twi, spec]):
                 x.append(i * 1.)
     p, t, s = [np.vstack(j) for j in [p, t, s]]
     return p, t, s
