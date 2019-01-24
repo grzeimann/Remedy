@@ -256,10 +256,15 @@ average_twi = np.median(twispectra, axis=0)
 scispectra = scispectra * average_twi
 color = color_dict['red']
 image = np.mean(scispectra[:, color[2]:color[3]], axis=1)
+back = [np.percentile(chunk, 20) 
+        for chunk in np.array_split(image, image.shape[0] / 112)]
+avg = np.median(back)
+chunks = np.array_split(image, image.shape[0] / 112)
+newimage = np.vstack([avg*chunk/b for b, chunk in zip(back, chunks)])
 log.info('Done base reduction for ifuslot: %03d' % args.ifuslot)
 
 
-grid_z0 = griddata(pos, image, (grid_x, grid_y), method='nearest')
+grid_z0 = griddata(pos, newimage, (grid_x, grid_y), method='nearest')
 make_plot(grid_z0)
 
 h5file.close()
