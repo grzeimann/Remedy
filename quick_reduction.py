@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from input_utils import setup_logging
 from scipy.interpolate import griddata
 from tables import open_file
-from bokeh.plotting import figure, output_file
+from bokeh.plotting import figure, output_file, save
 
 
 # Configuration    
@@ -234,7 +234,7 @@ def make_plot(image):
     p.image(image=[image], x=-25, y=-25, dw=50, dh=50)
 
     output_file("image.html", title="image.py example")
-
+    save(p)
 
 DIRNAME = get_script_path()
 instrument = 'virus'
