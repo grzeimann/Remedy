@@ -186,9 +186,8 @@ def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
         tw = array_flt[indl, x] / 2. + array_flt[indh, x] / 2.
         twi_spectrum[fiber] = np.interp(def_wave, wave[fiber], tw, left=0.0,
                                         right=0.0)
-        #sw = (array_sci[indl, x] / array_flt[indl, x] +
-        #      array_sci[indh, x] / array_flt[indh, x])
-        sw = array_sci[indl, x] + array_sci[indh, x]
+        sw = (array_sci[indl, x] / array_flt[indl, x] +
+              array_sci[indh, x] / array_flt[indh, x])
         sci_spectrum[fiber] = np.interp(def_wave, wave[fiber], sw, left=0.0,
                                         right=0.0)
     twi_spectrum[~np.isfinite(twi_spectrum)] = 0.0
@@ -236,12 +235,12 @@ def make_plot(image):
     p = figure(x_range=(-25, 25), y_range=(-25, 25),
                tooltips=[("x", "$x"), ("y", "$y"), ("value", "@image")])
 
-    # must give a vector of image data for image parameter
     p.image(image=[image], x=-25, y=-25, dw=50, dh=50,
             color_mapper=color_mapper)
     color_bar = ColorBar(color_mapper=color_mapper, ticker=LogTicker(),
                          label_standoff=12, border_line_color=None, 
                          location=(0,0))
+    p.add_layout(color_bar, 'right')
     output_file("image.html", title="image.py example")
     save(p)
 
