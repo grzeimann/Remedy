@@ -11,6 +11,7 @@ import numpy as np
 import os.path as op
 import sys
 
+from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.io import fits
 from astropy.stats import biweight_location
 from datetime import datetime, timedelta
@@ -217,6 +218,8 @@ def reduce_ifuslot(ifuloop, h5table):
             
 def make_plot(image):
     #image = image / np.median(image)
+    G = Gaussian2DKernel(7)
+    image = convolve(image, G)
     color_mapper = LogColorMapper(palette="Viridis256",
                                   low=np.percentile(image, 2),
                                   high=np.percentile(image, 98))
@@ -255,7 +258,6 @@ pos, twispectra, scispectra = reduce_ifuslot(ifuloop, h5table)
 average_twi = np.median(twispectra, axis=0)
 scispectra = scispectra * average_twi
 color = color_dict['red']
-print(color)
 image = np.median(scispectra[:, color[2]:color[3]], axis=1)
 back = [np.percentile(chunk, 20) 
         for chunk in np.array_split(image, image.shape[0] / 112)]
