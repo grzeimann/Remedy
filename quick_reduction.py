@@ -198,6 +198,8 @@ def reduce_ifuslot(ifuloop, h5table):
         ifuslot = '%03d' % h5table[ind]['ifuslot']
         amp = h5table[ind]['amp']
         amppos = h5table[ind]['ifupos']
+        wave = h5table[ind]['wavelength']
+        trace = h5table[ind]['trace']
         try:
             masterbias = h5table[ind]['masterbias']
         except:
@@ -217,7 +219,7 @@ def reduce_ifuslot(ifuloop, h5table):
         for j, fn in enumerate(filenames):
             sciimage, scierror = base_reduction(fn)
             sciimage[:] = sciimage - masterbias
-            twi, spec = get_spectra(sciimage, masterflt, def_wave)
+            twi, spec = get_spectra(sciimage, masterflt, trace, wave, def_wave)
             pos = amppos + dither_pattern[j]
             for x, i in zip([p, t, s], [pos, spec, twi]):
                 x.append(i * 1.)
