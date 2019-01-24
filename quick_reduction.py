@@ -5,17 +5,64 @@ Created on Tue Jan 22 15:11:39 2019
 @author: gregz
 """
 
-import fitsio
+import argparse as ap
 import glob
 import numpy as np
 import os.path as op
 import sys
 
 from astropy.io import fits
-from astropy.stats import biweight_location, biweight_midvariance
+from astropy.stats import biweight_location
 from datetime import datetime, timedelta
 from input_utils import setup_logging
+from scipy.interpolate import griddata
+from tables import open_file
+from bokeh.plotting import figure, output_file
 
+
+# Configuration    
+amps = ['LL', 'LU', 'RL', 'RU']
+dither_pattern = np.array([[0., 0.], [1.27, -0.73], [1.27, 0.73]])
+def_wave = np.arange(3470., 5542., 2.)
+color_dict = {'blue': [3600., 3900.], 'green': [4350, 4650],
+              'red': [5100., 5400.]}
+for col_ in color_dict:
+     color_dict[col_].append(np.searchsorted(def_wave, color_dict[col_][0]))
+     color_dict[col_].append(np.searchsorted(def_wave, color_dict[col_][1]))
+
+parser = ap.ArgumentParser(add_help=True)
+
+parser.add_argument("-d", "--date",
+                    help='''Date for reduction''',
+                    type=str, default='20181108')
+
+parser.add_argument("-o", "--observation",
+                    help='''Observation ID''',
+                    type=int, default=None)
+
+parser.add_argument("-r", "--rootdir",
+                    help='''Directory for raw data. 
+                    (just before date folders)''',
+                    type=str, default='/work/03946/hetdex/maverick')
+
+parser.add_argument("-hf", "--h5file",
+                    help='''HDF5 calibration file''',
+                    type=str, default=None)
+
+parser.add_argument("-i", "--ifuslot",
+                    help='''If ifuslot is not provided, then all are reduced''',
+                    type=str, default=None)
+
+args = parser.parse_args(args=None)
+
+def build_path(rootdir, date, obs, ifuslot, amp, base='sci', exp='exp*',
+               instrument='virus'):
+    if obs != '*':
+        obs = '%07d' % obs
+    path = op.join(rootdir, date, '%s%s' % (instrument, obs),
+                   exp, instrument, '2*%s%s*%s.fits' % (ifuslot, amp, base))
+    return path
+    
 
 def orient_image(image, amp, ampname):
     '''
@@ -74,31 +121,8 @@ def base_reduction(filename, get_header=False):
     return a, E
 
 
-def get_masterbias(zro_path, amp):
-    files = glob.glob(zro_path.replace('LL', amp))
-    listzro = []
-    for filename in files:
-        a, error = base_reduction(filename)
-        listzro.append(a)
-    return np.median(listzro, axis=0)
-
-
-def get_masterarc(arc_path, amp, arc_names, masterbias, specname):
-    files = glob.glob(arc_path.replace('LL', amp))
-    listarc, listarce = ([], [])
-    for filename in files:
-        f = fits.open(filename)
-        if f[0].header['OBJECT'].lower() in arc_names:
-            a, e = base_reduction(filename)
-            a[:] -= masterbias
-            listarc.append(a)
-            listarce.append(e)
-    listarc, listarce = [np.array(x) for x in [listarc, listarce]]
-    return np.sum(listarc, axis=0)
-
-
-def get_mastertwi(twi_path, amp, masterbias):
-    files = glob.glob(twi_path.replace('LL', amp))
+def get_mastertwi(twi_path, masterbias):
+    files = glob.glob(twi_path)
     listtwi = []
     for filename in files:
         a, e = base_reduction(filename)
@@ -109,71 +133,7 @@ def get_mastertwi(twi_path, amp, masterbias):
     return np.median(twi_array / norm, axis=0)
 
 
-def get_trace_reference(specid, ifuslot, ifuid, amp, obsdate,
-                        virusconfig='/work/03946/hetdex/'
-                        'maverick/virus_config'):
-    files = glob.glob(op.join(virusconfig, 'Fiber_Locations', '*',
-                              'fiber_loc_%s_%s_%s_%s.txt' %
-                              (specid, ifuslot, ifuid, amp)))
-    dates = [op.basename(op.dirname(fn)) for fn in files]
-    obsdate = datetime(int(obsdate[:4]), int(obsdate[4:6]),
-                       int(obsdate[6:]))
-    timediff = np.zeros((len(dates),))
-    for i, datei in enumerate(dates):
-        d = datetime(int(datei[:4]), int(datei[4:6]),
-                     int(datei[6:]))
-        timediff[i] = np.abs((obsdate - d).days)
-    ref_file = np.loadtxt(files[np.argmin(timediff)])
-    return ref_file
-
-
-def get_trace(twilight, specid, ifuslot, ifuid, amp, obsdate):
-    ref = get_trace_reference(specid, ifuslot, ifuid, amp, obsdate)
-    N1 = (ref[:, 1] == 0.).sum()
-    good = np.where(ref[:, 1] == 0.)[0]
-
-    def get_trace_chunk(flat, XN):
-        YM = np.arange(flat.shape[0])
-        inds = np.zeros((3, len(XN)))
-        inds[0] = XN - 1.
-        inds[1] = XN + 0.
-        inds[2] = XN + 1.
-        inds = np.array(inds, dtype=int)
-        Trace = (YM[inds[1]] - (flat[inds[2]] - flat[inds[0]]) /
-                 (2. * (flat[inds[2]] - 2. * flat[inds[1]] + flat[inds[0]])))
-        return Trace
-    image = twilight
-    N = 40
-    xchunks = np.array([np.mean(x) for x in
-                        np.array_split(np.arange(image.shape[1]), N)])
-    chunks = np.array_split(image, N, axis=1)
-    flats = [np.median(chunk, axis=1) for chunk in chunks]
-    Trace = np.zeros((len(ref), len(chunks)))
-    k = 0
-    for flat, x in zip(flats, xchunks):
-        diff_array = flat[1:] - flat[:-1]
-        loc = np.where((diff_array[:-1] > 0.) * (diff_array[1:] < 0.))[0]
-        peaks = flat[loc+1]
-        loc = loc[peaks > 0.1 * np.median(peaks)]+1
-        trace = get_trace_chunk(flat, loc)
-        T = np.zeros((len(ref)))
-        if len(trace) == N1:
-            T[good] = trace
-            for missing in np.where(ref[:, 1] == 1)[0]:
-                gind = np.argmin(np.abs(missing - good))
-                T[missing] = (T[good[gind]] + ref[missing, 0] -
-                              ref[good[gind], 0])
-        Trace[:, k] = T
-        k += 1
-    x = np.arange(twilight.shape[1])
-    trace = np.zeros((Trace.shape[0], twilight.shape[1]))
-    for i in np.arange(Trace.shape[0]):
-        sel = Trace[i, :] > 0.
-        trace[i] = np.polyval(np.polyfit(xchunks[sel], Trace[i, sel], 7), x)
-    return trace, ref
-
-
-def find_peaks(y, thresh=8.):
+def find_shift(y, trace, thresh=8.):
     def get_peaks(flat, XN):
         YM = np.arange(flat.shape[0])
         inds = np.zeros((3, len(XN)))
@@ -184,14 +144,8 @@ def find_peaks(y, thresh=8.):
         Peaks = (YM[inds[1]] - (flat[inds[2]] - flat[inds[0]]) /
                  (2. * (flat[inds[2]] - 2. * flat[inds[1]] + flat[inds[0]])))
         return Peaks
-    diff_array = y[1:] - y[:-1]
-    loc = np.where((diff_array[:-1] > 0.) * (diff_array[1:] < 0.))[0]
-    peaks = y[loc+1]
-    std = np.sqrt(biweight_midvariance(y))
-    loc = loc[peaks > (thresh * std)]+1
-    peak_loc = get_peaks(y, loc)
-    peaks = y[np.round(peak_loc).astype(int)]
-    return peak_loc, peaks/std, peaks
+    peak_loc = get_peaks(y, trace)
+    return shift
 
 
 def get_cal_path(pathname, date):
@@ -211,98 +165,100 @@ def get_cal_path(pathname, date):
     return pathname, daten
 
 
-def get_ifucenfile(side, amp, virusconfig=op.join(DIRNAME, 'config'),
-                   skiprows=4):
-
-    file_dict = {"uv": "LRS2_B_UV_mapping.txt",
-                 "orange": "LRS2_B_OR_mapping.txt",
-                 "red": "LRS2_R_NR_mapping.txt",
-                 "farred": "LRS2_R_FR_mapping.txt"}
-
-    ifucen = np.loadtxt(op.join(virusconfig, 'IFUcen_files',
-                        file_dict[side]), usecols=[0, 1, 2], skiprows=skiprows)
-
-    if amp == "LL":
-        return ifucen[140:, 1:3][::-1, :]
-    if amp == "LU":
-        return ifucen[:140, 1:3][::-1, :]
-    if amp == "RL":
-        return ifucen[:140, 1:3][::-1, :]
-    if amp == "RU":
-        return ifucen[140:, 1:3][::-1, :]
-
-
 def get_script_path():
     return op.dirname(op.realpath(sys.argv[0]))
-    
-def get_spectra(array_flt, array_trace):
-    spectrum = array_trace * 0.
-    x = np.arange(array_flt.shape[1])
+
+
+def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
+    sci_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
+    twi_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
+    N = array_flt.shape[1]
+    x = np.arange(N)
     for fiber in np.arange(array_trace.shape[0]):
+        if array_trace[fiber].min() < 0.:
+            continue
+        if np.ceil(array_trace[fiber]).max() >= N:
+            continue
         indl = np.floor(array_trace[fiber]).astype(int)
         indh = np.ceil(array_trace[fiber]).astype(int)
-        spectrum[fiber] = array_flt[indl, x] / 2. + array_flt[indh, x] / 2.
-    return spectrum
+        tw = array_flt[indl, x] / 2. + array_flt[indh, x] / 2.
+        twi_spectrum[fiber] = np.interp(def_wave, wave[fiber], tw, left=0.0,
+                                        right=0.0)
+        sw = (array_sci[indl, x] / array_flt[indl, x] +
+              array_sci[indh, x] / array_flt[indh, x])
+        sci_spectrum[fiber] = np.interp(def_wave, wave[fiber], sw, left=0.0,
+                                        right=0.0)
+    twi_spectrum[~np.isfinite(twi_spectrum)] = 0.0
+    sci_spectrum[~np.isfinite(sci_spectrum)] = 0.0
+    return twi_spectrum, sci_spectrum / 2.
+
+def reduce_ifuslot(ifuloop, h5table):
+    p, t, s = ([], [], [])
+    for ind in ifuloop:
+        ifuslot = '%03d' % h5table[ind]['ifuslot']
+        amp = h5table[ind]['amp']
+        amppos = h5table[ind]['ifupos']
+        try:
+            masterbias = h5table[ind]['masterbias']
+        except:
+            masterbias = 0.0
+        twibase = build_path(args.rootdir, args.date, '*', ifuslot, amp,
+                             base='twi')
+        twibase, newdate = get_cal_path(twibase, args.date)
+    
+        if newdate != args.date:
+            log.info('Found twi files on %s and using them for %s' %
+                     (newdate, args.date))
+    
+        masterflt = get_mastertwi(twibase, masterbias)
+        filenames = build_path(args.rootdir, args.date, args.observation, ifuslot,
+                               amp)
+        for fn, j in enumerate(filenames):
+            sciimage, scierror = base_reduction(fn)
+            sciimage[:] = sciimage - masterbias
+            twi, spec = get_spectra(sciimage, masterflt, def_wave)
+            pos = amppos + dither_pattern[j]
+            for x, i in zip([p, t, s], [pos, spec, twi]):
+                x.append(i * 1.)
+    p, t, s = [np.vstack(j) for j in [p, t, s]]
+    return p, t, s
+            
+def make_plot(image):
+    p = figure(x_range=(0, 10), y_range=(0, 10),
+               tooltips=[("x", "$x"), ("y", "$y"), ("value", "@image")])
+
+    # must give a vector of image data for image parameter
+    p.image(image=[image], x=0, y=0, dw=10, dh=10, palette="RdBu")
+
+    output_file("image.html", title="image.py example")
+
 
 DIRNAME = get_script_path()
 instrument = 'virus'
 log = setup_logging()
+if args.hdf5file is None:
+    args.hdf5file = op.join(DIRNAME, 'cals', 'default_cals.h5')
 
-for ifuslot in ifuslots:
-    for amp in amps:
-        amppos = get_ifucenfile(specname, amp)
-        ##############
-        # MASTERBIAS #
-        ##############
-        log.info('Getting Masterbias for ifuslot, %s, and amp, %s' %
-                 (ifuslot, amp))
-        zro_path = bias_path % (instrument, instrument, '00000*', instrument,
-                                ifuslot)
-        zro_path, newdate = get_cal_path(zro_path, args.date)
-        if newdate != args.date:
-            log.info('Found bias files on %s and using them for %s' % (newdate, args.date))
-        masterbias = get_masterbias(zro_path, amp)
+h5file = open_file(args.hdf5file, mode='r')
+h5table = h5file.root.Info.Cals
 
-        #####################
-        # MASTERTWI [TRACE] #
-        #####################
-        log.info('Getting MasterFlat for ifuslot, %s, and amp, %s' %
-                 (ifuslot, amp))
-        twibase, newdate = get_cal_path(twibase, args.date)
+grid_x, grid_y = np.meshgrid(np.linspace(-25, 25, 101),
+                             np.linspace(-25, 25, 101))
 
-        if newdate != args.date:
-            log.info('Found trace files on %s and using them for %s' % (newdate, args.date))
-        masterflt = get_mastertwi(twibase, amp, masterbias)
+ifuslots = h5table.cols.ifuslot[:]
+if args.ifuslot is not None:
+    ifuloop = np.where(args.ifuslot == ifuslots)[0]
+else:
+    ifuloop = np.arange(0, len(ifuslots))
 
-        log.info('Getting Trace for ifuslot, %s, and amp, %s' %
-                 (ifuslot, amp))
-        trace, dead = get_trace(masterflt, specid, ifuslot, ifuid, amp,
-                                twi_date)
-        #fits.PrimaryHDU(trace).writeto('test_trace.fits', overwrite=True)
+log.info('Reducing ifuslot: %03d' % args.ifuslot)
+pos, twispectra, scispectra = reduce_ifuslot(ifuloop, h5file)
+color = color_dict['red']
+image = np.mean(scispectra[:, color[2]:color[3]], axis=1)
+log.info('Done base reduction for ifuslot: %03d' % args.ifuslot)
 
-        ##########################
-        # MASTERARC [WAVELENGTH] #
-        ##########################
-        log.info('Getting MasterArc for ifuslot, %s, and amp, %s' %
-                 (ifuslot, amp))
-        lamp_path = cmp_path % (instrument, instrument, '00000*', instrument,
-                                ifuslot)
-        lamp_path, newdate = get_cal_path(lamp_path, args.date)
-        if newdate != args.date:
-            log.info('Found lamp files on %s and using them for %s' % (newdate, args.date))
-        masterarc = get_masterarc(lamp_path, amp, arc_names, masterbias,
-                                  specname)
-        #fits.PrimaryHDU(masterarc).writeto('wtf_%s_%s.fits' % (ifuslot, amp), overwrite=True)
-        log.info('Getting Wavelength for ifuslot, %s, and amp, %s' %
-                 (ifuslot, amp))
-        wave = get_wavelength_from_arc(masterarc, trace, arc_lines, specname, amp)
-        #fits.PrimaryHDU(wave).writeto('test_wave.fits', overwrite=True)
 
-        #################################
-        # TWILIGHT FLAT [FIBER PROFILE] #
-        #################################
-        log.info('Getting bigW for ifuslot, %s, and amp, %s' %
-                 (ifuslot, amp))
-        bigW = get_bigW(amp, wave, trace, masterbias)
-        package.append([wave, trace, bigW, masterbias, amppos, dead])
-        marc.append([masterarc])
+grid_z0 = griddata(pos, image, (grid_x, grid_y), method='nearest')
+make_plot(grid_z0)
+    
+        
