@@ -211,8 +211,9 @@ def reduce_ifuslot(ifuloop, h5table):
                      (newdate, args.date))
     
         masterflt = get_mastertwi(twibase, masterbias)
-        filenames = build_path(args.rootdir, args.date, args.observation, ifuslot,
-                               amp)
+        filenames = build_path(args.rootdir, args.date, args.observation,
+                               ifuslot, amp)
+        filenames = glob.glob(filenames)
         for fn, j in enumerate(filenames):
             sciimage, scierror = base_reduction(fn)
             sciimage[:] = sciimage - masterbias
