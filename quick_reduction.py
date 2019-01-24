@@ -259,6 +259,7 @@ image = np.mean(scispectra[:, color[2]:color[3]], axis=1)
 back = [np.percentile(chunk, 20) 
         for chunk in np.array_split(image, image.shape[0] / 112)]
 avg = np.median(back)
+print(back, avg)
 chunks = np.array_split(image, image.shape[0] / 112)
 newimage = np.vstack([avg*chunk/b for b, chunk in zip(back, chunks)])
 log.info('Done base reduction for ifuslot: %03d' % args.ifuslot)
