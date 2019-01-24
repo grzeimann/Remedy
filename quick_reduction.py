@@ -132,22 +132,7 @@ def get_mastertwi(twi_path, masterbias):
         listtwi.append(a)
     twi_array = np.array(listtwi, dtype=float)
     norm = np.median(twi_array, axis=(1, 2))[:, np.newaxis, np.newaxis]
-    return np.median(twi_array / norm, axis=0)
-
-
-def find_shift(y, trace, thresh=8.):
-    def get_peaks(flat, XN):
-        YM = np.arange(flat.shape[0])
-        inds = np.zeros((3, len(XN)))
-        inds[0] = XN - 1.
-        inds[1] = XN + 0.
-        inds[2] = XN + 1.
-        inds = np.array(inds, dtype=int)
-        Peaks = (YM[inds[1]] - (flat[inds[2]] - flat[inds[0]]) /
-                 (2. * (flat[inds[2]] - 2. * flat[inds[1]] + flat[inds[0]])))
-        return Peaks
-    peak_loc = get_peaks(y, trace)
-    return shift
+    return np.median(twi_array / norm, axis=0), np.median(norm)
 
 
 def get_cal_path(pathname, date):
@@ -214,7 +199,7 @@ def reduce_ifuslot(ifuloop, h5table):
             log.info('Found twi files on %s and using them for %s' %
                      (newdate, args.date))
         log.info('Making mastertwi for %s%s' % (ifuslot, amp))
-        masterflt = get_mastertwi(twibase, masterbias)
+        masterflt, norm = get_mastertwi(twibase, masterbias)
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
 
         filenames = build_path(args.rootdir, args.date, args.observation,
@@ -228,7 +213,7 @@ def reduce_ifuslot(ifuloop, h5table):
             for x, i in zip([p, t, s], [pos, twi, spec]):
                 x.append(i * 1.)
     p, t, s = [np.vstack(j) for j in [p, t, s]]
-    return p, t, s
+    return p, t, s / norm
             
 def make_plot(image):
     color_mapper = LogColorMapper(palette="Viridis256",
