@@ -252,7 +252,7 @@ else:
     ifuloop = np.arange(0, len(ifuslots))
 
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
-pos, twispectra, scispectra = reduce_ifuslot(ifuloop, h5file)
+pos, twispectra, scispectra = reduce_ifuslot(ifuloop, h5table)
 color = color_dict['red']
 image = np.mean(scispectra[:, color[2]:color[3]], axis=1)
 log.info('Done base reduction for ifuslot: %03d' % args.ifuslot)
