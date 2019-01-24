@@ -227,11 +227,11 @@ def reduce_ifuslot(ifuloop, h5table):
     return p, t, s
             
 def make_plot(image):
-    p = figure(x_range=(0, 10), y_range=(0, 10),
+    p = figure(x_range=(-25, 25), y_range=(-25, 25),
                tooltips=[("x", "$x"), ("y", "$y"), ("value", "@image")])
 
     # must give a vector of image data for image parameter
-    p.image(image=[image], x=0, y=0, dw=10, dh=10, palette="RdBu")
+    p.image(image=[image], x=-25, y=-25, dw=50, dh=50)
 
     output_file("image.html", title="image.py example")
 
