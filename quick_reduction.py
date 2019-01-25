@@ -20,7 +20,7 @@ from scipy.interpolate import griddata
 from tables import open_file
 from bokeh.plotting import figure, output_file, save
 from bokeh.models.mappers import LinearColorMapper
-from bokeh.models import ColorBar, LogTicker
+from bokeh.models import ColorBar
 
 
 # Configuration    
@@ -229,7 +229,7 @@ def make_plot(image):
 
     p.image(image=[image], x=-25, y=-25, dw=50, dh=50,
             color_mapper=color_mapper)
-    color_bar = ColorBar(color_mapper=color_mapper, ticker=LogTicker(),
+    color_bar = ColorBar(color_mapper=color_mapper,
                          label_standoff=12, border_line_color=None, 
                          location=(0,0))
     p.add_layout(color_bar, 'right')
