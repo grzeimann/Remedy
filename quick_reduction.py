@@ -221,7 +221,7 @@ def make_plot(image):
     G = Gaussian2DKernel(7)
     image = convolve(image, G, boundary='extend')
     image[:] -= np.median(image)
-    color_mapper = LinearColorMapper(palette="Viridis256",
+    color_mapper = LinearColorMapper(palette="gray",
                                   low=np.percentile(image, 2),
                                   high=np.percentile(image, 98))
     p = figure(x_range=(-25, 25), y_range=(-25, 25),
@@ -235,6 +235,10 @@ def make_plot(image):
     p.add_layout(color_bar, 'right')
     output_file("image.html", title="image.py example")
     save(p)
+
+def output_fits(image):
+    F = fits.PrimaryHDU(np.array(image, 'float32'))
+    
 
 DIRNAME = get_script_path()
 instrument = 'virus'
