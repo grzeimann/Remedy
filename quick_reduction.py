@@ -221,7 +221,7 @@ def make_plot(image):
     G = Gaussian2DKernel(7)
     image = convolve(image, G, boundary='extend')
     image[:] -= np.median(image)
-    color_mapper = LinearColorMapper(palette="gray",
+    color_mapper = LinearColorMapper(palette="Viridis256",
                                   low=np.percentile(image, 2),
                                   high=np.percentile(image, 98))
     p = figure(x_range=(-25, 25), y_range=(-25, 25),
