@@ -219,7 +219,7 @@ def reduce_ifuslot(ifuloop, h5table):
 def make_plot(image):
     #image = image / np.median(image)
     G = Gaussian2DKernel(7)
-    image = convolve(image, G, boundary='extend')
+    #image = convolve(image, G, boundary='extend')
     image[:] -= np.median(image)
     color_mapper = LinearColorMapper(palette="Viridis256",
                                   low=np.percentile(image, 2),
