@@ -260,7 +260,8 @@ def output_fits(image, fn):
         RA = fits.open(fn)[0].header['TRAJCRA'] 
         DEC = fits.open(fn)[0].header['TRAJCDEC']
         A = Astrometry(RA, DEC, PA, 0., 0., fplane_file=args.fplane_file)
-        wcs = A.get_ifuslot_projection(ifuslot, imscale, crx, cry)
+        A.get_ifuslot_projection(ifuslot, imscale, crx, cry)
+        wcs = A.tp_ifuslot
     else:
         A = Astrometry(args.ra, args.dec, PA, 0., 0.,
                        fplane_file=args.fplane_file)
