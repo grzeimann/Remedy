@@ -269,9 +269,8 @@ def output_fits(image, fn):
                          cry, x_scale=-imscale, y_scale=imscale)
     header = wcs.wcs.to_header()
     F = fits.PrimaryHDU(np.array(image, 'float32'))
-    h = dict(header)
-    for hi in h:
-        F[0].header[hi] = h[hi]
+    for hi in header:
+        F[0].header[hi] = header[hi]
     F.writeto('%s_%07d_%03d.fits' %
               (args.date, args.observation, args.ifuslot))
     
