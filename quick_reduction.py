@@ -270,39 +270,105 @@ def output_fits(image, fn):
     #    F.header[hi] = header[hi]
     F.writeto('%s_%07d_%03d.fits' %
               (args.date, args.observation, args.ifuslot), overwrite=True)
-    
 
+def make_frame(xloc, yloc, data, Dx, Dy,
+               scale=0.5, seeing_fac=1.5):
+    seeing = seeing_fac * scale
+    a, b = data.shape
+    x = np.arange(-25.-scale,
+                  25.+1*scale, scale)
+    y = np.arange(-25.-scale,
+                  25.+1*scale, scale)
+    xgrid, ygrid = np.meshgrid(x, y)
+    zgrid = np.zeros((b,)+xgrid.shape)
+    area = np.pi * 0.75**2
+    for k in np.arange(b):
+        image = data[:, k]
+        back = [np.nanpercentile(chunk, 20) 
+                for chunk in np.array_split(image, image.shape[0] / 112)]
+        avg = np.nanmedian(back)
+        chunks = np.array_split(image, image.shape[0] / 112)
+        newimage = np.hstack([avg * chunk / ba 
+                              for ba, chunk in zip(back, chunks)])
+        sel = np.isfinite(newimage)
+        D = np.sqrt((xloc[:, np.newaxis, np.newaxis] - Dx[k] - xgrid)**2 +
+                    (yloc[:, np.newaxis, np.newaxis] - Dy[k] - ygrid)**2)
+        W = np.exp(-0.5 / (seeing / 2.35)**2 * D**2)
+        zgrid[k, :, :] = ((newimage[sel][:, np.newaxis, np.newaxis] *
+                           W[sel]).sum(axis=0) / W[sel].sum(axis=0) *
+                          (scale**2 / area))
+    return zgrid, xgrid, ygrid
+
+def write_cube(wave, xgrid, ygrid, zgrid, outname, he):
+    hdu = fits.PrimaryHDU(np.array(zgrid, dtype='float32'))
+    hdu.header['CRVAL1'] = xgrid[0, 0]
+    hdu.header['CRVAL2'] = ygrid[0, 0]
+    hdu.header['CRVAL3'] = wave[0]
+    hdu.header['CRPIX1'] = 1
+    hdu.header['CRPIX2'] = 1
+    hdu.header['CRPIX3'] = 1
+    hdu.header['CTYPE1'] = 'pixel'
+    hdu.header['CTYPE2'] = 'pixel'
+    hdu.header['CTYPE3'] = 'pixel'
+    hdu.header['CDELT1'] = xgrid[0, 1] - xgrid[0, 0]
+    hdu.header['CDELT2'] = ygrid[1, 0] - ygrid[0, 0]
+    hdu.header['CDELT3'] = wave[1] - wave[0]
+    for key in he.keys():
+        if key in hdu.header:
+            continue
+        if ('CCDSEC' in key) or ('DATASEC' in key):
+            continue
+        if ('BSCALE' in key) or ('BZERO' in key):
+            continue
+        hdu.header[key] = he[key]
+    hdu.writeto(outname, overwrite=True)
+
+# GET DIRECTORY NAME FOR PATH BUILDING
 DIRNAME = get_script_path()
 instrument = 'virus'
 log = setup_logging()
 if args.hdf5file is None:
     args.hdf5file = op.join(DIRNAME, 'cals', 'default_cals.h5')
 
+# OPEN HDF5 FILE
 h5file = open_file(args.hdf5file, mode='r')
 h5table = h5file.root.Info.Cals
 
-grid_x, grid_y = np.meshgrid(np.linspace(-25, 25, 401),
-                             np.linspace(-25, 25, 401))
-
+# Collect indices for ifuslot
 ifuslots = h5table.cols.ifuslot[:]
 ifuloop = np.where(args.ifuslot == ifuslots)[0]
 
-
+# Reducing IFUSLOT
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
 pos, twispectra, scispectra, fn = reduce_ifuslot(ifuloop, h5table)
 average_twi = np.median(twispectra, axis=0)
 scispectra = scispectra * average_twi
+
+# Making data cube
+log.info('Making Cube')
+zgrid, xgrid, ygrid = make_frame(pos[:, 0], pos[:, 1], scispectra, 
+                                 0. * def_wave, 0. * def_wave)
+
+he = fits.open(fn)[0].header
+write_cube(def_wave, xgrid, ygrid, zgrid,'%s_%07d_%03d_cube.fits' %
+           (args.date, args.observation, args.ifuslot) , he)
+
+# Collapse image
+log.info('Making collapsed frame')
 color = color_dict['red']
 image = np.median(scispectra[:, color[2]:color[3]], axis=1)
+
+# Normalize exposures and amps together using 20%-tile
 back = [np.percentile(chunk, 20) 
         for chunk in np.array_split(image, image.shape[0] / 112)]
 avg = np.median(back)
 chunks = np.array_split(image, image.shape[0] / 112)
 newimage = np.hstack([avg*chunk/b for b, chunk in zip(back, chunks)])
 
-log.info('Done base reduction for ifuslot: %03d' % args.ifuslot)
 
-log.info('Timing')
+log.info('Build Refined collapsed frame')
+grid_x, grid_y = np.meshgrid(np.linspace(-25, 25, 401),
+                             np.linspace(-25, 25, 401))
 grid_z0 = griddata(pos, newimage, (grid_x, grid_y), method='nearest')
 G = Gaussian2DKernel(7)
 image = convolve(grid_z0, G, boundary='extend')
