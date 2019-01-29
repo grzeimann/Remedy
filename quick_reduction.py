@@ -231,9 +231,6 @@ def reduce_ifuslot(ifuloop, h5table):
     return p, t, s, fn 
             
 def make_plot(image):
-    G = Gaussian2DKernel(7)
-    image = convolve(image, G, boundary='extend')
-    image[:] -= np.median(image)
     color_mapper = LinearColorMapper(palette="Viridis256",
                                   low=np.percentile(image, 2),
                                   high=np.percentile(image, 98))
@@ -306,8 +303,11 @@ newimage = np.hstack([avg*chunk/b for b, chunk in zip(back, chunks)])
 log.info('Done base reduction for ifuslot: %03d' % args.ifuslot)
 
 grid_z0 = griddata(pos, newimage, (grid_x, grid_y), method='nearest')
-make_plot(grid_z0)
-output_fits(grid_z0, fn)
+G = Gaussian2DKernel(7)
+image = convolve(grid_z0, G, boundary='extend')
+image[:] -= np.median(image)
+make_plot(image)
+output_fits(image, fn)
 
 h5file.close()
     
