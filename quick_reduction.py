@@ -268,6 +268,8 @@ def output_fits(image, fn):
         wcs = A.setup_TP(args.ra, args.dec, A.rot, crx, 
                          cry, x_scale=-imscale, y_scale=imscale)
     header = wcs.wcs.to_header()
+    print(header)
+    print(wcs)
     F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
     F.writeto('%s_%07d_%03d.fits' %
               (args.date, args.observation, args.ifuslot))
