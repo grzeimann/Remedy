@@ -269,7 +269,7 @@ def output_fits(image, fn):
     #for hi in header:
     #    F.header[hi] = header[hi]
     F.writeto('%s_%07d_%03d.fits' %
-              (args.date, args.observation, args.ifuslot))
+              (args.date, args.observation, args.ifuslot), overwrite=True)
     
 
 DIRNAME = get_script_path()
