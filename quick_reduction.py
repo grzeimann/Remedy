@@ -302,11 +302,13 @@ newimage = np.hstack([avg*chunk/b for b, chunk in zip(back, chunks)])
 
 log.info('Done base reduction for ifuslot: %03d' % args.ifuslot)
 
+log.info('Timing')
 grid_z0 = griddata(pos, newimage, (grid_x, grid_y), method='nearest')
 G = Gaussian2DKernel(7)
 image = convolve(grid_z0, G, boundary='extend')
 image[:] -= np.median(image)
-make_plot(image)
+log.info('Timeing done')
+# make_plot(image)
 output_fits(image, fn)
 
 h5file.close()
