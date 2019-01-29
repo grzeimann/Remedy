@@ -176,6 +176,8 @@ def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
     N = array_flt.shape[0]
     x = np.arange(array_flt.shape[1])
     for fiber in np.arange(array_trace.shape[0]):
+        dw = np.diff(wave[fiber])
+        dw = np.hstack([dw[0], dw])
         if array_trace[fiber].min() < 0.:
             continue
         if np.ceil(array_trace[fiber]).max() >= N:
@@ -183,12 +185,12 @@ def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
         indl = np.floor(array_trace[fiber]).astype(int)
         indh = np.ceil(array_trace[fiber]).astype(int)
         tw = array_flt[indl, x] / 2. + array_flt[indh, x] / 2.
-        twi_spectrum[fiber] = np.interp(def_wave, wave[fiber], tw, left=0.0,
-                                        right=0.0)
+        twi_spectrum[fiber] = np.interp(def_wave, wave[fiber], tw / dw,
+                                        left=0.0, right=0.0)
         sw = (array_sci[indl, x] / array_flt[indl, x] +
               array_sci[indh, x] / array_flt[indh, x])
-        sci_spectrum[fiber] = np.interp(def_wave, wave[fiber], sw, left=0.0,
-                                        right=0.0)
+        sci_spectrum[fiber] = np.interp(def_wave, wave[fiber], sw / dw,
+                                        left=0.0, right=0.0)
     twi_spectrum[~np.isfinite(twi_spectrum)] = 0.0
     sci_spectrum[~np.isfinite(sci_spectrum)] = 0.0
     return twi_spectrum, sci_spectrum / 2.
@@ -290,7 +292,6 @@ def make_frame(xloc, yloc, data, Dx, Dy,
     for k in np.arange(b):
         if k % 50 == 0.:
             log.info('Now on column: %i' % k)
-        
         sel = np.isfinite(newimage[:, k])
         D = np.sqrt((xloc[:, np.newaxis, np.newaxis] - Dx[k] - xgrid)**2 +
                     (yloc[:, np.newaxis, np.newaxis] - Dy[k] - ygrid)**2)
