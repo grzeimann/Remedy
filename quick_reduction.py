@@ -284,7 +284,7 @@ def make_frame(xloc, yloc, data, Dx, Dy,
     area = np.pi * 0.75**2
     back = [np.nanpercentile(chunk, 20) 
             for chunk in np.array_split(data, data.shape[0] / 112, axis=0)]
-    avg = np.nanmedian(back)
+    avg = np.nanmedian(back, axis=0)
     chunks = np.array_split(data, data.shape[0] / 112, axis=0)
     newimage = np.vstack([avg * chunk / ba for ba, chunk in zip(back, chunks)])
     for k in np.arange(b):
