@@ -254,16 +254,16 @@ def output_fits(image, fn):
     imscale = 50. / image.shape[0]
     crx = image.shape[1] / 2.
     cry = image.shape[0] / 2.
+    ifuslot = '%03d' % args.ifuslot
     if (args.ra is None) or (args.dec is None):
         log.info('Using header for RA and Dec')
         RA = fits.open(fn)[0].header['TRAJCRA'] 
         DEC = fits.open(fn)[0].header['TRAJCDEC']
         A = Astrometry(RA, DEC, PA, 0., 0., fplane_file=args.fplane_file)
-        wcs = A.get_ifuslot_projection(args.ifuslot, imscale, crx, cry)
+        wcs = A.get_ifuslot_projection(ifuslot, imscale, crx, cry)
     else:
         A = Astrometry(args.ra, args.dec, PA, 0., 0.,
                        fplane_file=args.fplane_file)
-        
         wcs = A.setup_TP(args.ra, args.dec, A.rot, crx, 
                          cry, x_scale=-imscale, y_scale=imscale)
     header = wcs.wcs.to_header()
