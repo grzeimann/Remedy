@@ -272,7 +272,7 @@ def output_fits(image, fn):
               (args.date, args.observation, args.ifuslot), overwrite=True)
 
 def make_frame(xloc, yloc, data, Dx, Dy,
-               scale=0.5, seeing_fac=1.5):
+               scale=1.0, seeing_fac=1.5):
     seeing = seeing_fac * scale
     a, b = data.shape
     x = np.arange(-25.-scale,
@@ -283,6 +283,8 @@ def make_frame(xloc, yloc, data, Dx, Dy,
     zgrid = np.zeros((b,)+xgrid.shape)
     area = np.pi * 0.75**2
     for k in np.arange(b):
+        if k % 50 == 0.:
+            log.info('Now on column: %i' % k)
         image = data[:, k]
         back = [np.nanpercentile(chunk, 20) 
                 for chunk in np.array_split(image, image.shape[0] / 112)]
