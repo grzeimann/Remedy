@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Created on Mon Oct  8 16:33:56 2018
-
-@author: gregz
+@author: Jan Snigula
 """
 
 try:
