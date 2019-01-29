@@ -11,6 +11,7 @@ import numpy as np
 import os.path as op
 import sys
 
+from astrometry import Astrometry
 from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.io import fits
 from astropy.stats import biweight_location
@@ -35,11 +36,19 @@ for col_ in color_dict:
 
 parser = ap.ArgumentParser(add_help=True)
 
-parser.add_argument("-d", "--date",
-                    help='''Date for reduction''',
-                    type=str, default='20181108')
+parser.add_argument("ifuslot",
+                    help='''If ifuslot is not provided, then all are reduced''',
+                    type=int, default=None)
 
-parser.add_argument("-o", "--observation",
+parser.add_argument("hdf5file",
+                    help='''HDF5 calibration file''',
+                    type=str, default=None)
+
+parser.add_argument("date",
+                    help='''Date for reduction''',
+                    type=str, default=None)
+
+parser.add_argument("observation",
                     help='''Observation ID''',
                     type=int, default=None)
 
@@ -48,13 +57,17 @@ parser.add_argument("-r", "--rootdir",
                     (just before date folders)''',
                     type=str, default='/work/03946/hetdex/maverick')
 
-parser.add_argument("-hf", "--hdf5file",
-                    help='''HDF5 calibration file''',
-                    type=str, default=None)
+parser.add_argument("-ra", "--ra",
+                    help='''RA of the IFUSLOT to be reduced''',
+                    type=float, default=None)
 
-parser.add_argument("-i", "--ifuslot",
-                    help='''If ifuslot is not provided, then all are reduced''',
-                    type=int, default=None)
+parser.add_argument("-dec", "--dec",
+                    help='''Dec of the IFUSLOT to be reduced''',
+                    type=float, default=None)
+
+parser.add_argument("-fp", "--fplane_file",
+                    help='''fplane file''',
+                    type=str, default=None)
 
 args = parser.parse_args(args=None)
 
@@ -212,14 +225,14 @@ def reduce_ifuslot(ifuloop, h5table):
             twi, spec = get_spectra(sciimage, masterflt, trace, wave, def_wave)
             pos = amppos + dither_pattern[j]
             for x, i in zip([p, t, s], [pos, twi, spec]):
-                x.append(i * 1.)
+                x.append(i * 1.)        
     p, t, s = [np.vstack(j) for j in [p, t, s]]
-    return p, t, s 
+    
+    return p, t, s, fn 
             
 def make_plot(image):
-    #image = image / np.median(image)
     G = Gaussian2DKernel(7)
-    #image = convolve(image, G, boundary='extend')
+    image = convolve(image, G, boundary='extend')
     image[:] -= np.median(image)
     color_mapper = LinearColorMapper(palette="Viridis256",
                                   low=np.percentile(image, 2),
@@ -236,8 +249,27 @@ def make_plot(image):
     output_file("image.html", title="image.py example")
     save(p)
 
-def output_fits(image):
-    F = fits.PrimaryHDU(np.array(image, 'float32'))
+def output_fits(image, fn):
+    PA = fits.open(fn)[0].header['PARANGLE']
+    imscale = 50. / image.shape[0]
+    crx = image.shape[1] / 2.
+    cry = image.shape[0] / 2.
+    if (args.ra is None) or (args.dec is None):
+        log.info('Using header for RA and Dec')
+        RA = fits.open(fn)[0].header['TRAJCRA'] 
+        DEC = fits.open(fn)[0].header['TRAJCDEC']
+        A = Astrometry(RA, DEC, PA, 0., 0., fplane_file=args.fplane_file)
+        wcs = A.get_ifuslot_projection(args.ifuslot, imscale, crx, cry)
+    else:
+        A = Astrometry(args.ra, args.dec, PA, 0., 0.,
+                       fplane_file=args.fplane_file)
+        
+        wcs = A.setup_TP(args.ra, args.dec, A.rot, crx, 
+                         cry, x_scale=-imscale, y_scale=imscale)
+    header = wcs.wcs.to_header()
+    F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
+    F.writeto('%s_%07d_%03d.fits' %
+              (args.date, args.observation, args.ifuslot))
     
 
 DIRNAME = get_script_path()
@@ -253,13 +285,11 @@ grid_x, grid_y = np.meshgrid(np.linspace(-25, 25, 401),
                              np.linspace(-25, 25, 401))
 
 ifuslots = h5table.cols.ifuslot[:]
-if args.ifuslot is not None:
-    ifuloop = np.where(args.ifuslot == ifuslots)[0]
-else:
-    ifuloop = np.arange(0, len(ifuslots))
+ifuloop = np.where(args.ifuslot == ifuslots)[0]
+
 
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
-pos, twispectra, scispectra = reduce_ifuslot(ifuloop, h5table)
+pos, twispectra, scispectra, fn = reduce_ifuslot(ifuloop, h5table)
 average_twi = np.median(twispectra, axis=0)
 scispectra = scispectra * average_twi
 color = color_dict['red']
@@ -269,11 +299,12 @@ back = [np.percentile(chunk, 20)
 avg = np.median(back)
 chunks = np.array_split(image, image.shape[0] / 112)
 newimage = np.hstack([avg*chunk/b for b, chunk in zip(back, chunks)])
-log.info('Done base reduction for ifuslot: %03d' % args.ifuslot)
 
+log.info('Done base reduction for ifuslot: %03d' % args.ifuslot)
 
 grid_z0 = griddata(pos, newimage, (grid_x, grid_y), method='nearest')
 make_plot(grid_z0)
+output_fits(grid_z0, fn)
 
 h5file.close()
     
