@@ -257,7 +257,7 @@ def output_fits(image, fn):
     ifuslot = '%03d' % args.ifuslot
     if (args.ra is None) or (args.dec is None):
         log.info('Using header for RA and Dec')
-        RA = fits.open(fn)[0].header['TRAJCRA'] 
+        RA = fits.open(fn)[0].header['TRAJCRA'] * 15.
         DEC = fits.open(fn)[0].header['TRAJCDEC']
         A = Astrometry(RA, DEC, PA, 0., 0., fplane_file=args.fplane_file)
         A.get_ifuslot_projection(ifuslot, imscale, crx, cry)
@@ -268,9 +268,10 @@ def output_fits(image, fn):
         wcs = A.setup_TP(args.ra, args.dec, A.rot, crx, 
                          cry, x_scale=-imscale, y_scale=imscale)
     header = wcs.wcs.to_header()
-    print(header)
-    print(wcs)
-    F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
+    F = fits.PrimaryHDU(np.array(image, 'float32'))
+    h = dict(header)
+    for hi in h:
+        F[0].header[hi] = h[hi]
     F.writeto('%s_%07d_%03d.fits' %
               (args.date, args.observation, args.ifuslot))
     
