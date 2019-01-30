@@ -290,10 +290,13 @@ def make_frame(xloc, yloc, data, Dx, Dy,
     chunks = np.array_split(data, data.shape[0] / 112, axis=0)
     newimage = np.vstack([avg * chunk / ba for ba, chunk in zip(back, chunks)])
     G = Gaussian2DKernel(0.7)
+    S = np.zeros((data.shape[0], 2))
     for k in np.arange(b):
         if k % 50 == 0.:
             log.info('Col: %i' % k)
-        grid_z = griddata([xloc+Dx[k], yloc+Dy[k]], newimage[:, k],
+        S[:, 0] = xloc + Dx[k]
+        S[:, 1] = yloc + Dy[k]
+        grid_z = griddata(S, newimage[:, k],
                           (xgrid, ygrid), method='nearest')
         zgrid[k, :, :] = (convolve(grid_z, G, boundary='extend') *
                           scale**2 / area)
