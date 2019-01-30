@@ -289,16 +289,15 @@ def make_frame(xloc, yloc, data, Dx, Dy,
     avg = np.nanmedian(back, axis=0)
     chunks = np.array_split(data, data.shape[0] / 112, axis=0)
     newimage = np.vstack([avg * chunk / ba for ba, chunk in zip(back, chunks)])
+    G = Gaussian2DKernel(0.7)
     for k in np.arange(b):
         if k % 50 == 0.:
-            log.info('Now on column: %i' % k)
-        sel = np.isfinite(newimage[:, k])
-        D = np.sqrt((xloc[:, np.newaxis, np.newaxis] - Dx[k] - xgrid)**2 +
-                    (yloc[:, np.newaxis, np.newaxis] - Dy[k] - ygrid)**2)
-        W = np.exp(-0.5 / (seeing / 2.35)**2 * D**2)
-        zgrid[k, :, :] = ((newimage[sel, k][:, np.newaxis, np.newaxis] *
-                           W[sel]).sum(axis=0) / W[sel].sum(axis=0) *
-                          (scale**2 / area))
+            args.log.info('Col: %i' % k)
+        grid_z = griddata([xloc+Dx[k], yloc+Dy[k]], newimage[:, k],
+                          (xgrid, ygrid), method='nearest')
+        zgrid[k, :, :] = (convolve(grid_z, G, boundary='extend') *
+                          scale**2 / area)
+        zgrid[k, :, :] -= np.nanmedian(zgrid[k, :, :])
     return zgrid, xgrid, ygrid
 
 def write_cube(wave, xgrid, ygrid, zgrid, outname, he):
