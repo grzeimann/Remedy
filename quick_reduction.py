@@ -292,8 +292,6 @@ def make_frame(xloc, yloc, data, Dx, Dy,
     G = Gaussian2DKernel(0.7)
     S = np.zeros((data.shape[0], 2))
     for k in np.arange(b):
-        if k % 50 == 0.:
-            log.info('Col: %i' % k)
         S[:, 0] = xloc + Dx[k]
         S[:, 1] = yloc + Dy[k]
         grid_z = griddata(S, newimage[:, k],
