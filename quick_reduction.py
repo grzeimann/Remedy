@@ -275,7 +275,7 @@ def output_fits(image, fn):
 
 def make_frame(xloc, yloc, data, Dx, Dy,
                scale=0.75, seeing_fac=1.5, radius=1.5):
-    seeing = seeing_fac * scale
+    seeing = seeing_fac / scale
     a, b = data.shape
     x = np.arange(-25.-scale,
                   25.+1*scale, scale)
