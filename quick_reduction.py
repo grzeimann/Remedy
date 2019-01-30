@@ -383,7 +383,7 @@ grid_z0 = griddata(pos, newimage, (grid_x, grid_y), method='nearest')
 G = Gaussian2DKernel(7)
 image = convolve(grid_z0, G, boundary='extend')
 image[:] -= np.median(image)
-log.info('Timeing done')
+log.info('Timing done')
 # make_plot(image)
 output_fits(image, fn)
 
