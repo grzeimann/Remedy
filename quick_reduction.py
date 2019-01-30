@@ -292,7 +292,7 @@ def make_frame(xloc, yloc, data, Dx, Dy,
     G = Gaussian2DKernel(0.7)
     for k in np.arange(b):
         if k % 50 == 0.:
-            args.log.info('Col: %i' % k)
+            log.info('Col: %i' % k)
         grid_z = griddata([xloc+Dx[k], yloc+Dy[k]], newimage[:, k],
                           (xgrid, ygrid), method='nearest')
         zgrid[k, :, :] = (convolve(grid_z, G, boundary='extend') *
