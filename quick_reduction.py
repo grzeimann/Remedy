@@ -274,7 +274,7 @@ def output_fits(image, fn):
               (args.date, args.observation, args.ifuslot), overwrite=True)
 
 def make_frame(xloc, yloc, data, Dx, Dy,
-               scale=1.0, seeing_fac=1.5, radius=1.5):
+               scale=0.75, seeing_fac=1.5, radius=1.5):
     seeing = seeing_fac * scale
     a, b = data.shape
     x = np.arange(-25.-scale,
