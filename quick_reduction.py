@@ -284,7 +284,7 @@ def make_frame(xloc, yloc, data, Dx, Dy,
     xgrid, ygrid = np.meshgrid(x, y)
     zgrid = np.zeros((b,)+xgrid.shape)
     area = np.pi * 0.75**2
-    back = [np.nanpercentile(chunk, 20) 
+    back = [np.nanpercentile(chunk, 20, axis=0) 
             for chunk in np.array_split(data, data.shape[0] / 112, axis=0)]
     avg = np.nanmedian(back, axis=0)
     chunks = np.array_split(data, data.shape[0] / 112, axis=0)
