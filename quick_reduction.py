@@ -274,7 +274,7 @@ def output_fits(image, fn):
               (args.date, args.observation, args.ifuslot), overwrite=True)
 
 def make_frame(xloc, yloc, data, Dx, Dy,
-               scale=1.0, seeing_fac=1.5):
+               scale=1.0, seeing_fac=1.5, radius=1.5):
     seeing = seeing_fac * scale
     a, b = data.shape
     x = np.arange(-25.-scale,
@@ -289,16 +289,24 @@ def make_frame(xloc, yloc, data, Dx, Dy,
     avg = np.nanmedian(back, axis=0)
     chunks = np.array_split(data, data.shape[0] / 112, axis=0)
     newimage = np.vstack([avg * chunk / ba for ba, chunk in zip(back, chunks)])
-    G = Gaussian2DKernel(0.7)
+    G = Gaussian2DKernel(seeing / 2.35)
     S = np.zeros((data.shape[0], 2))
+    D = np.sqrt((xloc - xloc[:, np.newaxis])**2 +
+                (yloc - yloc[:, np.newaxis])**2)
+    W = np.zeros(D.shape, dtype=bool)
+    W[D < radius] = True
+    L = W.sum(axis=1)
     for k in np.arange(b):
         S[:, 0] = xloc + Dx[k]
         S[:, 1] = yloc + Dy[k]
-        grid_z = griddata(S, newimage[:, k],
-                          (xgrid, ygrid), method='nearest')
-        zgrid[k, :, :] = (convolve(grid_z, G, boundary='extend') *
-                          scale**2 / area)
-        zgrid[k, :, :] -= np.nanmedian(zgrid[k, :, :])
+        sel = (newimage[:, k] / (newimage[:, k] * W).sum(axis=1)) <= 0.6
+        sel *= np.isfinite(newimage[:, k])
+        if np.any(sel):
+            grid_z = griddata(S[sel], newimage[sel, k],
+                              (xgrid, ygrid), method='nearest')
+            zgrid[k, :, :] = (convolve(grid_z, G, boundary='extend') *
+                              scale**2 / area)
+            zgrid[k, :, :] -= np.nanmedian(zgrid[k, :, :])
     return zgrid, xgrid, ygrid
 
 def write_cube(wave, xgrid, ygrid, zgrid, outname, he):
