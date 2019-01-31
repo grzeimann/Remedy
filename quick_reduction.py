@@ -355,17 +355,6 @@ pos, twispectra, scispectra, fn = reduce_ifuslot(ifuloop, h5table)
 average_twi = np.median(twispectra, axis=0)
 scispectra = scispectra * average_twi
 
-# Making data cube
-log.info('Making Cube')
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore")
-    zgrid, xgrid, ygrid = make_frame(pos[:, 0], pos[:, 1], scispectra, 
-                                     0. * def_wave, 0. * def_wave)
-
-he = fits.open(fn)[0].header
-write_cube(def_wave, xgrid, ygrid, zgrid,'%s_%07d_%03d_cube.fits' %
-           (args.date, args.observation, args.ifuslot) , he)
-
 # Collapse image
 log.info('Making collapsed frame')
 color = color_dict['red']
@@ -380,15 +369,27 @@ newimage = np.hstack([avg*chunk/b for b, chunk in zip(back, chunks)])
 
 
 log.info('Build Refined collapsed frame')
-grid_x, grid_y = np.meshgrid(np.linspace(-25, 25, 401),
-                             np.linspace(-25, 25, 401))
+grid_x, grid_y = np.meshgrid(np.linspace(-24, 24, 401),
+                             np.linspace(-24, 24, 401))
 grid_z0 = griddata(pos, newimage, (grid_x, grid_y), method='nearest')
 G = Gaussian2DKernel(7)
 image = convolve(grid_z0, G, boundary='extend')
 image[:] -= np.median(image)
 log.info('Timing done')
-# make_plot(image)
 output_fits(image, fn)
+
+
+# Making data cube
+log.info('Making Cube')
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    zgrid, xgrid, ygrid = make_frame(pos[:, 0], pos[:, 1], scispectra, 
+                                     0. * def_wave, 0. * def_wave)
+
+he = fits.open(fn)[0].header
+write_cube(def_wave, xgrid, ygrid, zgrid,'%s_%07d_%03d_cube.fits' %
+           (args.date, args.observation, args.ifuslot) , he)
+
 
 h5file.close()
     
