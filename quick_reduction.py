@@ -259,7 +259,7 @@ def output_fits(image, fn):
     F.writeto('%s_%07d_%03d.fits' %
               (args.date, args.observation, args.ifuslot), overwrite=True)
 
-def make_frame(xloc, yloc, data, Dx, Dy,
+def make_frame(xloc, yloc, data, Dx, Dy, ftf,
                scale=0.75, seeing_fac=1.5, radius=1.5):
     seeing = seeing_fac / scale
     a, b = data.shape
@@ -285,7 +285,7 @@ def make_frame(xloc, yloc, data, Dx, Dy,
         S[:, 0] = xloc + Dx[k]
         S[:, 1] = yloc + Dy[k]
         sel = (newimage[:, k] / (newimage[:, k] * W).sum(axis=1)) <= 0.3
-        sel *= np.isfinite(newimage[:, k])
+        sel *= np.isfinite(newimage[:, k]) * (ftf > 0.5)
         if np.any(sel):
             grid_z = griddata(S[sel], newimage[sel, k],
                               (xgrid, ygrid), method='nearest')
@@ -338,6 +338,8 @@ log.info('Reducing ifuslot: %03d' % args.ifuslot)
 pos, twispectra, scispectra, fn = reduce_ifuslot(ifuloop, h5table)
 average_twi = np.median(twispectra, axis=0)
 scispectra = scispectra * average_twi
+ftf = np.median(twispectra, axis=1)
+ftf = ftf / np.percentile(ftf, 99)
 
 # Collapse image
 log.info('Making collapsed frame')
@@ -355,7 +357,8 @@ newimage = np.hstack([avg*chunk/b for b, chunk in zip(back, chunks)])
 log.info('Build Refined collapsed frame')
 grid_x, grid_y = np.meshgrid(np.linspace(-24, 24, 401),
                              np.linspace(-24, 24, 401))
-grid_z0 = griddata(pos, newimage, (grid_x, grid_y), method='nearest')
+sel = ftf > 0.5
+grid_z0 = griddata(pos[sel], newimage[sel], (grid_x, grid_y), method='nearest')
 G = Gaussian2DKernel(7)
 image = convolve(grid_z0, G, boundary='extend')
 image[:] -= np.median(image)
@@ -367,7 +370,7 @@ log.info('Making Cube')
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
     zgrid, xgrid, ygrid = make_frame(pos[:, 0], pos[:, 1], scispectra, 
-                                     0. * def_wave, 0. * def_wave)
+                                     0. * def_wave, 0. * def_wave, ftf)
 
 he = fits.open(fn)[0].header
 write_cube(def_wave, xgrid, ygrid, zgrid,'%s_%07d_%03d_cube.fits' %
