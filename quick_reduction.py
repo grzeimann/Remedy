@@ -292,7 +292,7 @@ def make_frame(xloc, yloc, data, Dx, Dy,
             zgrid[k, :, :] = (convolve(grid_z, G, boundary='extend') *
                               scale**2 / area)
             zgrid[k, :, :] -= np.nanmedian(zgrid[k, :, :])
-    return zgrid[1:-1, 1:-1], xgrid[1:-1, 1:-1], ygrid[1:-1, 1:-1]
+    return zgrid[:, 1:-1, 1:-1], xgrid[:, 1:-1, 1:-1], ygrid[:, 1:-1, 1:-1]
 
 def write_cube(wave, xgrid, ygrid, zgrid, outname, he):
     hdu = fits.PrimaryHDU(np.array(zgrid, dtype='float32'))
