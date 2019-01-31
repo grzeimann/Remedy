@@ -10,6 +10,7 @@ import glob
 import numpy as np
 import os.path as op
 import sys
+import warnings
 
 from astrometry import Astrometry
 from astropy.convolution import convolve, Gaussian2DKernel
@@ -356,8 +357,10 @@ scispectra = scispectra * average_twi
 
 # Making data cube
 log.info('Making Cube')
-zgrid, xgrid, ygrid = make_frame(pos[:, 0], pos[:, 1], scispectra, 
-                                 0. * def_wave, 0. * def_wave)
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    zgrid, xgrid, ygrid = make_frame(pos[:, 0], pos[:, 1], scispectra, 
+                                     0. * def_wave, 0. * def_wave)
 
 he = fits.open(fn)[0].header
 write_cube(def_wave, xgrid, ygrid, zgrid,'%s_%07d_%03d_cube.fits' %
