@@ -96,21 +96,6 @@ def orient_image(image, amp, ampname):
     return image
 
 
-def make_avg_spec(wave, spec, binsize=35, per=50):
-    ind = np.argsort(wave.ravel())
-    T = 1
-    for p in wave.shape:
-        T *= p
-    wchunks = np.array_split(wave.ravel()[ind],
-                             T / binsize)
-    schunks = np.array_split(spec.ravel()[ind],
-                             T / binsize)
-    nwave = np.array([np.mean(chunk) for chunk in wchunks])
-    nspec = np.array([np.percentile(chunk, per) for chunk in schunks])
-    nwave, nind = np.unique(nwave, return_index=True)
-    return nwave, nspec[nind]
-
-
 def base_reduction(filename, get_header=False):
     a = fits.open(filename)
     image = np.array(a[0].data, dtype=float)
@@ -278,9 +263,9 @@ def make_frame(xloc, yloc, data, Dx, Dy,
                scale=0.75, seeing_fac=1.5, radius=1.5):
     seeing = seeing_fac / scale
     a, b = data.shape
-    x = np.arange(-25.-scale,
+    x = np.arange(-23.-scale,
                   25.+1*scale, scale)
-    y = np.arange(-25.-scale,
+    y = np.arange(-23.-scale,
                   25.+1*scale, scale)
     xgrid, ygrid = np.meshgrid(x, y)
     zgrid = np.zeros((b,)+xgrid.shape)
@@ -307,7 +292,7 @@ def make_frame(xloc, yloc, data, Dx, Dy,
             zgrid[k, :, :] = (convolve(grid_z, G, boundary='extend') *
                               scale**2 / area)
             zgrid[k, :, :] -= np.nanmedian(zgrid[k, :, :])
-    return zgrid[2:-2, 2:-2], xgrid[2:-2, 2:-2], ygrid[2:-2, 2:-2]
+    return zgrid[1:-1, 1:-1], xgrid[1:-1, 1:-1], ygrid[1:-1, 1:-1]
 
 def write_cube(wave, xgrid, ygrid, zgrid, outname, he):
     hdu = fits.PrimaryHDU(np.array(zgrid, dtype='float32'))
