@@ -251,7 +251,7 @@ def make_plot(image):
 
 def output_fits(image, fn):
     PA = fits.open(fn)[0].header['PARANGLE']
-    imscale = 50. / image.shape[0]
+    imscale = 48. / image.shape[0]
     crx = image.shape[1] / 2.
     cry = image.shape[0] / 2.
     ifuslot = '%03d' % args.ifuslot
@@ -278,10 +278,10 @@ def make_frame(xloc, yloc, data, Dx, Dy,
                scale=0.75, seeing_fac=1.5, radius=1.5):
     seeing = seeing_fac / scale
     a, b = data.shape
-    x = np.arange(-25.-scale,
-                  25.+1*scale, scale)
-    y = np.arange(-25.-scale,
-                  25.+1*scale, scale)
+    x = np.arange(-24.-scale,
+                  24.+1*scale, scale)
+    y = np.arange(-24.-scale,
+                  24.+1*scale, scale)
     xgrid, ygrid = np.meshgrid(x, y)
     zgrid = np.zeros((b,)+xgrid.shape)
     area = np.pi * 0.75**2
@@ -296,7 +296,6 @@ def make_frame(xloc, yloc, data, Dx, Dy,
                 (yloc - yloc[:, np.newaxis])**2)
     W = np.zeros(D.shape, dtype=bool)
     W[D < radius] = True
-    L = W.sum(axis=1)
     for k in np.arange(b):
         S[:, 0] = xloc + Dx[k]
         S[:, 1] = yloc + Dy[k]
