@@ -13,9 +13,9 @@
 
 ## Running Remedy
 
-'''
+```
 python Remedy/create_cal_hdf5.py -d 20190112 -o 27 -of test_cal_20190112.h5 -r "/work/03946/hetdex/maverick/red1/reductions"
-'''
+```
 ## Data Products
 
 ## Examples
