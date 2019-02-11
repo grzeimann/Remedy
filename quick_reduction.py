@@ -20,9 +20,6 @@ from datetime import datetime, timedelta
 from input_utils import setup_logging
 from scipy.interpolate import griddata
 from tables import open_file
-from bokeh.plotting import figure, output_file, save
-from bokeh.models.mappers import LinearColorMapper
-from bokeh.models import ColorBar
 
 
 # Configuration    
@@ -37,14 +34,6 @@ for col_ in color_dict:
 
 parser = ap.ArgumentParser(add_help=True)
 
-parser.add_argument("ifuslot",
-                    help='''If ifuslot is not provided, then all are reduced''',
-                    type=int, default=None)
-
-parser.add_argument("hdf5file",
-                    help='''HDF5 calibration file''',
-                    type=str, default=None)
-
 parser.add_argument("date",
                     help='''Date for reduction''',
                     type=str, default=None)
@@ -52,6 +41,14 @@ parser.add_argument("date",
 parser.add_argument("observation",
                     help='''Observation ID''',
                     type=int, default=None)
+
+parser.add_argument("ifuslot",
+                    help='''ifuslot to reduced''',
+                    type=int, default=None)
+
+parser.add_argument("hdf5file",
+                    help='''HDF5 calibration file''',
+                    type=str, default=None)
 
 parser.add_argument("-r", "--rootdir",
                     help='''Directory for raw data. 
@@ -69,6 +66,11 @@ parser.add_argument("-dec", "--dec",
 parser.add_argument("-fp", "--fplane_file",
                     help='''fplane file''',
                     type=str, default=None)
+
+parser.add_argument("--sky_ifuslot",
+                    help='''If sky_ifuslot is not provided,
+                    then the ifuslot itself is used''',
+                    type=int, default=None)
 
 args = parser.parse_args(args=None)
 
@@ -97,14 +99,19 @@ def orient_image(image, amp, ampname):
 
 
 def base_reduction(filename, get_header=False):
+    # Load fits file
     a = fits.open(filename)
     image = np.array(a[0].data, dtype=float)
-    # overscan sub
+    
+    # Overscan subtraction
     overscan_length = 32 * (image.shape[1] / 1064)
     O = biweight_location(image[:, -(overscan_length-2):])
     image[:] = image - O
-    # trim image
+    
+    # Trim image
     image = image[:, :-overscan_length]
+    
+    # Gain multiplication (catch negative cases)
     gain = a[0].header['GAIN']
     gain = np.where(gain > 0., gain, 0.85)
     rdnoise = a[0].header['RDNOISE']
@@ -116,7 +123,11 @@ def base_reduction(filename, get_header=False):
     except:
         ampname = None
     header = a[0].header
+    
+    # Orient image
     a = orient_image(image, amp, ampname) * gain
+    
+    # Calculate error frame
     E = np.sqrt(rdnoise**2 + np.where(a > 0., a, 0.))
     if get_header:
         return a, E, header
@@ -181,6 +192,7 @@ def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
     sci_spectrum[~np.isfinite(sci_spectrum)] = 0.0
     return twi_spectrum, sci_spectrum / 2.
 
+
 def reduce_ifuslot(ifuloop, h5table):
     p, t, s = ([], [], [])
     for ind in ifuloop:
@@ -218,21 +230,6 @@ def reduce_ifuslot(ifuloop, h5table):
     
     return p, t, s, fn 
             
-def make_plot(image):
-    color_mapper = LinearColorMapper(palette="Viridis256",
-                                  low=np.percentile(image, 2),
-                                  high=np.percentile(image, 98))
-    p = figure(x_range=(-25, 25), y_range=(-25, 25),
-               tooltips=[("x", "$x"), ("y", "$y"), ("value", "@image")])
-
-    p.image(image=[image], x=-25, y=-25, dw=50, dh=50,
-            color_mapper=color_mapper)
-    color_bar = ColorBar(color_mapper=color_mapper,
-                         label_standoff=12, border_line_color=None, 
-                         location=(0,0))
-    p.add_layout(color_bar, 'right')
-    output_file("image.html", title="image.py example")
-    save(p)
 
 def output_fits(image, fn):
     PA = fits.open(fn)[0].header['PARANGLE']
@@ -258,6 +255,7 @@ def output_fits(image, fn):
     #    F.header[hi] = header[hi]
     F.writeto('%s_%07d_%03d.fits' %
               (args.date, args.observation, args.ifuslot), overwrite=True)
+
 
 def make_frame(xloc, yloc, data, Dx, Dy, ftf,
                scale=0.75, seeing_fac=1.5, radius=1.5):
@@ -294,6 +292,7 @@ def make_frame(xloc, yloc, data, Dx, Dy, ftf,
             zgrid[k, :, :] -= np.nanmedian(zgrid[k, :, :])
     return zgrid[:, 1:-1, 1:-1], xgrid[1:-1, 1:-1], ygrid[1:-1, 1:-1]
 
+
 def write_cube(wave, xgrid, ygrid, zgrid, outname, he):
     hdu = fits.PrimaryHDU(np.array(zgrid, dtype='float32'))
     hdu.header['CRVAL1'] = xgrid[0, 0]
@@ -327,23 +326,29 @@ if args.hdf5file is None:
 
 # OPEN HDF5 FILE
 h5file = open_file(args.hdf5file, mode='r')
-h5table = h5file.root.Info.Cals
+h5table = h5file.root.Cals
 
 # Collect indices for ifuslot
 ifuslots = h5table.cols.ifuslot[:]
-ifuloop = np.where(args.ifuslot == ifuslots)[0]
+sel1 = args.ifuslot == ifuslots
+if args.sky_ifuslot is not None:
+    sel1 += args.sky_ifuslot == ifuslots
+ifuloop = np.where(sel1)[0]
 
 # Reducing IFUSLOT
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
 pos, twispectra, scispectra, fn = reduce_ifuslot(ifuloop, h5table)
-average_twi = np.median(twispectra, axis=0)
+average_twi = np.mean(twispectra, axis=0)
 scispectra = scispectra * average_twi
 ftf = np.median(twispectra, axis=1)
 ftf = ftf / np.percentile(ftf, 99)
 
+fits.PrimaryHDU(scispectra).writeto('test.fits', overwrite=True)
+sys.exit(1)
+    
 # Collapse image
 log.info('Making collapsed frame')
-color = color_dict['red']
+color = color_dict['blue']
 image = np.median(scispectra[:, color[2]:color[3]], axis=1)
 
 # Normalize exposures and amps together using 20%-tile
@@ -352,9 +357,7 @@ back = [np.percentile(chunk, 20)
 avg = np.median(back)
 chunks = np.array_split(image, image.shape[0] / 112)
 newimage = np.hstack([avg*chunk/b for b, chunk in zip(back, chunks)])
-
-
-log.info('Build Refined collapsed frame')
+log.info('Building collapsed frame')
 grid_x, grid_y = np.meshgrid(np.linspace(-24, 24, 401),
                              np.linspace(-24, 24, 401))
 sel = ftf > 0.5
