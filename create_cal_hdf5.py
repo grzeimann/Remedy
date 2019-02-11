@@ -93,9 +93,8 @@ def main(argv=None):
         does_exist = True
     else:
         fileh = tb.open_file(args.outfilename, 'w')
-        group = fileh.create_group(fileh.root, 'Info',
-                                   'Cal Data and Metadata')
-        imagetable = fileh.create_table(group, 'Cals', VIRUSImage, 'Cal Info')
+        imagetable = fileh.create_table(fileh.root, 'Cals', VIRUSImage,
+                                        'Cal Info')
 
     for fn in files:
         args.log.info('Working on %s' % fn)
