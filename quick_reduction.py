@@ -333,7 +333,7 @@ ifuslots = h5table.cols.ifuslot[:]
 sel1 = list(np.where(args.ifuslot == ifuslots)[0])
 if args.sky_ifuslot is not None:
     sel1.append(np.where(args.sky_ifuslot == ifuslots)[0])
-ifuloop = np.array(sel1, dtype=int)
+ifuloop = np.array(np.hstack(sel1), dtype=int)
 
 # Reducing IFUSLOT
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
