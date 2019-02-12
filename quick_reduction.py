@@ -346,7 +346,7 @@ def subtract_sky_other(scispectra):
                 y[si] = np.median(y[si])
             for j in np.arange(len(x)):
                 y[j] = evalf(x[j], n, avg=y[j])
-        ftf[:, k] = y
+        ftf[:, k] = y / n
     for i in np.arange(len(scispectra)/2):
         I = interp1d(W, ftf[i, :], kind='quadratic', fill_value='extrapolate')
         scispectra[i] /= I(def_wave)
@@ -387,7 +387,7 @@ def subtract_sky(scispectra):
                 y[si] = np.median(y[si])
             for j in np.arange(len(x)):
                 y[j] = evalf(x[j], n, avg=y[j])
-        ftf[:, k] = y
+        ftf[:, k] = y / n
     for i in np.arange(len(scispectra)):
         I = interp1d(W, ftf[i, :], kind='quadratic', fill_value='extrapolate')
         scispectra[i] /= I(def_wave)
