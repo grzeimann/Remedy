@@ -30,8 +30,8 @@ scp username@wrangler.tacc.utexas.edu:/work/03730/gregz/maverick/test_cal_201901
 
 To create your own calibration file, 
 ```
-1) Log on to TACC
-2) Get Remedy if you haven't already on TACC
+1) Log onto TACC
+2) Get Remedy on TACC if you haven't already 
 3) Add the following to your ~/.bashrc file if you haven't already
         export PATH=/home/00115/gebhardt/anaconda2/bin:/work/03946/hetdex/maverick/bin:$PATH
 4) To create a new calibration file, run:
