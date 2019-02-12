@@ -67,7 +67,7 @@ parser.add_argument("-fp", "--fplane_file",
                     help='''fplane file''',
                     type=str, default=None)
 
-parser.add_argument("--sky_ifuslot",
+parser.add_argument("-si", "--sky_ifuslot",
                     help='''If sky_ifuslot is not provided,
                     then the ifuslot itself is used''',
                     type=int, default=None)
@@ -330,10 +330,10 @@ h5table = h5file.root.Cals
 
 # Collect indices for ifuslot
 ifuslots = h5table.cols.ifuslot[:]
-sel1 = args.ifuslot == ifuslots
+sel1 = list(np.where(args.ifuslot == ifuslots)[0])
 if args.sky_ifuslot is not None:
-    sel1 += args.sky_ifuslot == ifuslots
-ifuloop = np.where(sel1)[0]
+    sel1.append(np.where(args.sky_ifuslot == ifuslots)[0])
+ifuloop = np.array(sel1, dtype=int)
 
 # Reducing IFUSLOT
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
