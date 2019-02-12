@@ -9,5 +9,5 @@ To create a new calibration file:
 	In this case I choose the night 20190112, observation 27, and called it test_cal_20190112.h5
 	The night and observation were ones of quality reduction, most importantly with respect to wavelength and trace, which is all that is used
 5) Copy calibration file to your desired Remedy/CALS folder
-	cd WHEREVER/Remedy
+	cd WHEREVER/Remedy/CALS
 	scp username@wrangler.tacc.utexas.edu:/PATHONTACC/test_cal_20190112.h5 .
