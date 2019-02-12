@@ -22,7 +22,7 @@ cd WHEREVER
 git clone https://github.com/grzeimann/Remedy.git
 ```
 
-Remedy relies on a single calibration file (HDF5 file format: https://www.hdfgroup.org/solutions/hdf5/).  A default set of calibrations will be kept up to date by the creator, Greg Zeimann, and can be acquired here:
+Remedy relies on a calibration file (HDF5 file format: https://www.hdfgroup.org/solutions/hdf5/) and an fplane file.  A default calibration file will be kept up to date by the creator, Greg Zeimann, and can be acquired here:
 ```
 cd WHEREVER/Remedy/CALS
 scp username@wrangler.tacc.utexas.edu:/work/03730/gregz/maverick/test_cal_20190112.h5 .
@@ -44,8 +44,21 @@ If you want to create your own calibration file:
         scp username@wrangler.tacc.utexas.edu:/PATHONTACC/test_cal_20190112.h5 .
 ```
 
-### Running the code
+If you need an up-to-date fplane file, simply run Jan Snigula's get_fplane.py, which is included with Remedy:
+```
+python WHEREVER/Remedy/get_fplane.py
+```
 
+A new fplane file will be created in the current directory in the format, fplane{DATE}.txt. 
+
+### Running the code
+An example call to reduce ifuslot 043 on 20190204 and obseravtion 17 using the ifuslot 047 for sky is shown below:
+```
+python Remedy/quick_reduction.py 20190204 17 463 Remedy/CALS/test_cal_20190112.h5 --sky_ifuslot 47 --fplane_file fplane20190129.txt --rootdir /work/03946/hetdex/maverick
+```
+To run at the mountain, replace the "--rootdir" as appropriate, the "--fplane_file" as approriate, and the calibration file if needed.  The other arguments will be specific to the choice of ifuslot and if you want to use another ifu for sky.
+
+More details with respect to the input arguments are below.
 ```
 usage: quick_reduction.py [-h] [-r ROOTDIR] [-ra RA] [-dec DEC]
                           [-fp FPLANE_FILE] [-si SKY_IFUSLOT]
@@ -68,10 +81,6 @@ optional arguments:
   -si SKY_IFUSLOT, --sky_ifuslot SKY_IFUSLOT
                         If sky_ifuslot is not provided, then the ifuslot
                         itself is used
-```
-
-```
-python Remedy/quick_reduction.py 20190204 17 46 test_cal_20190112.h5 --sky_ifuslot 47 --fplane_file fplane20190129.txt
 ```
 ## Data Products
 
