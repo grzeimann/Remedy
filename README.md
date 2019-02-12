@@ -10,7 +10,8 @@
 [Examples](https://github.com/grzeimann/Remedy/blob/master/README.md#Examples)
 
 ## Overview
-
+Remedy is a quick reduction tool for VIRUS which reduces a single ifuslot at a time.  However, there is a manual option to use a
+second ifuslot as a sky frame when the target ifu does not have enough sky fibers itself.  The reduction should run quickly (~30s-1min) and produce
 ## Running Remedy
 
 ```
