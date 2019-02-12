@@ -22,13 +22,13 @@ cd WHEREVER
 git clone https://github.com/grzeimann/Remedy.git
 ```
 
-Remedy relies on a single calibration file (HDF5 file format: https://www.hdfgroup.org/solutions/hdf5/).  An existing calibration file can be acquired with:
+Remedy relies on a calibration file (HDF5 file format: https://www.hdfgroup.org/solutions/hdf5/) and an fplane file.  A default calibration file will be kept up to date by the creator, Greg Zeimann, and can be acquired here:
 ```
 cd WHEREVER/Remedy/CALS
 scp username@wrangler.tacc.utexas.edu:/work/03730/gregz/maverick/test_cal_20190112.h5 .
 ```
 
-To create your own calibration file, 
+If you want to create your own calibration file: 
 ```
 1) Log onto TACC
 2) Get Remedy on TACC if you haven't already 
@@ -44,8 +44,43 @@ To create your own calibration file,
         scp username@wrangler.tacc.utexas.edu:/PATHONTACC/test_cal_20190112.h5 .
 ```
 
+If you need an up-to-date fplane file, simply run Jan Snigula's get_fplane.py, which is included with Remedy:
 ```
-python Remedy/quick_reduction.py 20190204 17 46 test_cal_20190112.h5 --sky_ifuslot 47 --fplane_file fplane20190129.txt
+python WHEREVER/Remedy/get_fplane.py
+```
+
+A new fplane file will be created in the current directory in the format, fplane{DATE}.txt. 
+
+### Running the code
+An example call to reduce ifuslot 043 on 20190204 and obseravtion 17 using the ifuslot 047 for sky is shown below:
+```
+python Remedy/quick_reduction.py 20190204 17 463 Remedy/CALS/test_cal_20190112.h5 --sky_ifuslot 47 --fplane_file fplane20190129.txt --rootdir /work/03946/hetdex/maverick
+```
+To run at the mountain, replace the "--rootdir" as appropriate, the "--fplane_file" as approriate, and the calibration file if needed.  The other arguments will be specific to the choice of ifuslot and if you want to use another ifu for sky.
+
+More details with respect to the input arguments are below.
+```
+usage: quick_reduction.py [-h] [-r ROOTDIR] [-ra RA] [-dec DEC]
+                          [-fp FPLANE_FILE] [-si SKY_IFUSLOT]
+                          date observation ifuslot hdf5file
+
+positional arguments:
+  date                  Date for reduction
+  observation           Observation ID
+  ifuslot               ifuslot to reduced
+  hdf5file              HDF5 calibration file
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -r ROOTDIR, --rootdir ROOTDIR
+                        Directory for raw data. (just before date folders)
+  -ra RA, --ra RA       RA of the IFUSLOT to be reduced
+  -dec DEC, --dec DEC   Dec of the IFUSLOT to be reduced
+  -fp FPLANE_FILE, --fplane_file FPLANE_FILE
+                        fplane file
+  -si SKY_IFUSLOT, --sky_ifuslot SKY_IFUSLOT
+                        If sky_ifuslot is not provided, then the ifuslot
+                        itself is used
 ```
 ## Data Products
 
