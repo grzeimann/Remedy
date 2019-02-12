@@ -19,6 +19,7 @@ from astropy.stats import biweight_location
 from datetime import datetime, timedelta
 from input_utils import setup_logging
 from scipy.interpolate import griddata, interp1d
+from scipy.signal import savgol_filter
 from tables import open_file
 
 
@@ -323,7 +324,7 @@ def subtract_sky_other(scispectra):
             amps[i::nexp] *= r
     d = np.reshape(amps, scispectra.shape)
     def evalf(x, n, avg=1.):
-        X = np.arange(n*0.95, n*1.055, n*0.005)
+        X = np.arange(n*0.90, n*1.105, n*0.005)
         chi2 = X * 0.
         for j, l in enumerate(X):
             chi2[j] = (x - l)**2 + (l - avg)**2
@@ -347,7 +348,11 @@ def subtract_sky_other(scispectra):
                 y[si] = np.median(y[si])
             for j in np.arange(len(x)):
                 y[j] = evalf(x[j], n, avg=y[j])
+        s = np.array_split(np.arange(len(y)), 4*nexp)
+        for si in s:
+            y[si] = savgol_filter(y[si], 11, 1)
         ftf[:, k] = y / n
+        
     for i in np.arange(len(scispectra)/2):
         I = interp1d(W, ftf[i, :], kind='quadratic', fill_value='extrapolate')
         scispectra[i] /= I(def_wave)
@@ -388,6 +393,9 @@ def subtract_sky(scispectra):
                 y[si] = np.median(y[si])
             for j in np.arange(len(x)):
                 y[j] = evalf(x[j], n, avg=y[j])
+        s = np.array_split(np.arange(len(y)), 4*nexp)
+        for si in s:
+            y[si] = savgol_filter(y[si], 11, 1)
         ftf[:, k] = y / n
     for i in np.arange(len(scispectra)):
         I = interp1d(W, ftf[i, :], kind='quadratic', fill_value='extrapolate')
@@ -417,6 +425,7 @@ log.info('Reducing ifuslot: %03d' % args.ifuslot)
 pos, twispectra, scispectra, fn = reduce_ifuslot(ifuloop, h5table)
 average_twi = np.mean(twispectra, axis=0)
 scispectra = scispectra * average_twi
+fits.PrimaryHDU(FTF).writeto('test2.fits', overwrite=True)
 
 # Subtracting Sky
 log.info('Subtracting sky for ifuslot: %03d' % args.ifuslot)
