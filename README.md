@@ -22,13 +22,13 @@ cd WHEREVER
 git clone https://github.com/grzeimann/Remedy.git
 ```
 
-Remedy relies on a single calibration file (HDF5 file format: https://www.hdfgroup.org/solutions/hdf5/).  An existing calibration file can be acquired with:
+Remedy relies on a single calibration file (HDF5 file format: https://www.hdfgroup.org/solutions/hdf5/).  A default set of calibrations will be kept up to date by the creator, Greg Zeimann, and can be acquired here:
 ```
 cd WHEREVER/Remedy/CALS
 scp username@wrangler.tacc.utexas.edu:/work/03730/gregz/maverick/test_cal_20190112.h5 .
 ```
 
-To create your own calibration file, 
+If you want to create your own calibration file: 
 ```
 1) Log onto TACC
 2) Get Remedy on TACC if you haven't already 
@@ -42,6 +42,32 @@ To create your own calibration file,
 5) Copy calibration file to your desired Remedy/CALS folder
         cd WHEREVER/Remedy/CALS
         scp username@wrangler.tacc.utexas.edu:/PATHONTACC/test_cal_20190112.h5 .
+```
+
+### Running the code
+
+```
+usage: quick_reduction.py [-h] [-r ROOTDIR] [-ra RA] [-dec DEC]
+                          [-fp FPLANE_FILE] [-si SKY_IFUSLOT]
+                          date observation ifuslot hdf5file
+
+positional arguments:
+  date                  Date for reduction
+  observation           Observation ID
+  ifuslot               ifuslot to reduced
+  hdf5file              HDF5 calibration file
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -r ROOTDIR, --rootdir ROOTDIR
+                        Directory for raw data. (just before date folders)
+  -ra RA, --ra RA       RA of the IFUSLOT to be reduced
+  -dec DEC, --dec DEC   Dec of the IFUSLOT to be reduced
+  -fp FPLANE_FILE, --fplane_file FPLANE_FILE
+                        fplane file
+  -si SKY_IFUSLOT, --sky_ifuslot SKY_IFUSLOT
+                        If sky_ifuslot is not provided, then the ifuslot
+                        itself is used
 ```
 
 ```
