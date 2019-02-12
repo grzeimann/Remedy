@@ -334,7 +334,7 @@ def subtract_sky_other(scispectra):
                   for chunk in np.array_split(def_wave, nchunk)])
     S = np.array_split(d[:len(d)/2], nchunk, axis=1)
     B = np.array_split(d[len(d)/2:], nchunk, axis=1)
-    ftf = np.zeros((len(d), len(B)))
+    ftf = np.zeros((len(d)/2, len(B)))
     for k, si, bi in zip(np.arange(len(S)), S, B):
         b = np.ma.array(bi, mask=bi==0.)
         s = np.ma.array(si, mask=si==0.)
