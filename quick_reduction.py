@@ -442,7 +442,7 @@ else:
 
 # Collapse image
 log.info('Making collapsed frame')
-color = color_dict['blue']
+color = color_dict['red']
 image = np.median(scispectra[:, color[2]:color[3]], axis=1)
 
 # Normalize exposures and amps together using 20%-tile
