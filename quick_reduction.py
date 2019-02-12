@@ -314,7 +314,6 @@ def write_cube(wave, xgrid, ygrid, zgrid, outname, he):
 def subtract_sky_other(scispectra):
     N = len(scispectra) / 112
     nexp = N / 8
-    log.info('Number of exposures: %i' % nexp)
     amps = np.array(np.array_split(scispectra, N, axis=0))
     if nexp > 1:
         for i in np.arange(1, nexp):
@@ -360,7 +359,7 @@ def subtract_sky(scispectra):
     nexp = N / 4
     amps = np.array(np.array_split(scispectra, N, axis=0))
     if nexp > 1:
-        for i in np.arange(1, nexp+1):
+        for i in np.arange(1, nexp):
             r = amps[::nexp] / amps[i::nexp]
             r = np.nanmedian(r)
             amps[i::nexp] *= r
