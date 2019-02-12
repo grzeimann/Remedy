@@ -319,6 +319,7 @@ def subtract_sky_other(scispectra):
         for i in np.arange(1, nexp):
             r = amps[N/2::nexp] / amps[(N/2+i)::nexp]
             r = np.nanmedian(r)
+            log.info('Norm %i: %0.2f' % (i, r))
             amps[i::nexp] *= r
     d = np.reshape(amps, scispectra.shape)
     def evalf(x, n, avg=1.):
@@ -338,7 +339,6 @@ def subtract_sky_other(scispectra):
         b = np.ma.array(bi, mask=bi==0.)
         s = np.ma.array(si, mask=si==0.)
         n = np.ma.median(b)
-        log.info('Back %i: %0.2f' % (k+1, n))
         x = np.ma.median(s, axis=1)
         y = n * np.ones(x.shape)
         for i in np.arange(3):
