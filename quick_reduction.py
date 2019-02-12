@@ -18,7 +18,7 @@ from astropy.io import fits
 from astropy.stats import biweight_location
 from datetime import datetime, timedelta
 from input_utils import setup_logging
-from scipy.interpolate import griddata
+from scipy.interpolate import griddata, interp1d
 from tables import open_file
 
 
@@ -268,11 +268,6 @@ def make_frame(xloc, yloc, data, Dx, Dy, ftf,
     xgrid, ygrid = np.meshgrid(x, y)
     zgrid = np.zeros((b,)+xgrid.shape)
     area = np.pi * 0.75**2
-    back = [np.nanpercentile(chunk, 20, axis=0) 
-            for chunk in np.array_split(data, data.shape[0] / 112, axis=0)]
-    avg = np.nanmedian(back, axis=0)
-    chunks = np.array_split(data, data.shape[0] / 112, axis=0)
-    newimage = np.vstack([avg * chunk / ba for ba, chunk in zip(back, chunks)])
     G = Gaussian2DKernel(seeing / 2.35)
     S = np.zeros((data.shape[0], 2))
     D = np.sqrt((xloc - xloc[:, np.newaxis])**2 +
@@ -282,14 +277,13 @@ def make_frame(xloc, yloc, data, Dx, Dy, ftf,
     for k in np.arange(b):
         S[:, 0] = xloc + Dx[k]
         S[:, 1] = yloc + Dy[k]
-        sel = (newimage[:, k] / (newimage[:, k] * W).sum(axis=1)) <= 0.3
-        sel *= np.isfinite(newimage[:, k]) * (ftf > 0.5)
+        sel = (data[:, k] / (data[:, k] * W).sum(axis=1)) <= 0.3
+        sel *= np.isfinite(data[:, k]) * (ftf > 0.5)
         if np.any(sel):
-            grid_z = griddata(S[sel], newimage[sel, k],
+            grid_z = griddata(S[sel], data[sel, k],
                               (xgrid, ygrid), method='nearest')
             zgrid[k, :, :] = (convolve(grid_z, G, boundary='extend') *
                               scale**2 / area)
-            zgrid[k, :, :] -= np.nanmedian(zgrid[k, :, :])
     return zgrid[:, 1:-1, 1:-1], xgrid[1:-1, 1:-1], ygrid[1:-1, 1:-1]
 
 
@@ -317,6 +311,88 @@ def write_cube(wave, xgrid, ygrid, zgrid, outname, he):
         hdu.header[key] = he[key]
     hdu.writeto(outname, overwrite=True)
 
+def subtract_sky_other(scispectra):
+    N = len(scispectra) / 112
+    nexp = N / 8
+    amps = np.array(np.array_split(scispectra, N, axis=0))
+    if nexp > 1:
+        for i in np.arange(1, nexp+1):
+            r = amps[N/2::nexp] / amps[(N/2+i)::nexp]
+            r = np.nanmedian(r)
+            amps[i::nexp] *= r
+    d = np.reshape(amps, scispectra.shape)
+    def evalf(x, n, avg=1.):
+        X = np.arange(n*0.95, n*1.055, n*0.005)
+        chi2 = X * 0.
+        for j, l in enumerate(X):
+            chi2[j] = (x - l)**2 + (l - avg)**2
+        i = np.argmin(chi2)
+        return X[i]
+    nchunk = 12
+    W = np.array([np.mean(chunk) 
+                  for chunk in np.array_split(def_wave, nchunk)])
+    S = np.array_split(d[:len(d)/2], nchunk, axis=1)
+    B = np.array_split(d[len(d)/2:], nchunk, axis=1)
+    ftf = np.zeros((len(d), len(B)))
+    for k, si, bi in zip(np.arange(len(S)), S, B):
+        b = np.ma.array(bi, mask=bi==0.)
+        s = np.ma.array(si, mask=si==0.)
+        n = np.ma.median(b)
+        x = np.ma.median(s, axis=1)
+        y = n * np.ones(x.shape)
+        for i in np.arange(3):
+            s = np.array_split(np.arange(len(y)), 4*nexp)
+            for si in s:
+                y[si] = np.median(y[si])
+            for j in np.arange(len(x)):
+                y[j] = evalf(x[j], n, avg=y[j])
+        ftf[:, k] = y
+    for i in np.arange(len(scispectra)/2):
+        I = interp1d(W, ftf[i, :], kind='quadratic', fill_value='extrapolate')
+        scispectra[i] /= I(def_wave)
+    sky = np.nanmedian(scispectra[len(scispectra)/2:], axis=0)
+    scispectra = scispectra[:len(scispectra)/2]
+    return scispectra - sky
+
+def subtract_sky(scispectra):
+    N = len(scispectra) / 112
+    nexp = N / 4
+    amps = np.array(np.array_split(scispectra, N, axis=0))
+    if nexp > 1:
+        for i in np.arange(1, nexp+1):
+            r = amps[::nexp] / amps[i::nexp]
+            r = np.nanmedian(r)
+            amps[i::nexp] *= r
+    d = np.reshape(amps, scispectra.shape)
+    def evalf(x, n, avg=1.):
+        X = np.arange(n*0.95, n*1.055, n*0.005)
+        chi2 = X * 0.
+        for j, l in enumerate(X):
+            chi2[j] = (x - l)**2 + (l - avg)**2
+        i = np.argmin(chi2)
+        return X[i]
+    nchunk = 12
+    W = np.array([np.mean(chunk) 
+                  for chunk in np.array_split(def_wave, nchunk)])
+    S = np.array_split(d, nchunk, axis=1)
+    ftf = np.zeros((len(d), len(S)))
+    for k, si in zip(np.arange(len(S)), S):
+        s = np.ma.array(si, mask=si==0.)
+        n = np.ma.median(s)
+        x = np.ma.median(s, axis=1)
+        y = n * np.ones(x.shape)
+        for i in np.arange(3):
+            s = np.array_split(np.arange(len(y)), 4*nexp)
+            for si in s:
+                y[si] = np.median(y[si])
+            for j in np.arange(len(x)):
+                y[j] = evalf(x[j], n, avg=y[j])
+        ftf[:, k] = y
+    for i in np.arange(len(scispectra)):
+        I = interp1d(W, ftf[i, :], kind='quadratic', fill_value='extrapolate')
+        scispectra[i] /= I(def_wave)
+    return scispectra - np.nanmedian(scispectra, axis=0)
+
 # GET DIRECTORY NAME FOR PATH BUILDING
 DIRNAME = get_script_path()
 instrument = 'virus'
@@ -340,31 +416,32 @@ log.info('Reducing ifuslot: %03d' % args.ifuslot)
 pos, twispectra, scispectra, fn = reduce_ifuslot(ifuloop, h5table)
 average_twi = np.mean(twispectra, axis=0)
 scispectra = scispectra * average_twi
-ftf = np.median(twispectra, axis=1)
-ftf = ftf / np.percentile(ftf, 99)
 
-fits.PrimaryHDU(scispectra).writeto('test.fits', overwrite=True)
-sys.exit(1)
-    
+# Subtracting Sky
+log.info('Subtracting sky for ifuslot: %03d' % args.ifuslot)
+if args.sky_ifuslot is not None:
+    scispectra = subtract_sky_other(scispectra)
+    ftf = np.median(twispectra[:len(twispectra)/2], axis=1)
+    ftf = ftf / np.percentile(ftf, 99)
+    pos = pos[:len(pos)/2]
+else:
+    scispectra = subtract_sky(scispectra)
+    ftf = np.median(twispectra, axis=1)
+    ftf = ftf / np.percentile(ftf, 99)
+
 # Collapse image
 log.info('Making collapsed frame')
 color = color_dict['blue']
 image = np.median(scispectra[:, color[2]:color[3]], axis=1)
 
 # Normalize exposures and amps together using 20%-tile
-back = [np.percentile(chunk, 20) 
-        for chunk in np.array_split(image, image.shape[0] / 112)]
-avg = np.median(back)
-chunks = np.array_split(image, image.shape[0] / 112)
-newimage = np.hstack([avg*chunk/b for b, chunk in zip(back, chunks)])
 log.info('Building collapsed frame')
-grid_x, grid_y = np.meshgrid(np.linspace(-24, 24, 401),
-                             np.linspace(-24, 24, 401))
+grid_x, grid_y = np.meshgrid(np.linspace(-23, 25, 401),
+                             np.linspace(-23, 25, 401))
 sel = ftf > 0.5
-grid_z0 = griddata(pos[sel], newimage[sel], (grid_x, grid_y), method='nearest')
+grid_z0 = griddata(pos[sel], image[sel], (grid_x, grid_y), method='nearest')
 G = Gaussian2DKernel(7)
 image = convolve(grid_z0, G, boundary='extend')
-image[:] -= np.median(image)
 output_fits(image, fn)
 
 
