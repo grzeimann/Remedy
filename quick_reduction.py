@@ -338,6 +338,7 @@ def subtract_sky_other(scispectra):
         b = np.ma.array(bi, mask=bi==0.)
         s = np.ma.array(si, mask=si==0.)
         n = np.ma.median(b)
+        log.info('Back %i: %0.2f' % (k+1, n))
         x = np.ma.median(s, axis=1)
         y = n * np.ones(x.shape)
         for i in np.arange(3):
