@@ -259,7 +259,7 @@ def output_fits(image, fn):
 
 
 def make_frame(xloc, yloc, data, Dx, Dy, ftf,
-               scale=0.75, seeing_fac=1.5, radius=1.5):
+               scale=0.75, seeing_fac=2.3, radius=1.5):
     seeing = seeing_fac / scale
     a, b = data.shape
     x = np.arange(-23.-scale,
@@ -282,7 +282,7 @@ def make_frame(xloc, yloc, data, Dx, Dy, ftf,
         sel *= np.isfinite(data[:, k]) * (ftf > 0.5)
         if np.any(sel):
             grid_z = griddata(S[sel], data[sel, k],
-                              (xgrid, ygrid), method='nearest')
+                              (xgrid, ygrid), method='cubic')
             zgrid[k, :, :] = (convolve(grid_z, G, boundary='extend') *
                               scale**2 / area)
     return zgrid[:, 1:-1, 1:-1], xgrid[1:-1, 1:-1], ygrid[1:-1, 1:-1]
