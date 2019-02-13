@@ -84,4 +84,6 @@ optional arguments:
 ```
 ## Data Products
 
+To be filled later, but there are two products ... {DATE}_{OBS}_{IFUSLOT}.fits and {DATE}_{OBS}_{IFUSLOT}_cube.fits
+
 ## Examples
