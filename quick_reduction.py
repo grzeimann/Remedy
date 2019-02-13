@@ -425,7 +425,7 @@ log.info('Reducing ifuslot: %03d' % args.ifuslot)
 pos, twispectra, scispectra, fn = reduce_ifuslot(ifuloop, h5table)
 average_twi = np.mean(twispectra, axis=0)
 scispectra = scispectra * average_twi
-fits.PrimaryHDU(scispectra).writeto('test2.fits', overwrite=True)
+# fits.PrimaryHDU(scispectra).writeto('test2.fits', overwrite=True)
 
 # Subtracting Sky
 log.info('Subtracting sky for ifuslot: %03d' % args.ifuslot)
@@ -434,7 +434,7 @@ if args.sky_ifuslot is not None:
     ftf = np.median(twispectra[:len(twispectra)/2], axis=1)
     ftf = ftf / np.percentile(ftf, 99)
     pos = pos[:len(pos)/2]
-    fits.PrimaryHDU(FTF).writeto('test.fits', overwrite=True)
+    # fits.PrimaryHDU(FTF).writeto('test.fits', overwrite=True)
 else:
     scispectra = subtract_sky(scispectra)
     ftf = np.median(twispectra, axis=1)
