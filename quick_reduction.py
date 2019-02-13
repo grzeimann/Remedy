@@ -456,12 +456,16 @@ image = convolve(grid_z0, G, boundary='extend')
 output_fits(image, fn)
 
 
+wADR = [3500., 4000., 4500., 5000., 5500.]
+ADRx = [-0.74, -0.4, -0.08, 0.08, 0.20]
+ADRx = np.polyval(np.polyfit(wADR, ADRx, 3), def_wave)
+
 # Making data cube
 log.info('Making Cube')
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
     zgrid, xgrid, ygrid = make_frame(pos[:, 0], pos[:, 1], scispectra, 
-                                     0. * def_wave, 0. * def_wave, ftf)
+                                     ADRx, 0. * def_wave, ftf)
 
 he = fits.open(fn)[0].header
 write_cube(def_wave, xgrid, ygrid, zgrid,'%s_%07d_%03d_cube.fits' %
