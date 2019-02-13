@@ -278,7 +278,7 @@ def make_frame(xloc, yloc, data, Dx, Dy, ftf,
     for k in np.arange(b):
         S[:, 0] = xloc + Dx[k]
         S[:, 1] = yloc + Dy[k]
-        sel = (data[:, k] / (data[:, k] * W).sum(axis=1)) <= 0.3
+        sel = (data[:, k] / (data[:, k] * W).sum(axis=1)) <= 0.5
         sel *= np.isfinite(data[:, k]) * (ftf > 0.5)
         if np.any(sel):
             grid_z = griddata(S[sel], data[sel, k],
