@@ -276,8 +276,8 @@ def make_frame(xloc, yloc, data, Dx, Dy, ftf,
     W = np.zeros(D.shape, dtype=bool)
     W[D < radius] = True
     for k in np.arange(b):
-        S[:, 0] = xloc + Dx[k]
-        S[:, 1] = yloc + Dy[k]
+        S[:, 0] = xloc - Dx[k]
+        S[:, 1] = yloc - Dy[k]
         sel = (data[:, k] / (data[:, k] * W).sum(axis=1)) <= 0.5
         sel *= np.isfinite(data[:, k]) * (ftf > 0.5)
         if np.any(sel):
