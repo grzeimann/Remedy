@@ -87,3 +87,18 @@ optional arguments:
 To be filled later, but there are two products ... {DATE}_{OBS}_{IFUSLOT}.fits and {DATE}_{OBS}_{IFUSLOT}_cube.fits
 
 ## Examples
+
+Running on TACC with following command:
+```
+python Remedy/quick_reduction.py 20190213 21 43 Remedy/CALS/test_cal_20190112.h5 --sky_ifuslot 47 --fplane_file fplane20190129.txt --rootdir /work/03946/hetdex/maverick
+```
+You can see the reduction of an IFU with a g'~12 star in it.  At this brightness, sky subtraction is inherently difficult, but using ifuslot 047 for sky information, we can see both a good job in sky subtraction and the expected diffraction spikes from such a bright star.  Below I am showing the output 20190213_0000021_043.fits image in ds9 and the 20190213_0000021_043_cube.fits cube in QFitsView.
+
+
+<p align="center">
+  <img src="images/ds9_example.png" width="850"/>
+</p>
+
+<p align="center">
+  <img src="images/qfitsview_example.png" width="850"/>
+</p>
