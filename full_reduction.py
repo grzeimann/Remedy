@@ -377,10 +377,11 @@ h5table = h5file.root.Cals
 
 # Collect indices for ifuslot
 ifuslots = h5table.cols.ifuslot[:]
+ifuloop = np.arange(len(ifuslots))
 
 # Reducing IFUSLOT
 log.info('Reducing all ifus in CAL HDF5')
-pos, twispectra, scispectra, fn = reduce_ifuslot(ifuslots, h5table)
+pos, twispectra, scispectra, fn = reduce_ifuslot(ifuloop, h5table)
 average_twi = np.percentile(twispectra, 95, axis=0)
 scispectra = scispectra * average_twi
 # fits.PrimaryHDU(scispectra).writeto('test2.fits', overwrite=True)
