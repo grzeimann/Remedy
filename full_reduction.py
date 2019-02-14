@@ -343,7 +343,8 @@ def subtract_sky(scispectra, nchunk=12):
     S = np.array_split(d, nchunk, axis=1)
     ftf = np.zeros((len(d), len(S)))
     for k, si in zip(np.arange(len(S)), S):
-        log.info('Working on chunk %i for fiber to fiber' % (k+1))
+        log.info('Working on chunk %i of %i for fiber to fiber' %
+                 (k+1, nchunk))
         s = np.ma.array(si, mask=si==0.)
         n = np.ma.median(s)
         x = np.ma.median(s, axis=1)
@@ -354,8 +355,8 @@ def subtract_sky(scispectra, nchunk=12):
                 y[nsi] = np.median(y[nsi])
             for j in np.arange(len(x)):
                 y[j] = evalf(x[j], n, avg=y[j])
-        for si in s:
-            y[si] = savgol_filter(y[si], 11, 1)
+        for nsi in ns:
+            y[nsi] = savgol_filter(y[nsi], 11, 1)
         ftf[:, k] = y / n
     for i in np.arange(len(scispectra)):
         I = interp1d(W, ftf[i, :], kind='quadratic', fill_value='extrapolate')
