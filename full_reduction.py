@@ -387,7 +387,7 @@ scispectra = scispectra * average_twi
 # fits.PrimaryHDU(scispectra).writeto('test2.fits', overwrite=True)
 
 # Subtracting Sky
-log.info('Subtracting sky for ifuslot: %03d' % args.ifuslot)
+log.info('Subtracting sky.')
 scispectra, sky = subtract_sky(scispectra)
 N = np.vstack([scispectra, sky])
 fits.PrimaryHDU(N).writeto('test.fits', overwrite=True)
