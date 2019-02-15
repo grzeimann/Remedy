@@ -167,11 +167,27 @@ def get_script_path():
     return op.dirname(op.realpath(sys.argv[0]))
 
 
-def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
+def get_interp_errors(x_fix, y_fix, x_var):
+    x_repeat = np.tile(x_var[:,None], (len(x_fix),))
+    distances = np.abs(x_repeat - x_fix)
+    x_indices = np.searchsorted(x_fix, x_var)
+    good = (x_indices > 0) * (x_indices < (len(x_indices)-1))
+    weights = np.zeros_like(distances)
+    idx = np.arange(len(x_indices))[good]
+    x_indices = x_indices[good]
+    weights[idx, x_indices] = distances[idx, x_indices-1]
+    weights[idx, x_indices-1] = distances[idx, x_indices]
+    weights /= np.sum(weights, axis=1)[:, None]
+    errors = np.sqrt(np.sum(weights * y_fix**2, axis=0))
+    return errors
+
+
+def get_spectra(array_sci, error_sci, array_flt, array_trace, wave, def_wave):
     # Get twi spectra as average of two pixels closest to trace
     # Get sci spectra as average of two pixels closest to trace normalized
     # by the twi frame for same pixels (aka, flat field extraction)
     sci_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
+    err_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
     twi_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
     N = array_flt.shape[0]
     x = np.arange(array_flt.shape[1])
@@ -189,11 +205,16 @@ def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
                                         left=0.0, right=0.0)
         sw = (array_sci[indl, x] / array_flt[indl, x] +
               array_sci[indh, x] / array_flt[indh, x])
+        ew = np.sqrt((error_sci[indl, x]**2 / array_flt[indl, x] +
+                      error_sci[indh, x]**2 / array_flt[indh, x]))
         sci_spectrum[fiber] = np.interp(def_wave, wave[fiber], sw / dw,
                                         left=0.0, right=0.0)
+        err_spectrum[fiber] = get_interp_errors(wave[fiber], ew / dw,
+                                                def_wave)
     twi_spectrum[~np.isfinite(twi_spectrum)] = 0.0
     sci_spectrum[~np.isfinite(sci_spectrum)] = 0.0
-    return twi_spectrum, sci_spectrum / 2.
+    err_spectrum[~np.isfinite(err_spectrum)] = 0.0
+    return twi_spectrum, sci_spectrum / 2., err_spectrum / 2.
 
 
 def reduce_ifuslot(ifuloop, h5table):
@@ -266,31 +287,32 @@ def output_fits(image, fn):
               (args.date, args.observation, args.ifuslot), overwrite=True)
 
 
-def make_frame(xloc, yloc, data, Dx, Dy, ftf,
-               scale=0.75, seeing_fac=2.3, radius=1.5):
+def extract_source(xloc, yloc, data, Dx, Dy, ftf,
+                   scale=0.25, seeing_fac=2.3):
     seeing = seeing_fac / scale
     a, b = data.shape
-    x = np.arange(-23.-scale,
-                  25.+1*scale, scale)
-    y = np.arange(-23.-scale,
-                  25.+1*scale, scale)
+    x = np.arange(xloc.min(),
+                  xloc.max()+1*scale, scale)
+    y = np.arange(yloc.min(),
+                  yloc.min()+1*scale, scale)
     xgrid, ygrid = np.meshgrid(x, y)
     zgrid = np.zeros((b,)+xgrid.shape)
     area = np.pi * 0.75**2
     G = Gaussian2DKernel(seeing / 2.35)
     S = np.zeros((data.shape[0], 2))
-    D = np.sqrt((xloc - xloc[:, np.newaxis])**2 +
-                (yloc - yloc[:, np.newaxis])**2)
-    W = np.zeros(D.shape, dtype=bool)
-    W[D < radius] = True
+    #D = np.sqrt((xloc - xloc[:, np.newaxis])**2 +
+    #            (yloc - yloc[:, np.newaxis])**2)
+    # cosmic rejection, radius=1.5
+    #vW = np.zeros(D.shape, dtype=bool)
+    # W[D < radius] = True
+    # sel = (data[:, k] / (data[:, k] * W).sum(axis=1)) <= 0.5
     for k in np.arange(b):
         S[:, 0] = xloc - Dx[k]
         S[:, 1] = yloc - Dy[k]
-        sel = (data[:, k] / (data[:, k] * W).sum(axis=1)) <= 0.5
-        sel *= np.isfinite(data[:, k]) * (ftf > 0.5)
+        sel = np.isfinite(data[:, k]) * (ftf > 0.5)
         if np.any(sel):
-            grid_z = griddata(S[sel], data[sel, k],
-                              (xgrid, ygrid), method='cubic')
+            grid_z = (griddata(S[sel], data[sel, k], (xgrid, ygrid),
+                               method='cubic') * scale**2 / area)
             zgrid[k, :, :] = (convolve(grid_z, G, boundary='extend') *
                               scale**2 / area)
     return zgrid[:, 1:-1, 1:-1], xgrid[1:-1, 1:-1], ygrid[1:-1, 1:-1]
