@@ -218,7 +218,7 @@ def get_spectra(array_sci, error_sci, array_flt, array_trace, wave, def_wave):
 
 
 def reduce_ifuslot(ifuloop, h5table):
-    p, t, s = ([], [], [])
+    p, t, s, es = ([], [], [], [])
     for ind in ifuloop:
         # Grab calibration information from hdf5 table
         ifuslot = '%03d' % h5table[ind]['ifuslot']
@@ -252,13 +252,13 @@ def reduce_ifuslot(ifuloop, h5table):
         for j, fn in enumerate(filenames):
             sciimage, scierror = base_reduction(fn)
             sciimage[:] = sciimage - masterbias
-            twi, spec = get_spectra(sciimage, masterflt, trace, wave, def_wave)
+            twi, spec, espec = get_spectra(sciimage, masterflt, trace, wave,
+                                           def_wave)
             pos = amppos + dither_pattern[j]
-            for x, i in zip([p, t, s], [pos, twi, spec]):
+            for x, i in zip([p, t, s, es], [pos, twi, spec, espec]):
                 x.append(i * 1.)        
-    p, t, s = [np.vstack(j) for j in [p, t, s]]
-    
-    return p, t, s, fn 
+    p, t, s, es = [np.vstack(j) for j in [p, t, s, es]]
+    return p, t, s, es, fn 
             
 
 def output_fits(image, fn):
@@ -287,6 +287,18 @@ def output_fits(image, fn):
               (args.date, args.observation, args.ifuslot), overwrite=True)
 
 
+def find_cosmics(xloc, yloc, data, radius=1.5, thresh=0.5):
+    D = np.sqrt((xloc - xloc[:, np.newaxis])**2 +
+                (yloc - yloc[:, np.newaxis])**2)
+    W = np.zeros(D.shape, dtype=bool)
+    W[D < radius] = True
+    mask = np.zeros(data.shape, dtype=bool)
+    for k in np.arange(data.shape[1]):
+        sel = (data[:, k] / (data[:, k] * W).sum(axis=1)) >= 0.5
+        mask[sel, k] = True
+    return mask
+
+
 def extract_source(xloc, yloc, data, Dx, Dy, ftf,
                    scale=0.25, seeing_fac=2.3):
     seeing = seeing_fac / scale
@@ -300,22 +312,18 @@ def extract_source(xloc, yloc, data, Dx, Dy, ftf,
     area = np.pi * 0.75**2
     G = Gaussian2DKernel(seeing / 2.35)
     S = np.zeros((data.shape[0], 2))
-    #D = np.sqrt((xloc - xloc[:, np.newaxis])**2 +
-    #            (yloc - yloc[:, np.newaxis])**2)
-    # cosmic rejection, radius=1.5
-    #vW = np.zeros(D.shape, dtype=bool)
-    # W[D < radius] = True
-    # sel = (data[:, k] / (data[:, k] * W).sum(axis=1)) <= 0.5
+    
     for k in np.arange(b):
         S[:, 0] = xloc - Dx[k]
         S[:, 1] = yloc - Dy[k]
-        sel = np.isfinite(data[:, k]) * (ftf > 0.5)
+        sel = np.isfinite(data[:, k]) * (data[:, k] != 0.0)
         if np.any(sel):
             grid_z = (griddata(S[sel], data[sel, k], (xgrid, ygrid),
                                method='cubic') * scale**2 / area)
             zgrid[k, :, :] = (convolve(grid_z, G, boundary='extend') *
                               scale**2 / area)
-    return zgrid[:, 1:-1, 1:-1], xgrid[1:-1, 1:-1], ygrid[1:-1, 1:-1]
+    
+    return 
 
 
 def write_cube(wave, xgrid, ygrid, zgrid, outname, he):
@@ -404,9 +412,10 @@ ifuloop = np.arange(len(ifuslots))
 
 # Reducing IFUSLOT
 log.info('Reducing all ifus in CAL HDF5')
-pos, twispectra, scispectra, fn = reduce_ifuslot(ifuloop, h5table)
+pos, twispectra, scispectra, errspectra, fn = reduce_ifuslot(ifuloop, h5table)
 average_twi = np.percentile(twispectra, 95, axis=0)
 scispectra = scispectra * average_twi
+errspectra = errspectra * average_twi
 # fits.PrimaryHDU(scispectra).writeto('test2.fits', overwrite=True)
 
 # Subtracting Sky
