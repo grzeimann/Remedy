@@ -252,8 +252,8 @@ def reduce_ifuslot(ifuloop, h5table):
         for j, fn in enumerate(filenames):
             sciimage, scierror = base_reduction(fn)
             sciimage[:] = sciimage - masterbias
-            twi, spec, espec = get_spectra(sciimage, masterflt, trace, wave,
-                                           def_wave)
+            twi, spec, espec = get_spectra(sciimage, scierror, masterflt,
+                                           trace, wave, def_wave)
             pos = amppos + dither_pattern[j]
             for x, i in zip([p, t, s, es], [pos, twi, spec, espec]):
                 x.append(i * 1.)        
@@ -300,7 +300,7 @@ def find_cosmics(xloc, yloc, data, radius=1.5, thresh=0.5):
 
 
 def extract_source(xloc, yloc, data, Dx, Dy, ftf,
-                   scale=0.25, seeing_fac=2.3):
+                   scale=0.25, seeing_fac=2.3, fcor=1.):
     seeing = seeing_fac / scale
     a, b = data.shape
     x = np.arange(xloc.min(),
@@ -322,8 +322,12 @@ def extract_source(xloc, yloc, data, Dx, Dy, ftf,
                                method='cubic') * scale**2 / area)
             zgrid[k, :, :] = (convolve(grid_z, G, boundary='extend') *
                               scale**2 / area)
-    
-    return 
+    ml = [np.median(chunk, axis=0)
+          for chunk in np.array_split(zgrid, 11, axis=0)]
+    model = np.sum(ml, axis=0) / np.sum(ml) * fcor
+    spec = (np.sum(zgrid * model[np.newaxis, :, :], axis=(1, 2)) /
+            np.sum(model**2))
+    return spec
 
 
 def write_cube(wave, xgrid, ygrid, zgrid, outname, he):
