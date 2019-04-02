@@ -99,9 +99,15 @@ def orient_image(image, amp, ampname):
     return image
 
 
-def base_reduction(filename, get_header=False):
+def base_reduction(filename, get_header=False, tfile=None):
     # Load fits file
-    a = fits.open(filename)
+    if tfile is not None:
+        import tarfile
+        t = tarfile.open(tfile,'r')
+        a = fits.open(t.extractfile(filename))
+    else:
+        a = fits.open(filename)
+
     image = np.array(a[0].data, dtype=float)
     
     # Overscan subtraction
@@ -151,17 +157,18 @@ def get_cal_path(pathname, date):
     datec = date
     daten = date
     cnt = 0
-    while len(glob.glob(pathname)) == 0:
+    pathnamen = pathname[:]
+    while len(glob.glob(pathnamen)) == 0:
         datec_ = datetime(int(daten[:4]), int(daten[4:6]), int(daten[6:]))
         daten_ = datec_ - timedelta(days=1)
         daten = '%04d%02d%02d' % (daten_.year, daten_.month, daten_.day)
-        pathname = pathname.replace(datec, daten)
+        pathnamen = pathname.replace(datec, daten)
         cnt += 1
-        log.info(pathname)
-        if cnt > 30:
+        log.info(pathnamen)
+        if cnt > 60:
             log.error('Could not find cal within 30 days.')
             break
-    return pathname, daten
+    return pathnamen, daten
 
 
 def get_script_path():
@@ -195,10 +202,13 @@ def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
 
 
 def reduce_ifuslot(ifuloop, h5table):
-    p, t, s = ([], [], [])
+    #p, t, s = ([], [], [])
+    p=[]
+    s=[]
+    t=[]
     for ind in ifuloop:
         ifuslot = '%03d' % h5table[ind]['ifuslot']
-        amp = h5table[ind]['amp']
+        amp = h5table[ind]['amp'].astype('U13')
         amppos = h5table[ind]['ifupos']
         wave = h5table[ind]['wavelength']
         trace = h5table[ind]['trace']
@@ -217,31 +227,72 @@ def reduce_ifuslot(ifuloop, h5table):
         masterflt = get_mastertwi(twibase, masterbias)
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
 
-        filenames = build_path(args.rootdir, args.date, args.observation,
+        file_glob = build_path(args.rootdir, args.date, args.observation,
                                ifuslot, amp)
-        filenames = sorted(glob.glob(filenames))
+        
+        print(file_glob)
+        filenames = sorted(glob.glob(file_glob))
+        import os
+        def splitall(path):
+            allparts = []
+            while 1:
+                parts = os.path.split(path)
+                if parts[0] == path:  # sentinel for absolute paths
+                    allparts.insert(0, parts[0])
+                    break
+                elif parts[1] == path: # sentinel for relative paths
+                    allparts.insert(0, parts[1])
+                    break
+                else:
+                    path = parts[0]
+                    allparts.insert(0, parts[1])
+            return allparts
+        tfile = None
+        if len(filenames) == 0:
+            # do we have a tar?
+            path = splitall(file_glob)
+            tfile = os.path.join(*path[:-3])+".tar"
+            if os.path.isfile(tfile):
+                print("This observation is tarred. Trying workaround...")
+                fnames_glob = os.path.join(*path[-4:])
+                import tarfile
+                import fnmatch
+                with tarfile.open(tfile) as tf:
+                    filenames = fnmatch.filter(tf.getnames(),fnames_glob)
+            else:
+                print("Couldn't find observation: expanding {} was empty, and {} doesn't exist.".format(file_glob,tfile))
+                sys.exit(-1)
+
         for j, fn in enumerate(filenames):
-            sciimage, scierror = base_reduction(fn)
+            sciimage, scierror = base_reduction(fn,tfile=tfile)
             sciimage[:] = sciimage - masterbias
             twi, spec = get_spectra(sciimage, masterflt, trace, wave, def_wave)
             pos = amppos + dither_pattern[j]
             for x, i in zip([p, t, s], [pos, twi, spec]):
                 x.append(i * 1.)        
+    
     p, t, s = [np.vstack(j) for j in [p, t, s]]
     
-    return p, t, s, fn 
+    return p, t, s, fn , tfile
             
 
-def output_fits(image, fn):
-    PA = fits.open(fn)[0].header['PARANGLE']
+def output_fits(image, fn, tfile=None):
+    if tfile is not None:
+        import tarfile
+        t = tarfile.open(tfile,'r')
+        a = fits.open(t.extractfile(fn))
+    else:
+        a = fits.open(fn)
+
+    PA = a[0].header['PARANGLE']
     imscale = 48. / image.shape[0]
     crx = image.shape[1] / 2.
     cry = image.shape[0] / 2.
     ifuslot = '%03d' % args.ifuslot
     if (args.ra is None) or (args.dec is None):
         log.info('Using header for RA and Dec')
-        RA = fits.open(fn)[0].header['TRAJCRA'] * 15.
-        DEC = fits.open(fn)[0].header['TRAJCDEC']
+        RA = a[0].header['TRAJCRA'] * 15.
+        DEC = a[0].header['TRAJCDEC']
         A = Astrometry(RA, DEC, PA, 0., 0., fplane_file=args.fplane_file)
         A.get_ifuslot_projection(ifuslot, imscale, crx, cry)
         wcs = A.tp_ifuslot
@@ -422,7 +473,7 @@ ifuloop = np.array(np.hstack(sel1), dtype=int)
 
 # Reducing IFUSLOT
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
-pos, twispectra, scispectra, fn = reduce_ifuslot(ifuloop, h5table)
+pos, twispectra, scispectra, fn, tfile = reduce_ifuslot(ifuloop, h5table)
 average_twi = np.mean(twispectra, axis=0)
 scispectra = scispectra * average_twi
 # fits.PrimaryHDU(scispectra).writeto('test2.fits', overwrite=True)
@@ -453,7 +504,7 @@ sel = ftf > 0.5
 grid_z0 = griddata(pos[sel], image[sel], (grid_x, grid_y), method='cubic')
 G = Gaussian2DKernel(8)
 image = convolve(grid_z0, G, boundary='extend')
-output_fits(image, fn)
+output_fits(image, fn, tfile)
 
 
 wADR = [3500., 4000., 4500., 5000., 5500.]
@@ -467,7 +518,15 @@ with warnings.catch_warnings():
     zgrid, xgrid, ygrid = make_frame(pos[:, 0], pos[:, 1], scispectra, 
                                      ADRx, 0. * def_wave, ftf)
 
-he = fits.open(fn)[0].header
+if tfile is not None:
+    import tarfile
+    t = tarfile.open(tfile,'r')
+    a = fits.open(t.extractfile(fn))
+else:
+    a = fits.open(fn)
+he = a[0].header
+t.close()
+
 write_cube(def_wave, xgrid, ygrid, zgrid,'%s_%07d_%03d_cube.fits' %
            (args.date, args.observation, args.ifuslot) , he)
 
