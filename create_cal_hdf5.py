@@ -37,14 +37,18 @@ class VIRUSImage(tb.IsDescription):
     amp = tb.StringCol(2)
 
 
-def append_fibers_to_table(im, fn):
+def append_fibers_to_table(im, fn, args):
     F = fits.open(fn)
     imattr = ['wavelength', 'trace', 'ifupos']
     for att in imattr:
         if att == 'image':
             im[att] = F['PRIMARY'].data * 1.
         else:
-            im[att] = F[att].data * 1.
+            try:    
+                im[att] = F[att].data * 1.
+            except:
+                args.log.warning('Could not attach %s from %s' % (att, fn))
+
     im['ifuslot'] = int(F[0].header['IFUSLOT'])
     im['ifuid'] = '%03d' % int(F[0].header['IFUID'])
     im['specid'] = '%03d' % int(F[0].header['SPECID'])
@@ -99,7 +103,7 @@ def main(argv=None):
     for fn in files:
         args.log.info('Working on %s' % fn)
         im = imagetable.row
-        success = append_fibers_to_table(im, fn)
+        success = append_fibers_to_table(im, fn, args)
         if success:
             imagetable.flush()
     
