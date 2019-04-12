@@ -522,10 +522,11 @@ if tfile is not None:
     import tarfile
     t = tarfile.open(tfile,'r')
     a = fits.open(t.extractfile(fn))
+    t.close()
 else:
     a = fits.open(fn)
 he = a[0].header
-t.close()
+
 
 write_cube(def_wave, xgrid, ygrid, zgrid,'%s_%07d_%03d_cube.fits' %
            (args.date, args.observation, args.ifuslot) , he)
