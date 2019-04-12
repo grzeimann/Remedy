@@ -206,6 +206,7 @@ def reduce_ifuslot(ifuloop, h5table):
     p=[]
     s=[]
     t=[]
+    print(ifuloop)
     for ind in ifuloop:
         ifuslot = '%03d' % h5table[ind]['ifuslot']
         amp = h5table[ind]['amp'].astype('U13')
@@ -230,7 +231,6 @@ def reduce_ifuslot(ifuloop, h5table):
         file_glob = build_path(args.rootdir, args.date, args.observation,
                                ifuslot, amp)
         
-        print(file_glob)
         filenames = sorted(glob.glob(file_glob))
         import os
         def splitall(path):
@@ -264,7 +264,7 @@ def reduce_ifuslot(ifuloop, h5table):
                 sys.exit(-1)
 
         for j, fn in enumerate(filenames):
-            sciimage, scierror = base_reduction(fn,tfile=tfile)
+            sciimage, scierror = base_reduction(fn, tfile=tfile)
             sciimage[:] = sciimage - masterbias
             twi, spec = get_spectra(sciimage, masterflt, trace, wave, def_wave)
             pos = amppos + dither_pattern[j]
