@@ -6,11 +6,14 @@ Created on Tue Jan 22 15:11:39 2019
 """
 
 import argparse as ap
+import fnmatch
 import glob
 import numpy as np
 import os.path as op
 import sys
+import tarfile
 import warnings
+
 
 from astrometry import Astrometry
 from astropy.convolution import convolve, Gaussian2DKernel
@@ -75,8 +78,27 @@ parser.add_argument("-si", "--sky_ifuslot",
 
 args = parser.parse_args(args=None)
 
+def splitall(path):
+    ''' Split path into list '''
+    allparts = []
+    while 1:
+        parts = op.split(path)
+        if parts[0] == path:  # sentinel for absolute paths
+            allparts.insert(0, parts[0])
+            break
+        elif parts[1] == path: # sentinel for relative paths
+            allparts.insert(0, parts[1])
+            break
+        else:
+            path = parts[0]
+            allparts.insert(0, parts[1])
+    return allparts
+
 def build_path(rootdir, date, obs, ifuslot, amp, base='sci', exp='exp*',
                instrument='virus'):
+    '''
+    Build path for a given ifuslot, amplifier, observation, date, and rootdir
+    '''
     if obs != '*':
         obs = '%07d' % obs
     path = op.join(rootdir, date, instrument, '%s%s' % (instrument, obs),
@@ -100,9 +122,18 @@ def orient_image(image, amp, ampname):
 
 
 def base_reduction(filename, get_header=False, tfile=None):
+    '''
+    Reduce filename from tarfile or fits file.
+    
+    Reduction steps include:
+        1) Overscan subtraction
+        2) Trim image
+        3) Orientation
+        4) Gain Multiplication
+        5) Error propagation
+    '''
     # Load fits file
     if tfile is not None:
-        import tarfile
         t = tarfile.open(tfile,'r')
         a = fits.open(t.extractfile(filename))
     else:
@@ -142,6 +173,9 @@ def base_reduction(filename, get_header=False, tfile=None):
 
 
 def get_mastertwi(twi_path, masterbias):
+    '''
+    Make a master flat image from the twilight frames
+    '''
     files = glob.glob(twi_path)
     listtwi = []
     for filename in files:
@@ -154,6 +188,9 @@ def get_mastertwi(twi_path, masterbias):
 
 
 def get_cal_path(pathname, date):
+    '''
+    Get appropriate cals on the closest night back 60 days in time
+    '''
     datec = date
     daten = date
     cnt = 0
@@ -166,16 +203,23 @@ def get_cal_path(pathname, date):
         cnt += 1
         log.info(pathnamen)
         if cnt > 60:
-            log.error('Could not find cal within 30 days.')
+            log.error('Could not find cal within 60 days.')
             break
     return pathnamen, daten
 
 
 def get_script_path():
+    '''
+    Get script path 
+    '''
     return op.dirname(op.realpath(sys.argv[0]))
 
 
 def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
+    '''
+    Extract spectra by dividing the flat field and averaging the central
+    two pixels
+    '''
     sci_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
     twi_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
     N = array_flt.shape[0]
@@ -202,11 +246,7 @@ def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
 
 
 def reduce_ifuslot(ifuloop, h5table):
-    #p, t, s = ([], [], [])
-    p=[]
-    s=[]
-    t=[]
-    print(ifuloop)
+    p, t, s = ([], [], [])
     for ind in ifuloop:
         ifuslot = '%03d' % h5table[ind]['ifuslot']
         amp = h5table[ind]['amp'].astype('U13')
@@ -232,35 +272,20 @@ def reduce_ifuslot(ifuloop, h5table):
                                ifuslot, amp)
         
         filenames = sorted(glob.glob(file_glob))
-        import os
-        def splitall(path):
-            allparts = []
-            while 1:
-                parts = os.path.split(path)
-                if parts[0] == path:  # sentinel for absolute paths
-                    allparts.insert(0, parts[0])
-                    break
-                elif parts[1] == path: # sentinel for relative paths
-                    allparts.insert(0, parts[1])
-                    break
-                else:
-                    path = parts[0]
-                    allparts.insert(0, parts[1])
-            return allparts
+        
         tfile = None
         if len(filenames) == 0:
             # do we have a tar?
             path = splitall(file_glob)
-            tfile = os.path.join(*path[:-3])+".tar"
-            if os.path.isfile(tfile):
+            tfile = op.join(*path[:-3]) + ".tar"
+            if op.exists(tfile):
                 print("This observation is tarred. Trying workaround...")
-                fnames_glob = os.path.join(*path[-4:])
-                import tarfile
-                import fnmatch
+                fnames_glob = op.join(*path[-4:])
                 with tarfile.open(tfile) as tf:
-                    filenames = fnmatch.filter(tf.getnames(),fnames_glob)
+                    filenames = fnmatch.filter(tf.getnames(), fnames_glob)
             else:
-                print("Couldn't find observation: expanding {} was empty, and {} doesn't exist.".format(file_glob,tfile))
+                print("Couldn't find observation: expanding {} was empty, and"
+                      "{} doesn't exist.".format(file_glob,tfile))
                 sys.exit(-1)
 
         for j, fn in enumerate(filenames):
@@ -277,6 +302,9 @@ def reduce_ifuslot(ifuloop, h5table):
             
 
 def output_fits(image, fn, tfile=None):
+    '''
+    Outputing collapsed image
+    '''
     if tfile is not None:
         import tarfile
         t = tarfile.open(tfile,'r')
@@ -303,8 +331,6 @@ def output_fits(image, fn, tfile=None):
                          cry, x_scale=-imscale, y_scale=imscale)
     header = wcs.to_header()
     F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
-    #for hi in header:
-    #    F.header[hi] = header[hi]
     F.writeto('%s_%07d_%03d.fits' %
               (args.date, args.observation, args.ifuslot), overwrite=True)
 
@@ -471,12 +497,12 @@ if args.sky_ifuslot is not None:
     sel1.append(np.where(args.sky_ifuslot == ifuslots)[0])
 ifuloop = np.array(np.hstack(sel1), dtype=int)
 
+
 # Reducing IFUSLOT
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
 pos, twispectra, scispectra, fn, tfile = reduce_ifuslot(ifuloop, h5table)
 average_twi = np.mean(twispectra, axis=0)
 scispectra = scispectra * average_twi
-# fits.PrimaryHDU(scispectra).writeto('test2.fits', overwrite=True)
 
 # Subtracting Sky
 log.info('Subtracting sky for ifuslot: %03d' % args.ifuslot)
@@ -485,7 +511,6 @@ if args.sky_ifuslot is not None:
     ftf = np.median(twispectra[:len(twispectra)/2], axis=1)
     ftf = ftf / np.percentile(ftf, 99)
     pos = pos[:len(pos)/2]
-    # fits.PrimaryHDU(FTF).writeto('test.fits', overwrite=True)
 else:
     scispectra = subtract_sky(scispectra)
     ftf = np.median(twispectra, axis=1)
@@ -519,12 +544,12 @@ with warnings.catch_warnings():
                                      ADRx, 0. * def_wave, ftf)
 
 if tfile is not None:
-    import tarfile
-    t = tarfile.open(tfile,'r')
+    t = tarfile.open(tfile, 'r')
     a = fits.open(t.extractfile(fn))
     t.close()
 else:
     a = fits.open(fn)
+
 he = a[0].header
 
 
