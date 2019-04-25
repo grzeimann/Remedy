@@ -30,6 +30,8 @@ def get_files(args):
 class VIRUSImage(tb.IsDescription):
     wavelength = tb.Float32Col((112, 1032))
     trace = tb.Float32Col((112, 1032))
+    Amp2Amp = tb.Float32Col((112, 1036))
+    Throughput = tb.Float32Col((112, 1036))
     ifupos = tb.Float32Col((112, 2))
     ifuslot = tb.Int32Col()
     ifuid = tb.StringCol(3)
@@ -39,7 +41,7 @@ class VIRUSImage(tb.IsDescription):
 
 def append_fibers_to_table(im, fn, args):
     F = fits.open(fn)
-    imattr = ['wavelength', 'trace', 'ifupos']
+    imattr = ['wavelength', 'trace', 'ifupos', 'Amp2Amp', 'Throughput']
     for att in imattr:
         if att == 'image':
             im[att] = F['PRIMARY'].data * 1.
