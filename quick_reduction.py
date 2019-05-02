@@ -270,6 +270,7 @@ def reduce_ifuslot(ifuloop, h5table):
             masterbias = h5table[ind]['masterbias']
             amp2amp = h5table[ind]['Amp2Amp']
             throughput = h5table[ind]['Throughput']
+            log.info('Success!!')
         except:
             masterbias = 0.0
             amp2amp = np.ones((112, 1036))
