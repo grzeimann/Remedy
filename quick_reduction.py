@@ -313,7 +313,7 @@ def reduce_ifuslot(ifuloop, h5table):
             sciimage, scierror = base_reduction(fn, tfile=tfile)
             sciimage[:] = sciimage - masterbias
             twi, spec = get_spectra(sciimage, masterflt, trace, wave, def_wave)
-            spec[:] = twi
+            spec[:] = safe_division(twi, amp2amp*throughput)
             twi[:] = np.ones(twi.shape)
             
             pos = amppos + dither_pattern[j]
