@@ -537,7 +537,9 @@ ifuloop = np.array(np.hstack(sel1), dtype=int)
 # Reducing IFUSLOT
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
 pos, twispectra, scispectra, fn, tfile = reduce_ifuslot(ifuloop, h5table)
-g = twispectra / np.nanmean(twispectra, axis=0)[np.newaxis, :]
+t = twispectra * 1.
+t[t< 1e-8] = np.nan
+g = t / np.nanmean(t, axis=0)[np.newaxis, :]
 a = np.array([np.nanmedian(f, axis=1) for f in np.array_split(g, 25, axis=1)]).swapaxes(0, 1)
 x = np.array([np.mean(xi) for xi in np.array_split(np.arange(g.shape[1]), 25)])
 ftf = np.zeros(scispectra.shape)
