@@ -313,8 +313,8 @@ def reduce_ifuslot(ifuloop, h5table):
             sciimage, scierror = base_reduction(fn, tfile=tfile)
             sciimage[:] = sciimage - masterbias
             twi, spec = get_spectra(sciimage, masterflt, trace, wave, def_wave)
-            twi[:] = twi / amp2amp
-            spec[:] = spec / amp2amp * throughput * mult_fac
+            twi[:] = safe_division(twi, amp2amp)
+            spec[:] = safe_division(spec, amp2amp) * throughput * mult_fac
             pos = amppos + dither_pattern[j]
             for x, i in zip([p, t, s], [pos, twi, spec]):
                 x.append(i * 1.)        
@@ -411,6 +411,17 @@ def write_cube(wave, xgrid, ygrid, zgrid, outname, he):
             continue
         hdu.header[key] = he[key]
     hdu.writeto(outname, overwrite=True)
+
+def safe_division(num, denom, eps=1e-8, fillval=0.0):
+    good = np.isfinite(denom) * (np.abs(denom) > eps)
+    div = num * 0.
+    if num.ndim == denom.ndim:
+        div[good] = num[good] / denom[good]
+        div[~good] = fillval
+    else:
+        div[:, good] = num[:, good] / denom[good]
+        div[:, ~good] = fillval
+    return div
 
 def subtract_sky_other(scispectra):
     N = len(scispectra) / 112
