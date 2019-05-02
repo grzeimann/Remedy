@@ -76,6 +76,18 @@ parser.add_argument("-si", "--sky_ifuslot",
                     then the ifuslot itself is used''',
                     type=int, default=None)
 
+parser.add_argument("-sf", "--source_file",
+                    help='''file for spectrum to add in cube''',
+                    type=str, default=None)
+
+parser.add_argument("-sx", "--source_x",
+                    help='''x-position for spectrum to add in cube''',
+                    type=float, default=0.0)
+
+parser.add_argument("-sy", "--source_y",
+                    help='''y-position for spectrum to add in cube''',
+                    type=float, default=0.0)
+
 args = parser.parse_args(args=None)
 
 def splitall(path):
@@ -247,6 +259,7 @@ def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
 
 def reduce_ifuslot(ifuloop, h5table):
     p, t, s = ([], [], [])
+    mult_fac = 6.626e-27 * (3e18 / def_wave) / 360 / 5e5 * 0.25
     for ind in ifuloop:
         ifuslot = '%03d' % h5table[ind]['ifuslot']
         amp = h5table[ind]['amp'].astype('U13')
@@ -255,8 +268,12 @@ def reduce_ifuslot(ifuloop, h5table):
         trace = h5table[ind]['trace']
         try:
             masterbias = h5table[ind]['masterbias']
+            amp2amp = h5table[ind]['Amp2Amp']
+            throughput = h5table[ind]['Throughput']
         except:
             masterbias = 0.0
+            amp2amp = np.ones((112, 1036))
+            throughput = np.ones((112, 1036))
         twibase = build_path(args.rootdir, args.date, '*', ifuslot, amp,
                              base='twi')
         twibase, newdate = get_cal_path(twibase, args.date)
@@ -292,6 +309,8 @@ def reduce_ifuslot(ifuloop, h5table):
             sciimage, scierror = base_reduction(fn, tfile=tfile)
             sciimage[:] = sciimage - masterbias
             twi, spec = get_spectra(sciimage, masterflt, trace, wave, def_wave)
+            twi[:] = twi / amp2amp * throughput * mult_fac
+            spec[:] = spec / amp2amp * throughput * mult_fac
             pos = amppos + dither_pattern[j]
             for x, i in zip([p, t, s], [pos, twi, spec]):
                 x.append(i * 1.)        
@@ -484,7 +503,8 @@ DIRNAME = get_script_path()
 instrument = 'virus'
 log = setup_logging()
 if args.hdf5file is None:
-    args.hdf5file = op.join(DIRNAME, 'cals', 'default_cals.h5')
+    log.error('Please specify an hdf5file.  A default is not yet setup.')
+    sys.exit(1)
 
 # OPEN HDF5 FILE
 h5file = open_file(args.hdf5file, mode='r')
