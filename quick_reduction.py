@@ -545,7 +545,7 @@ x = np.array([np.mean(xi) for xi in np.array_split(np.arange(g.shape[1]), 25)])
 ftf = np.zeros(scispectra.shape)
 for i, ai in enumerate(a):
     sel = np.isfinite(ai)
-    if len(sel):
+    if len(sel)>1:
         I = interp1d(x[sel], ai[sel], kind='quadratic',
                      fill_value='extrapolate')
         ftf[i] = I(np.arange(g.shape[1]))
