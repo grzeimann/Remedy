@@ -523,6 +523,7 @@ log.info('Reducing ifuslot: %03d' % args.ifuslot)
 pos, twispectra, scispectra, fn, tfile = reduce_ifuslot(ifuloop, h5table)
 average_twi = np.mean(twispectra, axis=0)
 scispectra = scispectra * average_twi
+fits.PrimaryHDU(scispectra).writeto('test.fits', overwrite=True)
 
 # Subtracting Sky
 log.info('Subtracting sky for ifuslot: %03d' % args.ifuslot)
