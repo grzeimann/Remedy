@@ -268,11 +268,14 @@ def reduce_ifuslot(ifuloop, h5table):
         trace = h5table[ind]['trace']
         try:
             masterbias = h5table[ind]['masterbias']
+            
+        except:
+            masterbias = 0.0
+        try:
             amp2amp = h5table[ind]['Amp2Amp']
             throughput = h5table[ind]['Throughput']
             log.info('Success!!')
         except:
-            masterbias = 0.0
             amp2amp = np.ones((112, 1036))
             throughput = np.ones((112, 1036))
         twibase = build_path(args.rootdir, args.date, '*', ifuslot, amp,
@@ -310,8 +313,8 @@ def reduce_ifuslot(ifuloop, h5table):
             sciimage, scierror = base_reduction(fn, tfile=tfile)
             sciimage[:] = sciimage - masterbias
             twi, spec = get_spectra(sciimage, masterflt, trace, wave, def_wave)
-            twi[:] = twi #/ amp2amp
-            spec[:] = spec #/ amp2amp * throughput * mult_fac
+            twi[:] = twi / amp2amp
+            spec[:] = spec / amp2amp * throughput * mult_fac
             pos = amppos + dither_pattern[j]
             for x, i in zip([p, t, s], [pos, twi, spec]):
                 x.append(i * 1.)        
