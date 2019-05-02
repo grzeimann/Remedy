@@ -259,7 +259,7 @@ def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
 
 def reduce_ifuslot(ifuloop, h5table):
     p, t, s = ([], [], [])
-    mult_fac = 6.626e-27 * (3e18 / def_wave) / 360 / 5e5 * 0.25
+    mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.25
     for ind in ifuloop:
         ifuslot = '%03d' % h5table[ind]['ifuslot']
         amp = h5table[ind]['amp'].astype('U13')
