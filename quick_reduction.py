@@ -248,8 +248,8 @@ def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
         tw = array_flt[indl, x] / 2. + array_flt[indh, x] / 2.
         twi_spectrum[fiber] = np.interp(def_wave, wave[fiber], tw / dw,
                                         left=0.0, right=0.0)
-        sw = (array_sci[indl, x] / array_flt[indl, x] +
-              array_sci[indh, x] / array_flt[indh, x])
+        sw = (array_sci[indl, x] +#/ array_flt[indl, x] +
+              array_sci[indh, x] )#/ array_flt[indh, x])
         sci_spectrum[fiber] = np.interp(def_wave, wave[fiber], sw / dw,
                                         left=0.0, right=0.0)
     twi_spectrum[~np.isfinite(twi_spectrum)] = 0.0
@@ -313,6 +313,7 @@ def reduce_ifuslot(ifuloop, h5table):
             sciimage, scierror = base_reduction(fn, tfile=tfile)
             sciimage[:] = sciimage - masterbias
             twi, spec = get_spectra(sciimage, masterflt, trace, wave, def_wave)
+            twi[:] = safe_division(twi, amp2amp*throughput)
             spec[:] = safe_division(spec, amp2amp*throughput) * mult_fac
             
             pos = amppos + dither_pattern[j]
@@ -536,8 +537,19 @@ ifuloop = np.array(np.hstack(sel1), dtype=int)
 # Reducing IFUSLOT
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
 pos, twispectra, scispectra, fn, tfile = reduce_ifuslot(ifuloop, h5table)
-average_twi = np.mean(twispectra, axis=0)
-scispectra = scispectra * average_twi
+g = twispectra / np.nanmean(twispectra, axis=0)[np.newaxis, :]
+a = np.array([np.nanmedian(f, axis=1) for f in np.array_split(g, 25, axis=1)])
+x = np.array([np.mean(xi) for xi in np.array_split(np.arange(g.shape[1]), 25)])
+ftf = np.zeros(scispectra.shape)
+for i, ai in enumerate(a):
+    sel = np.isfinite(ai)
+    if len(sel):
+        I = interp1d(x[sel], ai[sel], kind='quadratic',
+                     fill_value='extrapolate')
+        ftf[i] = I(np.arange(g.shape[1]))
+    else:
+        ftf[i] = 0.0
+scispectra = safe_division(scispectra, ftf)
 fits.PrimaryHDU(scispectra).writeto('test.fits', overwrite=True)
 
 # Subtracting Sky
