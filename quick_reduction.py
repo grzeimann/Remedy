@@ -378,7 +378,7 @@ def make_frame(xloc, yloc, data, Dx, Dy, ftf,
     for k in np.arange(b):
         S[:, 0] = xloc - Dx[k]
         S[:, 1] = yloc - Dy[k]
-        sel = (data[:, k] / (data[:, k] * W).sum(axis=1)) <= 0.5
+        sel = (data[:, k] / np.nansum(data[:, k] * W, axis=1)) <= 0.5
         sel *= np.isfinite(data[:, k]) * (ftf > 0.5)
         if np.any(sel):
             grid_z = griddata(S[sel], data[sel, k],
@@ -585,7 +585,7 @@ fits.PrimaryHDU(scispectra).writeto('test.fits', overwrite=True)
 log.info('Subtracting sky for ifuslot: %03d' % args.ifuslot)
 if args.sky_ifuslot is not None:
     scispectra = subtract_sky_other2(scispectra)
-    ftf = np.median(ftf[:len(ftf)/2], axis=1)
+    ftf = np.nanmedian(ftf[:len(ftf)/2], axis=1)
     pos = pos[:len(pos)/2]
 else:
     scispectra = subtract_sky(scispectra)
