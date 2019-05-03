@@ -470,7 +470,7 @@ def subtract_sky_other(scispectra):
         scispectra[i] /= I(def_wave)
     sky = np.nanmedian(scispectra[len(scispectra)/2:], axis=0)
     scispectra = scispectra[:len(scispectra)/2]
-    return scispectra - sky, ftf
+    return scispectra - sky
 
 def subtract_sky(scispectra):
     N = len(scispectra) / 112
@@ -522,7 +522,7 @@ def subtract_sky_other2(scispectra):
     F[F < 1e-30] = np.nan
     N = len(scispectra) / 112
     nexp = N / 8
-    amps = np.array(np.array_split(scispectra, N, axis=0))
+    amps = np.array(np.array_split(F, N, axis=0))
     X = np.ones((nexp,))
     if nexp > 1:
         for i in np.arange(1, nexp):
@@ -534,8 +534,7 @@ def subtract_sky_other2(scispectra):
         sky = np.nanmedian(amps[N/2+i::nexp], axis=(0, 1))
         amps[:N/2+i:nexp] = (amps[:N/2+i:nexp] - sky) / X[i]
     y = amps.reshape(scispectra.shape)[:len(scispectra)/2]
-    f = np.ones(scispectra.shape)[:len(scispectra)/2]
-    return y, f
+    return y
 
 # GET DIRECTORY NAME FOR PATH BUILDING
 DIRNAME = get_script_path()
@@ -580,9 +579,9 @@ fits.PrimaryHDU(scispectra).writeto('test.fits', overwrite=True)
 # Subtracting Sky
 log.info('Subtracting sky for ifuslot: %03d' % args.ifuslot)
 if args.sky_ifuslot is not None:
-    scispectra, FTF = subtract_sky_other2(scispectra)
+    scispectra = subtract_sky_other2(scispectra)
     ftf = np.median(twispectra[:len(twispectra)/2], axis=1)
-    ftf = ftf / np.percentile(ftf, 99)
+    ftf = ftf / np.nanpercentile(ftf, 99)
     pos = pos[:len(pos)/2]
 else:
     scispectra = subtract_sky(scispectra)
@@ -592,7 +591,7 @@ else:
 # Collapse image
 log.info('Making collapsed frame')
 color = color_dict['red']
-image = np.median(scispectra[:, color[2]:color[3]], axis=1)
+image = np.nanmedian(scispectra[:, color[2]:color[3]], axis=1)
 
 # Normalize exposures and amps together using 20%-tile
 log.info('Building collapsed frame')
