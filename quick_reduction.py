@@ -590,6 +590,7 @@ if args.sky_ifuslot is not None:
 else:
     scispectra = subtract_sky(scispectra)
 
+scispectra[~np.isfinite(scispectra)] = 0.0
 fits.PrimaryHDU(scispectra).writeto('test.fits', overwrite=True)
 
 
