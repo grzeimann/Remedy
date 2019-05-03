@@ -539,7 +539,7 @@ def subtract_sky_other2(scispectra):
         xi = np.hstack([x + j*112, x + (j+nexp)*112, x + (j+2*nexp)*112,
                         x + (j+3*nexp)*112])
         F[xi] = (F[xi] - sky) / X[i]
-    return F
+    return F[:len(F)/2]
 
 # GET DIRECTORY NAME FOR PATH BUILDING
 DIRNAME = get_script_path()
