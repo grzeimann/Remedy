@@ -533,8 +533,9 @@ def subtract_sky_other2(scispectra):
     for i in np.arange(nexp):
         sky = np.nanmedian(amps[N/2+i::nexp], axis=(0, 1))
         amps[:N/2+i:nexp] = (amps[:N/2+i:nexp] - sky) / X[i]
-    
-    return amps.reshape(scispectra.shape), np.ones(scispectra.shape)
+    y = amps.reshape(scispectra.shape)[:len(scispectra)/2]
+    f = np.ones(scispectra.shape)[:len(scispectra)/2]
+    return y, f
 
 # GET DIRECTORY NAME FOR PATH BUILDING
 DIRNAME = get_script_path()
