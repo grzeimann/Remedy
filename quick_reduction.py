@@ -274,7 +274,6 @@ def reduce_ifuslot(ifuloop, h5table):
         try:
             amp2amp = h5table[ind]['Amp2Amp']
             throughput = h5table[ind]['Throughput']
-            log.info('Success!!')
         except:
             amp2amp = np.ones((112, 1036))
             throughput = np.ones((112, 1036))
@@ -519,7 +518,7 @@ def subtract_sky2(scispectra):
 
 def subtract_sky_other2(scispectra):
     F = scispectra * 1.
-    F[F < 1e-30] = np.nan
+    F[F < 1e-40] = np.nan
     N = len(scispectra) / 112
     nexp = N / 8
     amps = np.array(np.array_split(F, N, axis=0))
@@ -530,11 +529,17 @@ def subtract_sky_other2(scispectra):
             r = np.nanmedian(r)
             X[i] = r
             log.info('Norm %i: %0.2f' % (i, r))
+    x = np.arange(112)
     for i in np.arange(nexp):
-        sky = np.nanmedian(amps[N/2+i::nexp], axis=(0, 1))
-        amps[:N/2+i:nexp] = (amps[:N/2+i:nexp] - sky) / X[i]
-    y = amps.reshape(scispectra.shape)[:len(scispectra)/2]
-    return y
+        j = 12 + i
+        xi = np.hstack([x + j*112, x + (j+nexp)*112, x + (j+2*nexp)*112,
+                        x + (j+3*nexp)*112])
+        sky = np.nanmedian(F[xi], axis=0)
+        j = i
+        xi = np.hstack([x + j*112, x + (j+nexp)*112, x + (j+2*nexp)*112,
+                        x + (j+3*nexp)*112])
+        F[xi] = (F[xi] - sky) / X[i]
+    return F
 
 # GET DIRECTORY NAME FOR PATH BUILDING
 DIRNAME = get_script_path()
