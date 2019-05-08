@@ -17,6 +17,7 @@ import warnings
 
 from astrometry import Astrometry
 from astropy.convolution import convolve, Gaussian2DKernel
+from astropy.convolution import interpolate_replace_nans, Gaussian1DKernel
 from astropy.io import fits
 from astropy.stats import biweight_location
 from datetime import datetime, timedelta
@@ -375,6 +376,11 @@ def make_frame(xloc, yloc, data, Dx, Dy, ftf,
                 (yloc - yloc[:, np.newaxis])**2)
     W = np.zeros(D.shape, dtype=bool)
     W[D < radius] = True
+    G = Gaussian1DKernel(5.)
+    c = data * 0.
+    for i in np.arange(data.shape[0]):
+        c[i] = interpolate_replace_nans(data[i], G)
+    data = c * 1.
     for k in np.arange(b):
         S[:, 0] = xloc - Dx[k]
         S[:, 1] = yloc - Dy[k]
