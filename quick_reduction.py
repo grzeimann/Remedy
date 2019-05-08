@@ -376,10 +376,10 @@ def make_frame(xloc, yloc, data, Dx, Dy, ftf,
                 (yloc - yloc[:, np.newaxis])**2)
     W = np.zeros(D.shape, dtype=bool)
     W[D < radius] = True
-    G = Gaussian1DKernel(5.)
+    Gp = Gaussian1DKernel(5.)
     c = data * 0.
     for i in np.arange(data.shape[0]):
-        c[i] = interpolate_replace_nans(data[i], G)
+        c[i] = interpolate_replace_nans(data[i], Gp)
     data = c * 1.
     for k in np.arange(b):
         S[:, 0] = xloc - Dx[k]
