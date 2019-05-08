@@ -610,7 +610,7 @@ grid_x, grid_y = np.meshgrid(np.linspace(-23, 25, 401),
                              np.linspace(-23, 25, 401))
 sel = ftf > 0.5
 grid_z0 = griddata(pos[sel], image[sel], (grid_x, grid_y), method='cubic')
-G = Gaussian2DKernel(8)
+G = Gaussian2DKernel(3)
 image = convolve(grid_z0, G, boundary='extend')
 output_fits(image, fn, tfile)
 
