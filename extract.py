@@ -7,12 +7,9 @@ Created on Mon Mar 11 11:48:55 2019
 """
 
 import numpy as np
-import os.path as op
 
 from astropy.convolution import Gaussian2DKernel, convolve
-from astropy.coordinates import SkyCoord
 from astropy.modeling.models import Moffat2D, Gaussian2D
-from astropy import units as u
 from input_utils import setup_logging
 from scipy.interpolate import griddata, LinearNDInterpolator
 
@@ -70,55 +67,7 @@ class Extract:
         ADR = np.polyval(np.polyfit(wADR, ADR, 3), self.wave)
         self.ADRx = np.cos(np.deg2rad(angle)) * ADR
         self.ADRy = np.sin(np.deg2rad(angle)) * ADR
- 
-    def get_fiberinfo_for_coord(self, coord, radius=8.):
-        ''' 
-        Grab fibers within a radius and get relevant info
-        
-        Parameters
-        ----------
-        coord: SkyCoord Object
-            a single SkyCoord object for a given ra and dec
-        
-        Returns
-        -------
-        ifux: numpy array (length of number of fibers)
-            ifu x-coordinate accounting for dither_pattern
-        ifuy: numpy array (length of number of fibers)
-            ifu y-coordinate accounting for dither_pattern
-        ra: numpy array (length of number of fibers)
-            Right ascension of fibers
-        dec: numpy array (length of number of fibers)
-            Declination of fibers
-        spec: numpy 2d array (number of fibers by wavelength dimension)
-            Calibrated spectra for each fiber
-        spece: numpy 2d array (number of fibers by wavelength dimension)
-            Error for calibrated spectra
-        mask: numpy 2d array (number of fibers by wavelength dimension)
-            Mask of good values for each fiber and wavelength
-        '''
-        idx = self.fibers.query_region_idx(coord, radius=radius/3600.)
-        fiber_lower_limit = 5
-        if len(idx) < fiber_lower_limit:
-            self.log.warning('Not enough fibers found within radius to do'
-                             ' an extraction')
-            return None
-        ifux = self.fibers.table.read_coordinates(idx, 'ifux')
-        ifuy = self.fibers.table.read_coordinates(idx, 'ifuy')
-        ra = self.fibers.table.read_coordinates(idx, 'ra')
-        dec = self.fibers.table.read_coordinates(idx, 'dec')
-        spec = self.fibers.table.read_coordinates(idx, 'calfib') / 2.
-        spece = self.fibers.table.read_coordinates(idx, 'calfibe') / 2.
-        ftf = self.fibers.table.read_coordinates(idx, 'fiber_to_fiber')
-        mask = self.fibers.table.read_coordinates(idx, 'Amp2Amp')
-        mask = (mask > 1e-8) * (np.median(ftf, axis=1) > 0.5)[:, np.newaxis]
-        expn = np.array(self.fibers.table.read_coordinates(idx, 'expnum'),
-                        dtype=int)
-        ifux[:] = ifux + self.dither_pattern[expn-1, 0]
-        ifuy[:] = ifuy + self.dither_pattern[expn-1, 1]
-        xc, yc = self.convert_radec_to_ifux_ifuy(ifux, ifuy, ra, dec,
-                                                 coord.ra.deg, coord.dec.deg)
-        return ifux, ifuy, xc, yc, ra, dec, spec, spece, mask
+
 
     def intersection_area(self, d, R, r):
         """
