@@ -519,8 +519,6 @@ def subtract_sky(scispectra):
         scispectra[i] /= I(def_wave)
     return scispectra - np.nanmedian(scispectra, axis=0)
 
-def subtract_sky2(scispectra):
-    pass
 
 def subtract_sky_other2(scispectra):
     F = scispectra * 1.
@@ -563,6 +561,9 @@ h5table = h5file.root.Cals
 ifuslots = h5table.cols.ifuslot[:]
 sel1 = list(np.where(args.ifuslot == ifuslots)[0])
 if args.sky_ifuslot is not None:
+    sel1.append(np.where(args.sky_ifuslot == ifuslots)[0])
+else:
+    args.sky_ifuslot = args.ifuslot
     sel1.append(np.where(args.sky_ifuslot == ifuslots)[0])
 ifuloop = np.array(np.hstack(sel1), dtype=int)
 
