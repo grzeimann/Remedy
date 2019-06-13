@@ -632,7 +632,7 @@ else:
 
 
 if args.simulate:
-    simulated_spectrum = read_sim(args.simulate_file)
+    simulated_spectrum = read_sim(args.source_file)
     scispectra = simulate_source(simulated_spectrum, pos, scispectra, 
                                  args.source_x, args.source_y, 
                                  args.source_seeing)
