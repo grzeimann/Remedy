@@ -83,6 +83,10 @@ parser.add_argument("-sf", "--source_file",
                     help='''file for spectrum to add in cube''',
                     type=str, default=None)
 
+parser.add_argument("-s", "--simulate",
+                    help='''Simulate source''',
+                    action="count", default=0)
+
 parser.add_argument("-sx", "--source_x",
                     help='''x-position for spectrum to add in cube''',
                     type=float, default=0.0)
