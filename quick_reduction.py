@@ -20,7 +20,9 @@ from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.convolution import interpolate_replace_nans, Gaussian1DKernel
 from astropy.io import fits
 from astropy.stats import biweight_location
+from astropy.table import Table
 from datetime import datetime, timedelta
+from extract import Extract
 from input_utils import setup_logging
 from scipy.interpolate import griddata, interp1d
 from scipy.signal import savgol_filter
@@ -89,6 +91,10 @@ parser.add_argument("-sy", "--source_y",
                     help='''y-position for spectrum to add in cube''',
                     type=float, default=0.0)
 
+parser.add_argument("-ss", "--source_seeing",
+                    help='''seeing conditions manually entered''',
+                    type=float, default=1.5)
+
 args = parser.parse_args(args=None)
 
 def splitall(path):
@@ -106,6 +112,16 @@ def splitall(path):
             path = parts[0]
             allparts.insert(0, parts[1])
     return allparts
+
+
+def read_sim(filename):
+    '''
+    Read an ascii simulation file with wavelength (A) and F_lam as columns
+    '''
+    T = Table.read(filename, format='ascii')
+    spectrum = np.interp(def_wave, T['col1'], T['col2'])
+    return spectrum
+
 
 def build_path(rootdir, date, obs, ifuslot, amp, base='sci', exp='exp*',
                instrument='virus'):
@@ -429,6 +445,19 @@ def safe_division(num, denom, eps=1e-8, fillval=0.0):
         div[:, ~good] = fillval
     return div
 
+def simulate_source(simulated_spectrum, pos, spectra, xc, yc,
+                    seeing=1.5):
+    # USE PSF TO DISTRIBUTE FLUX, build_weights
+    # multiply weights by spectra for simulation
+    # Norm includes throughput, amplifier to amplifier, and sky to sky
+    E = Extract()
+    boxsize = 10.5
+    scale = 0.25
+    psf = E.moffat_psf(seeing, boxsize, scale, alpha=3.5)
+    weights = E.build_weights(xc, yc, pos[:, 0], pos[:, 1], psf)
+    s_spec = weights * simulated_spectrum[np.newaxis, :]
+    return spectra + s_spec
+
 def subtract_sky_other(scispectra):
     N = len(scispectra) / 112
     nexp = N / 8
@@ -597,6 +626,12 @@ if args.sky_ifuslot is not None:
 else:
     scispectra = subtract_sky(scispectra)
 
+
+if args.simulate:
+    simulated_spectrum = read_sim(args.simulate_file)
+    scispectra = simulate_source(simulated_spectrum, pos, scispectra, 
+                                 args.source_x, args.source_y, 
+                                 args.source_seeing=1.5)
 fits.PrimaryHDU(scispectra).writeto('test.fits', overwrite=True)
 
 
