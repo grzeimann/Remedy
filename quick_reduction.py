@@ -631,7 +631,7 @@ if args.simulate:
     simulated_spectrum = read_sim(args.simulate_file)
     scispectra = simulate_source(simulated_spectrum, pos, scispectra, 
                                  args.source_x, args.source_y, 
-                                 args.source_seeing=1.5)
+                                 args.source_seeing)
 fits.PrimaryHDU(scispectra).writeto('test.fits', overwrite=True)
 
 
