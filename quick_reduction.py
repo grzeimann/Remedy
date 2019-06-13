@@ -345,7 +345,7 @@ def reduce_ifuslot(ifuloop, h5table):
     return p, t, s, fn , tfile
             
 
-def output_fits(image, fn, tfile=None):
+def output_fits(image, fn, name, tfile=None):
     '''
     Outputing collapsed image
     '''
@@ -375,8 +375,7 @@ def output_fits(image, fn, tfile=None):
                          cry, x_scale=-imscale, y_scale=imscale)
     header = wcs.to_header()
     F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
-    F.writeto('%s_%07d_%03d.fits' %
-              (args.date, args.observation, args.ifuslot), overwrite=True)
+    F.writeto(name, overwrite=True)
 
 
 def make_frame(xloc, yloc, data, Dx, Dy, ftf,
@@ -637,7 +636,17 @@ if args.simulate:
     scispectra = simulate_source(simulated_spectrum, pos, scispectra, 
                                  args.source_x, args.source_y, 
                                  args.source_seeing)
-fits.PrimaryHDU(scispectra).writeto('test.fits', overwrite=True)
+
+if args.simulate:
+    name = ('%s_%07d_%03d_sim.fits' %
+                (args.date, args.observation, args.ifuslot))
+    cubename = ('%s_%07d_%03d_cube_sim.fits' %
+                (args.date, args.observation, args.ifuslot))
+else:
+    name = ('%s_%07d_%03d.fits' %
+                (args.date, args.observation, args.ifuslot))
+    cubename = ('%s_%07d_%03d_cube.fits' %
+                (args.date, args.observation, args.ifuslot))
 
 
 # Collapse image
@@ -653,7 +662,7 @@ sel = ftf > 0.5
 grid_z0 = griddata(pos[sel], image[sel], (grid_x, grid_y), method='linear')
 G = Gaussian2DKernel(3)
 image = convolve(grid_z0, G, boundary='extend')
-output_fits(image, fn, tfile)
+output_fits(image, fn, name, tfile)
 
 
 wADR = [3500., 4000., 4500., 5000., 5500.]
@@ -676,13 +685,7 @@ else:
 
 he = a[0].header
 
-if args.simulate:
-    name = ('%s_%07d_%03d_cube_sim.fits' %
-            (args.date, args.observation, args.ifuslot))
-else:
-    name = ('%s_%07d_%03d_cube.fits' %
-            (args.date, args.observation, args.ifuslot))
-write_cube(def_wave, xgrid, ygrid, zgrid, name, he)
+write_cube(def_wave, xgrid, ygrid, zgrid, cubename, he)
 
 
 h5file.close()
