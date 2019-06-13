@@ -676,9 +676,13 @@ else:
 
 he = a[0].header
 
-
-write_cube(def_wave, xgrid, ygrid, zgrid,'%s_%07d_%03d_cube.fits' %
-           (args.date, args.observation, args.ifuslot) , he)
+if args.simulate:
+    name = ('%s_%07d_%03d_cube_sim.fits' %
+            (args.date, args.observation, args.ifuslot))
+else:
+    name = ('%s_%07d_%03d_cube.fits' %
+            (args.date, args.observation, args.ifuslot))
+write_cube(def_wave, xgrid, ygrid, zgrid, name, he)
 
 
 h5file.close()
