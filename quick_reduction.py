@@ -492,15 +492,15 @@ def simulate_source(simulated_spectrum, pos, spectra, xc, yc,
     s_spec = weights * simulated_spectrum[np.newaxis, :]
     return spectra + s_spec
 
-def correct_amplifier_offsets(data, fibers_in_amp=112):
-    y = np.mean(data[:, 200:-200], axis=1)
+def correct_amplifier_offsets(data, fibers_in_amp=112, order=1):
+    y = np.nanmedian(data[:, 200:-200], axis=1)
     x = np.arange(fibers_in_amp)
     model = []
     for i in np.arange(0, len(y), fibers_in_amp):
         yi = y[i:i+fibers_in_amp]
         mask = sigma_clip(yi, masked=True, maxiters=None)
         skysel = ~mask.mask
-        model.append(np.polyval(np.polyfit(x[skysel], yi[skysel], 1), x))
+        model.append(np.polyval(np.polyfit(x[skysel], yi[skysel], order), x))
     model = np.hstack(model)
     avg = np.mean(model)
     return model / avg
@@ -621,6 +621,8 @@ for i in np.arange(nexp):
     X = np.array(np.hstack(X), dtype=int)
     reorg[i] = scispectra[X]*1.
 reorg[reorg < 1e-42] = np.nan
+reorg = np.array([r / correct_amplifier_offsets(r)[:, np.newaxis]
+                  for r in reorg])
 skies = np.array([estimate_sky(r) for r in reorg])
 fits.PrimaryHDU(skies).writeto('test.fits', overwrite=True)
 exp_ratio = np.ones((nexp,))
