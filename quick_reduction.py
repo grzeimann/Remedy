@@ -126,6 +126,21 @@ def read_sim(filename):
     spectrum = np.interp(def_wave, T['col1'], T['col2'])
     return spectrum
 
+def get_slot_neighbors(ifuslot, u_ifuslots, dist=1):
+    sel = np.zeros(u_ifuslots.shape, dtype=bool)
+    x, y = ([], [])
+    for i in np.hstack([u_ifuslots, ifuslot]):
+        s = str(i)
+        if len(s) == 3:
+            x.append(int(s[:2]))
+        else:
+            x.append(int(s[0]))
+        y.append(int(s[-1]))
+    xi, yi = (x[-1]*1., y[-1]*1.)
+    x, y = (np.array(x), np.array(y))
+    x, y = (x[:-1], y[:-1])
+    sel =  (np.abs(xi - x) <= dist) * (np.abs(yi - y) <= dist)
+    return u_ifuslots[sel]
 
 def build_path(rootdir, date, obs, ifuslot, amp, base='sci', exp='exp*',
                instrument='virus'):
@@ -522,8 +537,11 @@ h5table = h5file.root.Cals
 # Collect indices for ifuslot
 ifuslots = h5table.cols.ifuslot[:]
 u_ifuslots = np.unique(ifuslots)
-print(u_ifuslots)
 sel1 = list(np.where(args.ifuslot == ifuslots)[0])
+ifuslotn = get_slot_neighbors(args.ifuslot, u_ifuslots, dist=1)
+print(ifuslotn)
+for ifuslot in ifuslotn:
+    sel1.append(np.where(ifuslot == ifuslots)[0])
 if args.sky_ifuslot is not None:
     sel1.append(np.where(args.sky_ifuslot == ifuslots)[0])
 else:
