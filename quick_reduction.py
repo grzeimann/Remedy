@@ -646,7 +646,7 @@ for i, ui in enumerate(allifus):
     P = pos[N*i:(i+1)*N]
     name = '%s_%07d_%03d.fits' % (args.date, args.observation, ui)
     image = make_photometric_image(P[:, 0], P[:, 1], data, filtg, F > 0.5,
-                                   ADRx, 0.*ADRx, nchunks=25,
+                                   ADRx, 0.*ADRx, nchunks=11,
                                    ran=[-23, 25, -23, 25],  scale=0.75)
     output_fits(image, fn, name, ui, tfile)
 
