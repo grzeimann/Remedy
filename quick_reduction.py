@@ -533,7 +533,6 @@ def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
     chunks = []
     mask = np.isfinite(data)
     weights = np.sum(mask * filtg, axis=1)
-    print(sel.sum(), weights)
     data = data * 1e29 * def_wave**2 / 3e18
     for c, f in zip(np.array_split(data, nchunks, axis=1),
                     np.array_split(filtg, nchunks)):
@@ -541,6 +540,7 @@ def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
         chunks.append(np.sum(mask * c * f, axis=1))
     cDx = [np.mean(dx) for dx in np.array_split(Dx, nchunks)]
     cDy = [np.mean(dy) for dy in np.array_split(Dx, nchunks)]
+    print(cDx, x, y)
     S = np.zeros((len(x), 2))
     images = []
     for k in np.arange(nchunks):
