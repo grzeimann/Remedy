@@ -546,7 +546,7 @@ def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
         grid_z0 *= np.nansum(chunks[k][sel]) / np.nansum(grid_z0)
         images.append(grid_z0)
     images = np.array(images)
-    image = np.sum(images * weights) 
+    image = np.sum(images * weights[:, np.newaxis, np.newaxis], axis=0) 
     return image
 
 # GET DIRECTORY NAME FOR PATH BUILDING
