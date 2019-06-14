@@ -619,8 +619,8 @@ N = 448 * nexp
 data = scispectra[:N]
 F = np.nanmedian(ftf[:N], axis=1)
 P = pos[:N]
-
-fits.PrimaryHDU(np.vstack([P, np.nanmedian(data[:, 200:-200], axis=1)])).writeto('test.fits', overwrite=True)
+flat = np.nanmedian(data[:, 200:-200], axis=1)]
+fits.PrimaryHDU(np.vstack([P.swapaxes(0, 1), flat])).writeto('test.fits', overwrite=True)
 sys.exit(1)
 
 if args.simulate:
