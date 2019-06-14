@@ -594,8 +594,8 @@ log.info('Subtracting sky for all ifuslots')
 nexp = scispectra.shape[0] / 448 / nslots
 log.info('Number of exposures: %i' % nexp)
 N, D = scispectra.shape
-reorg = np.zeros((3, N/3, D))
-for i in nexp:
+reorg = np.zeros((nexp, N/nexp, D))
+for i in np.arange(nexp):
     x = np.arange(112)
     X = []
     for j in np.arange(4*nslots):
