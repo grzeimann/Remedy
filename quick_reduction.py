@@ -594,8 +594,14 @@ log.info('Subtracting sky for all ifuslots')
 nexp = scispectra.shape[0] / 448 / nslots
 log.info('Number of exposures: %i' % nexp)
 N, D = scispectra.shape
-reorg = scispectra.swapaxes(0, 1).reshape(D, nexp, N / nexp)
-reorg = np.rollaxis(np.rollaxis(reorg, 1, 0), 2, 1)
+reorg = np.zeros((3, N/3, D))
+for i in nexp:
+    x = np.arange(112)
+    X = []
+    for j in np.arange(4*nslots):
+        X.append(x + j * 336 + i * 112)
+    X = np.array(np.hstack(X), dtype=int)
+    reorg[i] = scispectra[X]
 reorg[reorg < 1e-42] = np.nan
 skies = np.array([estimate_sky(r) for r in reorg])
 fits.PrimaryHDU(skies).writeto('test.fits', overwrite=True)
