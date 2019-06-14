@@ -544,7 +544,7 @@ def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
         if sel.sum():
             image = chunks[k][sel]
             grid_z0 = griddata(S[sel], image, (grid_x, grid_y),
-                               method='cubic')
+                               method='linear')
             grid_z0 *= np.nansum(chunks[k][sel]) / np.nansum(grid_z0)
         else:
             grid_z0 = 0. * grid_x
