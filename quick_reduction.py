@@ -30,7 +30,7 @@ from tables import open_file
 
 # Configuration    
 amps = ['LL', 'LU', 'RL', 'RU']
-badifuslots = np.array([67])
+badifuslots = np.array([67, 46])
 dither_pattern = np.array([[0., 0.], [1.27, -0.73], [1.27, 0.73]])
 def_wave = np.arange(3470., 5542., 2.)
 color_dict = {'blue': [3600., 3900.], 'green': [4350, 4650],
@@ -515,30 +515,25 @@ def estimate_sky(data):
     init_sky = np.nanmedian(data[skyfibers], axis=0)
     return init_sky
 
-def subtract_sky_other2(scispectra):
-    F = scispectra * 1.
-    F[F < 1e-40] = np.nan
-    N = len(scispectra) / 112
-    nexp = N / 8
-    amps = np.array(np.array_split(F, N, axis=0))
-    X = np.ones((nexp,))
-    if nexp > 1:
-        for i in np.arange(1, nexp):
-            r = amps[N/2::nexp] / amps[(N/2+i)::nexp]
-            r = np.nanmedian(r)
-            X[i] = r
-            log.info('Norm %i: %0.2f' % (i, r))
-    x = np.arange(112)
-    for i in np.arange(nexp):
-        j = 12 + i
-        xi = np.hstack([x + j*112, x + (j+nexp)*112, x + (j+2*nexp)*112,
-                        x + (j+3*nexp)*112])
-        sky = np.nanmedian(F[xi], axis=0)
-        j = i
-        xi = np.hstack([x + j*112, x + (j+nexp)*112, x + (j+2*nexp)*112,
-                        x + (j+3*nexp)*112])
-        F[xi] = (F[xi] - sky) / X[i]
-    return F[:len(F)/2]
+def make_photometric_image(x, y, data, filt, good_fibers,
+                           ran=[-23, 25, -23, 25], scale=0.75):
+    # Collapse image
+    log.info('Making collapsed frame')
+    color = color_dict['red']
+    image = np.nanmedian(scispectra[:, color[2]:color[3]], axis=1)
+    
+    # Normalize exposures and amps together using 20%-tile
+    log.info('Building collapsed frame')
+    
+    N1 = int((ran[1] - ran[0]) / scale) + 1
+    N2 = int((ran[1] - ran[0]) / scale) + 1
+    grid_x, grid_y = np.meshgrid(np.linspace(ran[0], ran[1], N1),
+                                 np.linspace(ran[0], ran[3], N2))
+    sel = good_fibers
+    grid_z0 = griddata(pos[sel], image[sel], (grid_x, grid_y), method='linear')
+    G = Gaussian2DKernel(3)
+    image = convolve(grid_z0, G, boundary='extend')
+    output_fits(image, fn, name, tfile)
 
 # GET DIRECTORY NAME FOR PATH BUILDING
 DIRNAME = get_script_path()
@@ -619,17 +614,20 @@ for j in np.arange(4*nslots):
         u = (j+1)*112
         scispectra[cnt:(cnt+112)] = reorg[i, l:u]*1.
         cnt += 112
-fits.PrimaryHDU(scispectra).writeto('test.fits', overwrite=True)
 
 N = 448 * nexp
-scispectra = scispectra[:N]
-ftf = np.nanmedian(ftf[:N], axis=1)
-pos = pos[:N]
+data = scispectra[:N]
+F = np.nanmedian(ftf[:N], axis=1)
+P = pos[:N]
+
+fits.PrimaryHDU(np.vstack([P, data])).writeto('test.fits', overwrite=True)
+sys.exit(1)
 
 if args.simulate:
+
     log.info('Simulating spectrum from %s' % args.source_file)
     simulated_spectrum = read_sim(args.source_file)
-    scispectra = simulate_source(simulated_spectrum, pos, scispectra, 
+    scispectra = simulate_source(simulated_spectrum, P, data, 
                                  args.source_x, args.source_y, 
                                  args.source_seeing)
 
@@ -644,21 +642,6 @@ else:
     cubename = ('%s_%07d_%03d_cube.fits' %
                 (args.date, args.observation, args.ifuslot))
 
-
-# Collapse image
-log.info('Making collapsed frame')
-color = color_dict['red']
-image = np.nanmedian(scispectra[:, color[2]:color[3]], axis=1)
-
-# Normalize exposures and amps together using 20%-tile
-log.info('Building collapsed frame')
-grid_x, grid_y = np.meshgrid(np.linspace(-23, 25, 401),
-                             np.linspace(-23, 25, 401))
-sel = ftf > 0.5
-grid_z0 = griddata(pos[sel], image[sel], (grid_x, grid_y), method='linear')
-G = Gaussian2DKernel(3)
-image = convolve(grid_z0, G, boundary='extend')
-output_fits(image, fn, name, tfile)
 
 
 wADR = [3500., 4000., 4500., 5000., 5500.]
