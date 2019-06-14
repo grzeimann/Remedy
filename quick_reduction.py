@@ -506,7 +506,6 @@ def correct_amplifier_offsets(data, fibers_in_amp=112):
 
 def estimate_sky(data):
     y = np.nanmedian(data[:, 200:-200], axis=1)
-    y[np.isnan(y)] = 0.
     try:
         mask = sigma_clip(y, masked=True, maxiters=None)
     except:
@@ -593,9 +592,10 @@ scispectra = safe_division(scispectra, ftf)
 # Subtracting Sky
 log.info('Subtracting sky for all ifuslots')
 nexp = scispectra.shape[0] / 448 / nslots
+log.info('Number of exposures: %i' % nexp)
 reorg = scispectra.reshape(nexp, scispectra.shape[0] / nexp, 
                            scispectra.shape[1])
-reorg[reorg < 1e-8] = np.nan
+reorg[reorg < 1e-42] = np.nan
 skies = np.array([estimate_sky(r) for r in reorg])
 fits.PrimaryHDU(skies).writeto('test.fits', overwrite=True)
 exp_ratio = np.ones((nexp,))
