@@ -601,7 +601,7 @@ for i in np.arange(nexp):
     for j in np.arange(4*nslots):
         X.append(x + j * 336 + i * 112)
     X = np.array(np.hstack(X), dtype=int)
-    reorg[i] = scispectra[X]
+    reorg[i] = scispectra[X]*1.
 reorg[reorg < 1e-42] = np.nan
 skies = np.array([estimate_sky(r) for r in reorg])
 fits.PrimaryHDU(skies).writeto('test.fits', overwrite=True)
@@ -612,10 +612,17 @@ for i in np.arange(1, nexp):
              (i+1, exp_ratio[i]))
 reorg[:] -= skies[:, np.newaxis, :]
 reorg[:] *= exp_ratio[:, np.newaxis, np.newaxis]
-scispectra = reorg.reshape(scispectra.shape)
+cnt = 0
+for j in np.arange(4*nslots): 
+    for i in np.arange(nexp):
+        l = j*112
+        u = (j+1)*112
+        scispectra[cnt:(cnt+112)] = reorg[i, l:u]*1.
+        cnt += 112
 fits.PrimaryHDU(scispectra).writeto('test.fits', overwrite=True)
 
 N = 448 * nexp
+scispectra = scispectra[:N]
 ftf = np.nanmedian(ftf[:N], axis=1)
 pos = pos[:N]
 
