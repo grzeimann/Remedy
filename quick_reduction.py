@@ -595,6 +595,7 @@ reorg = scispectra.reshape(nexp, scispectra.shape[0] / nexp,
                            scispectra.shape[1])
 reorg[reorg < 1e-8] = np.nan
 skies = np.array([estimate_sky(r) for r in reorg])
+fits.PrimaryHDU(skies).writeto('test.fits', overwrite=True)
 exp_ratio = np.ones((nexp,))
 for i in np.arange(1, nexp):
     exp_ratio[i] = np.nanmedian(skies[i] / skies[0])
