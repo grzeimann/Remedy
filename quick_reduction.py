@@ -19,7 +19,7 @@ from astrometry import Astrometry
 from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.convolution import interpolate_replace_nans, Gaussian1DKernel
 from astropy.io import fits
-from astropy.stats import biweight_location
+from astropy.stats import biweight_location, sigma_clip
 from astropy.table import Table
 from datetime import datetime, timedelta
 from extract import Extract
@@ -461,96 +461,26 @@ def simulate_source(simulated_spectrum, pos, spectra, xc, yc,
     s_spec = weights * simulated_spectrum[np.newaxis, :]
     return spectra + s_spec
 
-def subtract_sky_other(scispectra):
-    N = len(scispectra) / 112
-    nexp = N / 8
-    amps = np.array(np.array_split(scispectra, N, axis=0))
-    if nexp > 1:
-        for i in np.arange(1, nexp):
-            r = amps[N/2::nexp] / amps[(N/2+i)::nexp]
-            r = np.nanmedian(r)
-            log.info('Norm %i: %0.2f' % (i, r))
-            amps[i::nexp] *= r
-    d = np.reshape(amps, scispectra.shape)
-    def evalf(x, n, avg=1.):
-        X = np.arange(n*0.90, n*1.105, n*0.005)
-        chi2 = X * 0.
-        for j, l in enumerate(X):
-            chi2[j] = (x - l)**2 + (l - avg)**2
-        i = np.argmin(chi2)
-        return X[i]
-    nchunk = 12
-    W = np.array([np.mean(chunk) 
-                  for chunk in np.array_split(def_wave, nchunk)])
-    S = np.array_split(d[:len(d)/2], nchunk, axis=1)
-    B = np.array_split(d[len(d)/2:], nchunk, axis=1)
-    ftf = np.zeros((len(d)/2, len(B)))
-    for k, si, bi in zip(np.arange(len(S)), S, B):
-        b = np.ma.array(bi, mask=bi==0.)
-        s = np.ma.array(si, mask=si==0.)
-        n = np.ma.median(b)
-        x = np.ma.median(s, axis=1)
-        y = n * np.ones(x.shape)
-        for i in np.arange(3):
-            s = np.array_split(np.arange(len(y)), 4*nexp)
-            for si in s:
-                y[si] = np.median(y[si])
-            for j in np.arange(len(x)):
-                y[j] = evalf(x[j], n, avg=y[j])
-        s = np.array_split(np.arange(len(y)), 4*nexp)
-        for si in s:
-            y[si] = savgol_filter(y[si], 11, 1)
-        ftf[:, k] = y / n
-        
-    for i in np.arange(len(scispectra)/2):
-        I = interp1d(W, ftf[i, :], kind='quadratic', fill_value='extrapolate')
-        scispectra[i] /= I(def_wave)
-    sky = np.nanmedian(scispectra[len(scispectra)/2:], axis=0)
-    scispectra = scispectra[:len(scispectra)/2]
-    return scispectra - sky
+def correct_amplifier_offsets(data, fibers_in_amp=112):
+    y = np.mean(data[:, 200:-200], axis=1)
+    x = np.arange(fibers_in_amp)
+    model = []
+    for i in np.arange(0, len(y), fibers_in_amp):
+        yi = y[i:i+fibers_in_amp]
+        mask = sigma_clip(yi, masked=True, maxiters=None)
+        skysel = ~mask.mask
+        model.append(np.polyval(np.polyfit(x[skysel], yi[skysel], 1), x))
+    model = np.hstack(model)
+    avg = np.mean(model)
+    return model / avg
 
-def subtract_sky(scispectra):
-    N = len(scispectra) / 112
-    nexp = N / 4
-    amps = np.array(np.array_split(scispectra, N, axis=0))
-    if nexp > 1:
-        for i in np.arange(1, nexp):
-            r = amps[::nexp] / amps[i::nexp]
-            r = np.nanmedian(r)
-            amps[i::nexp] *= r
-    d = np.reshape(amps, scispectra.shape)
-    def evalf(x, n, avg=1.):
-        X = np.arange(n*0.95, n*1.055, n*0.005)
-        chi2 = X * 0.
-        for j, l in enumerate(X):
-            chi2[j] = (x - l)**2 + (l - avg)**2
-        i = np.argmin(chi2)
-        return X[i]
-    nchunk = 12
-    W = np.array([np.mean(chunk) 
-                  for chunk in np.array_split(def_wave, nchunk)])
-    S = np.array_split(d, nchunk, axis=1)
-    ftf = np.zeros((len(d), len(S)))
-    for k, si in zip(np.arange(len(S)), S):
-        s = np.ma.array(si, mask=si==0.)
-        n = np.ma.median(s)
-        x = np.ma.median(s, axis=1)
-        y = n * np.ones(x.shape)
-        for i in np.arange(3):
-            s = np.array_split(np.arange(len(y)), 4*nexp)
-            for si in s:
-                y[si] = np.median(y[si])
-            for j in np.arange(len(x)):
-                y[j] = evalf(x[j], n, avg=y[j])
-        s = np.array_split(np.arange(len(y)), 4*nexp)
-        for si in s:
-            y[si] = savgol_filter(y[si], 11, 1)
-        ftf[:, k] = y / n
-    for i in np.arange(len(scispectra)):
-        I = interp1d(W, ftf[i, :], kind='quadratic', fill_value='extrapolate')
-        scispectra[i] /= I(def_wave)
-    return scispectra - np.nanmedian(scispectra, axis=0)
-
+def estimate_sky(data):
+    y = np.median(data[:, 200:-200], axis=1)
+    mask = sigma_clip(y, masked=True, maxiters=None)
+    skyfibers = ~mask.mask
+    init_sky = np.median(data[skyfibers], axis=0)
+    residuals = data - init_sky
+    return init_sky, residuals
 
 def subtract_sky_other2(scispectra):
     F = scispectra * 1.
@@ -591,6 +521,8 @@ h5table = h5file.root.Cals
 
 # Collect indices for ifuslot
 ifuslots = h5table.cols.ifuslot[:]
+u_ifuslots = np.unique(ifuslots)
+print(u_ifuslots)
 sel1 = list(np.where(args.ifuslot == ifuslots)[0])
 if args.sky_ifuslot is not None:
     sel1.append(np.where(args.sky_ifuslot == ifuslots)[0])
@@ -618,16 +550,16 @@ for i, ai in enumerate(a):
     else:
         ftf[i] = 0.0
 scispectra = safe_division(scispectra, ftf)
+nexp = scispectra.shape[0] / 448 / nslots
 fits.PrimaryHDU(scispectra).writeto('test.fits', overwrite=True)
 
 # Subtracting Sky
 log.info('Subtracting sky for ifuslot: %03d' % args.ifuslot)
-if args.sky_ifuslot is not None:
-    scispectra = subtract_sky_other2(scispectra)
-    ftf = np.nanmedian(ftf[:len(ftf)/2], axis=1)
-    pos = pos[:len(pos)/2]
-else:
-    scispectra = subtract_sky(scispectra)
+
+scispectra = subtract_sky_other2(scispectra)
+ftf = np.nanmedian(ftf[:len(ftf)/2], axis=1)
+pos = pos[:len(pos)/2]
+
 
 
 if args.simulate:
