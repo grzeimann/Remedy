@@ -593,7 +593,7 @@ scispectra = safe_division(scispectra, ftf)
 log.info('Subtracting sky for all ifuslots')
 nexp = scispectra.shape[0] / 448 / nslots
 log.info('Number of exposures: %i' % nexp)
-reorg = scispectra.swapaxis(0, 1).reshape(scispectra.shape[1],
+reorg = scispectra.swapaxes(0, 1).reshape(scispectra.shape[1],
                                           nexp, scispectra.shape[0] / nexp)
 reorg = np.rollaxis(np.rollaxis(reorg, 1, 0), 2, 1)
 reorg[reorg < 1e-42] = np.nan
