@@ -544,8 +544,8 @@ u_ifuslots = np.unique(ifuslots)
 sel1 = list(np.where(args.ifuslot == ifuslots)[0])
 ifuslotn = get_slot_neighbors(args.ifuslot, u_ifuslots, dist=2)
 for badslot in badifuslots:
-    log.info('Removing ifuslot %i from neighbors')
-    ifuslotn = np.delete(ifuslotn, badslot)
+    log.info('Removing ifuslot %i from neighbors' % badslot)
+    ifuslotn.remove(badslot)
 for ifuslot in ifuslotn:
     sel1.append(np.where(ifuslot == ifuslots)[0])
 if args.sky_ifuslot is not None:
