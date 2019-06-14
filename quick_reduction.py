@@ -139,8 +139,9 @@ def get_slot_neighbors(ifuslot, u_ifuslots, dist=1):
     xi, yi = (x[-1]*1., y[-1]*1.)
     x, y = (np.array(x), np.array(y))
     x, y = (x[:-1], y[:-1])
-    sel =  (np.abs(xi - x) <= dist) * (np.abs(yi - y) <= dist)
-    return u_ifuslots[sel]
+    sel = (np.abs(xi - x) <= dist) * (np.abs(yi - y) <= dist)
+    unsel = (xi == x) * (yi == y)
+    return u_ifuslots[sel*(~unsel)]
 
 def build_path(rootdir, date, obs, ifuslot, amp, base='sci', exp='exp*',
                instrument='virus'):
