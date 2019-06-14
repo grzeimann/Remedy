@@ -498,7 +498,10 @@ def correct_amplifier_offsets(data, fibers_in_amp=112, order=1):
     model = []
     for i in np.arange(0, len(y), fibers_in_amp):
         yi = y[i:i+fibers_in_amp]
-        mask = sigma_clip(yi, masked=True, maxiters=None)
+        try:
+            mask = sigma_clip(yi, masked=True, maxiters=None)
+        except:
+            mask = sigma_clip(yi, iters=None) 
         skysel = ~mask.mask
         model.append(np.polyval(np.polyfit(x[skysel], yi[skysel], order), x))
     model = np.hstack(model)
