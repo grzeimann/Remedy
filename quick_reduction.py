@@ -644,7 +644,7 @@ for i, ui in enumerate(allifus):
     data = scispectra[N*i:(i+1)*N]
     F = np.nanmedian(ftf[N*i:(i+1)*N], axis=1)
     P = pos[N*i:(i+1)*N]
-    name = '%s_%07d_%03d' % (args.date, args.observation, ui)
+    name = '%s_%07d_%03d.fits' % (args.date, args.observation, ui)
     image = make_photometric_image(P[:, 0], P[:, 1], data, filtg, F > 0.5,
                                    ADRx, 0.*ADRx, nchunks=25,
                                    ran=[-23, 25, -23, 25],  scale=0.75)
