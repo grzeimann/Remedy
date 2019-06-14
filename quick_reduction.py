@@ -526,7 +526,6 @@ def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
     N2 = int((ran[1] - ran[0]) / scale) + 1
     grid_x, grid_y = np.meshgrid(np.linspace(ran[0], ran[1], N1),
                                  np.linspace(ran[0], ran[3], N2))
-    sel = good_fibers
     chunks = []
     weights = np.array([np.mean(f) for f in np.array_split(filtg, nchunks)])
     weights /= weights.sum()
@@ -540,10 +539,14 @@ def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
     for k in np.arange(nchunks):
         S[:, 0] = x - cDx[k]
         S[:, 1] = y - cDy[k]
-        image = chunks[k][sel * np.isfinite(chunks[k])]
-        grid_z0 = griddata(S[sel], image, (grid_x, grid_y),
-                           method='cubic')
-        grid_z0 *= np.nansum(chunks[k][sel]) / np.nansum(grid_z0)
+        sel = good_fibers * np.isfinite(chunks[k])
+        if sel.sum():
+            image = chunks[k][sel]
+            grid_z0 = griddata(S[sel], image, (grid_x, grid_y),
+                               method='cubic')
+            grid_z0 *= np.nansum(chunks[k][sel]) / np.nansum(grid_z0)
+        else:
+            grid_z0 = 0. * grid_x
         images.append(grid_z0)
     images = np.array(images)
     image = np.sum(images * weights[:, np.newaxis, np.newaxis], axis=0) 
