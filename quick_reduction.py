@@ -25,7 +25,6 @@ from datetime import datetime, timedelta
 from extract import Extract
 from input_utils import setup_logging
 from scipy.interpolate import griddata, interp1d
-from scipy.signal import savgol_filter
 from tables import open_file
 
 
@@ -128,6 +127,9 @@ def read_sim(filename):
     return spectrum
 
 def convert_slot_to_coords(ifuslots):
+    '''
+    Convert ifuslot integer to x, y focal plane coordinates [row, column]
+    '''
     x, y = ([], [])
     for i in ifuslots:
         s = str(i)
@@ -138,13 +140,22 @@ def convert_slot_to_coords(ifuslots):
         y.append(int(s[-1]))
     return np.array(x), np.array(y)
 
+
 def get_slot_neighbors(ifuslot, u_ifuslots, dist=1):
+    '''
+    Get ifuslots within square distance, dist, from target ifuslot.
+    
+    A dist 1 will return a square of 3 x 3 ifuslots (excluding center ifuslot),
+    for all ifuslots within that 3 x 3 box that are populated.  A dist = 2
+    will return an equivalent 5 x 5 box.
+    '''
     sel = np.zeros(u_ifuslots.shape, dtype=bool)
     xi, yi = convert_slot_to_coords([ifuslot])
     x, y = convert_slot_to_coords(u_ifuslots)
     sel = (np.abs(xi - x) <= dist) * (np.abs(yi - y) <= dist)
     unsel = (xi == x) * (yi == y)
     return u_ifuslots[sel*(~unsel)]
+
 
 def build_path(rootdir, date, obs, ifuslot, amp, base='sci', exp='exp*',
                instrument='virus'):
@@ -494,12 +505,11 @@ def correct_amplifier_offsets(data, fibers_in_amp=112):
     return model / avg
 
 def estimate_sky(data):
-    y = np.median(data[:, 200:-200], axis=1)
+    y = np.nanmedian(data[:, 200:-200], axis=1)
     mask = sigma_clip(y, masked=True, maxiters=None)
     skyfibers = ~mask.mask
-    init_sky = np.median(data[skyfibers], axis=0)
-    residuals = data - init_sky
-    return init_sky, residuals
+    init_sky = np.nanmedian(data[skyfibers], axis=0)
+    return init_sky
 
 def subtract_sky_other2(scispectra):
     F = scispectra * 1.
@@ -574,17 +584,27 @@ for i, ai in enumerate(a):
     else:
         ftf[i] = 0.0
 scispectra = safe_division(scispectra, ftf)
-nexp = scispectra.shape[0] / 448 / nslots
-fits.PrimaryHDU(scispectra).writeto('test.fits', overwrite=True)
 
 # Subtracting Sky
-log.info('Subtracting sky for ifuslot: %03d' % args.ifuslot)
+log.info('Subtracting sky for all ifuslots')
+nexp = scispectra.shape[0] / 448 / nslots
+reorg = scispectra.reshape(nexp, scispectra.shape[0] / nexp, 
+                           scispectra.shape[1])
+reorg[reorg < 1e-8] = np.nan
+skies = np.array([estimate_sky(r) for r in reorg])
+exp_ratio = np.ones((nexp,))
+for i in np.arange(1, nexp):
+    exp_ratio[i] = np.nanmedian(skies[i] / skies[0])
+    log.info('Ratio for exposure %i to exposure 1: %0.2f' %
+             (i+1, exp_ratio[i]))
+reorg[:] -= skies[:, np.newaxis, :]
+reorg[:] *= exp_ratio[:, np.newaxis, np.newaxis]
+scispectra = reorg.reshape(scispectra.shape)
+fits.PrimaryHDU(scispectra).writeto('test.fits', overwrite=True)
 
-scispectra = subtract_sky_other2(scispectra)
-ftf = np.nanmedian(ftf[:len(ftf)/2], axis=1)
-pos = pos[:len(pos)/2]
-
-
+N = 448 * nexp
+ftf = np.nanmedian(ftf[:N], axis=1)
+pos = pos[:N]
 
 if args.simulate:
     log.info('Simulating spectrum from %s' % args.source_file)
