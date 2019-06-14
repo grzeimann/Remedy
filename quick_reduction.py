@@ -27,17 +27,21 @@ from input_utils import setup_logging
 from scipy.interpolate import griddata, interp1d
 from tables import open_file
 
-
-# Configuration    
+#################
+# Configuration #
+#################
+# Amps
 amps = ['LL', 'LU', 'RL', 'RU']
+# Ignore these ifuslots
 badifuslots = np.array([67, 46])
+# Default dither pattern for 3 exposures
 dither_pattern = np.array([[0., 0.], [1.27, -0.73], [1.27, 0.73]])
+# Rectified wavelength
 def_wave = np.arange(3470., 5542., 2.)
-color_dict = {'blue': [3600., 3900.], 'green': [4350, 4650],
-              'red': [5100., 5400.]}
-for col_ in color_dict:
-     color_dict[col_].append(np.searchsorted(def_wave, color_dict[col_][0]))
-     color_dict[col_].append(np.searchsorted(def_wave, color_dict[col_][1]))
+# ADR model
+wADR = [3500., 4000., 4500., 5000., 5500.]
+ADRx = [-0.74, -0.4, -0.08, 0.08, 0.20]
+ADRx = np.polyval(np.polyfit(wADR, ADRx, 3), def_wave)
 
 parser = ap.ArgumentParser(add_help=True)
 
@@ -375,7 +379,7 @@ def reduce_ifuslot(ifuloop, h5table):
     return p, t, s, fn , tfile
             
 
-def output_fits(image, fn, name, tfile=None):
+def output_fits(image, fn, name, ifuslot, tfile=None):
     '''
     Outputing collapsed image
     '''
@@ -390,7 +394,7 @@ def output_fits(image, fn, name, tfile=None):
     imscale = 48. / image.shape[0]
     crx = image.shape[1] / 2.
     cry = image.shape[0] / 2.
-    ifuslot = '%03d' % args.ifuslot
+    ifuslot = '%03d' % ifuslot
     if (args.ra is None) or (args.dec is None):
         log.info('Using header for RA and Dec')
         RA = a[0].header['TRAJCRA'] * 15.
@@ -515,25 +519,39 @@ def estimate_sky(data):
     init_sky = np.nanmedian(data[skyfibers], axis=0)
     return init_sky
 
-def make_photometric_image(x, y, data, filt, good_fibers,
+def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
+                           nchunks=25,
                            ran=[-23, 25, -23, 25], scale=0.75):
-    # Collapse image
-    log.info('Making collapsed frame')
-    color = color_dict['red']
-    image = np.nanmedian(scispectra[:, color[2]:color[3]], axis=1)
-    
-    # Normalize exposures and amps together using 20%-tile
-    log.info('Building collapsed frame')
-    
+    '''
+    Make collapsed frame (uJy) for filtg
+    '''    
     N1 = int((ran[1] - ran[0]) / scale) + 1
     N2 = int((ran[1] - ran[0]) / scale) + 1
     grid_x, grid_y = np.meshgrid(np.linspace(ran[0], ran[1], N1),
                                  np.linspace(ran[0], ran[3], N2))
     sel = good_fibers
-    grid_z0 = griddata(pos[sel], image[sel], (grid_x, grid_y), method='linear')
-    G = Gaussian2DKernel(3)
-    image = convolve(grid_z0, G, boundary='extend')
-    output_fits(image, fn, name, tfile)
+    chunks = []
+    mask = np.isfinite(data)
+    weights = np.sum(mask * filtg, axis=1)
+    data = data * 1e29 * def_wave**2 / 3e18
+    for c, f in zip(np.array_split(data, nchunks, axis=1),
+                    np.array_split(filtg, nchunks)):
+        mask = np.isfinite(c)
+        chunks.append(np.sum(mask * c * filtg, axis=1) )
+    cDx = [np.mean(dx) for dx in np.array_split(Dx, nchunks)]
+    cDy = [np.mean(dy) for dy in np.array_split(Dx, nchunks)]
+    S = np.zeros((len(x), 2))
+    images = []
+    for k in np.arange(nchunks):
+        S[:, 0] = x - cDx[k]
+        S[:, 1] = y - cDy[k]
+        image = chunks[k][sel] / weights[sel]
+        grid_z0 = griddata(S[sel], image, (grid_x, grid_y),
+                           method='cubic')
+        grid_z0 *= np.nansum(chunks[k][sel]) / np.nansum(grid_z0)
+        images.append(grid_z0)
+    image = np.nansum(images, axis=0)
+    return image
 
 # GET DIRECTORY NAME FOR PATH BUILDING
 DIRNAME = get_script_path()
@@ -547,13 +565,17 @@ if args.hdf5file is None:
 h5file = open_file(args.hdf5file, mode='r')
 h5table = h5file.root.Cals
 
+# Get photometric filter
+T = Table.read(op.join(DIRNAME, 'filters/ps1g.dat'), format='ascii')
+filtg = np.interp(def_wave, T['col1'], T['col2'])
+filtg /= filtg.sum()
+ 
 # Collect indices for ifuslot
 ifuslots = h5table.cols.ifuslot[:]
 u_ifuslots = np.unique(ifuslots)
 sel1 = list(np.where(args.ifuslot == ifuslots)[0])
 ifuslotn = get_slot_neighbors(args.ifuslot, u_ifuslots, dist=2)
 ifuslotn = np.setdiff1d(ifuslotn, badifuslots)
-    
 for ifuslot in ifuslotn:
     sel1.append(np.where(ifuslot == ifuslots)[0])
 if args.sky_ifuslot is not None:
@@ -563,6 +585,7 @@ else:
     sel1.append(np.where(args.sky_ifuslot == ifuslots)[0])
 ifuloop = np.array(np.hstack(sel1), dtype=int)
 nslots = len(ifuloop) / 4
+allifus = np.hstack([args.ifuslot, ifuslotn, args.sky_ifuslot])
 
 
 # Reducing IFUSLOT
@@ -615,16 +638,21 @@ for j in np.arange(4*nslots):
         scispectra[cnt:(cnt+112)] = reorg[i, l:u]*1.
         cnt += 112
 
-N = 448 * nexp
-data = scispectra[:N]
-F = np.nanmedian(ftf[:N], axis=1)
-P = pos[:N]
-flat = np.nanmedian(data[:, 200:-200], axis=1)
-fits.PrimaryHDU(np.vstack([P.swapaxes(0, 1), flat])).writeto('test.fits', overwrite=True)
+for i, ui in enumerate(allifus):
+    log.info('Making collapsed frame for %03d' % ui)
+    N = 448 * nexp
+    data = scispectra[N*i:(i+1)*N]
+    F = np.nanmedian(ftf[N*i:(i+1)*N], axis=1)
+    P = pos[N*i:(i+1)*N]
+    name = '%s_%07d_%03d' % (args.date, args.observation, ui)
+    image = make_photometric_image(P[:, 0], P[:, 1], data, filtg, F > 0.5,
+                                   ADRx, 0.*ADRx, nchunks=25,
+                                   ran=[-23, 25, -23, 25],  scale=0.75)
+    output_fits(image, fn, name, ui, tfile)
+
 sys.exit(1)
 
 if args.simulate:
-
     log.info('Simulating spectrum from %s' % args.source_file)
     simulated_spectrum = read_sim(args.source_file)
     scispectra = simulate_source(simulated_spectrum, P, data, 
@@ -643,10 +671,6 @@ else:
                 (args.date, args.observation, args.ifuslot))
 
 
-
-wADR = [3500., 4000., 4500., 5000., 5500.]
-ADRx = [-0.74, -0.4, -0.08, 0.08, 0.20]
-ADRx = np.polyval(np.polyfit(wADR, ADRx, 3), def_wave)
 
 # Making data cube
 log.info('Making Cube')
