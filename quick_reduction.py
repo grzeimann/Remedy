@@ -506,7 +506,10 @@ def correct_amplifier_offsets(data, fibers_in_amp=112):
 
 def estimate_sky(data):
     y = np.nanmedian(data[:, 200:-200], axis=1)
-    mask = sigma_clip(y)
+    try:
+        mask = sigma_clip(y, masked=True, maxiters=None)
+    except:
+        mask = sigma_clip(y, iters=None)
     skyfibers = ~mask.mask
     init_sky = np.nanmedian(data[skyfibers], axis=0)
     return init_sky
