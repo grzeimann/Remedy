@@ -536,6 +536,7 @@ def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
     cDy = [np.mean(dy) for dy in np.array_split(Dx, nchunks)]
     S = np.zeros((len(x), 2))
     images = []
+    print(weights)
     for k in np.arange(nchunks):
         S[:, 0] = x - cDx[k]
         S[:, 1] = y - cDy[k]
