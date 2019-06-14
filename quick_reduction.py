@@ -31,6 +31,7 @@ from tables import open_file
 
 # Configuration    
 amps = ['LL', 'LU', 'RL', 'RU']
+badifuslots = [67]
 dither_pattern = np.array([[0., 0.], [1.27, -0.73], [1.27, 0.73]])
 def_wave = np.arange(3470., 5542., 2.)
 color_dict = {'blue': [3600., 3900.], 'green': [4350, 4650],
@@ -126,19 +127,21 @@ def read_sim(filename):
     spectrum = np.interp(def_wave, T['col1'], T['col2'])
     return spectrum
 
-def get_slot_neighbors(ifuslot, u_ifuslots, dist=1):
-    sel = np.zeros(u_ifuslots.shape, dtype=bool)
+def convert_slot_to_coords(ifuslots):
     x, y = ([], [])
-    for i in np.hstack([u_ifuslots, ifuslot]):
+    for i in ifuslots:
         s = str(i)
         if len(s) == 3:
             x.append(int(s[:2]))
         else:
             x.append(int(s[0]))
         y.append(int(s[-1]))
-    xi, yi = (x[-1]*1., y[-1]*1.)
-    x, y = (np.array(x), np.array(y))
-    x, y = (x[:-1], y[:-1])
+    return np.array(x), np.array(y)
+
+def get_slot_neighbors(ifuslot, u_ifuslots, dist=1):
+    sel = np.zeros(u_ifuslots.shape, dtype=bool)
+    xi, yi = convert_slot_to_coords([ifuslot])
+    x, y = convert_slot_to_coords(u_ifuslots)
     sel = (np.abs(xi - x) <= dist) * (np.abs(yi - y) <= dist)
     unsel = (xi == x) * (yi == y)
     return u_ifuslots[sel*(~unsel)]
@@ -540,6 +543,9 @@ ifuslots = h5table.cols.ifuslot[:]
 u_ifuslots = np.unique(ifuslots)
 sel1 = list(np.where(args.ifuslot == ifuslots)[0])
 ifuslotn = get_slot_neighbors(args.ifuslot, u_ifuslots, dist=2)
+for badslot in badifuslots:
+    log.info('Removing ifuslot %i from neighbors')
+    ifuslotn = np.delete(ifuslotn, badslot)
 for ifuslot in ifuslotn:
     sel1.append(np.where(ifuslot == ifuslots)[0])
 if args.sky_ifuslot is not None:
