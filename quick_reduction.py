@@ -539,8 +539,7 @@ h5table = h5file.root.Cals
 ifuslots = h5table.cols.ifuslot[:]
 u_ifuslots = np.unique(ifuslots)
 sel1 = list(np.where(args.ifuslot == ifuslots)[0])
-ifuslotn = get_slot_neighbors(args.ifuslot, u_ifuslots, dist=1)
-print(ifuslotn)
+ifuslotn = get_slot_neighbors(args.ifuslot, u_ifuslots, dist=2)
 for ifuslot in ifuslotn:
     sel1.append(np.where(ifuslot == ifuslots)[0])
 if args.sky_ifuslot is not None:
@@ -549,6 +548,7 @@ else:
     args.sky_ifuslot = args.ifuslot
     sel1.append(np.where(args.sky_ifuslot == ifuslots)[0])
 ifuloop = np.array(np.hstack(sel1), dtype=int)
+nslots = len(ifuloop) / 4
 
 
 # Reducing IFUSLOT
