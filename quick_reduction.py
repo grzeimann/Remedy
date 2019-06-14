@@ -31,7 +31,7 @@ from tables import open_file
 
 # Configuration    
 amps = ['LL', 'LU', 'RL', 'RU']
-badifuslots = [67]
+badifuslots = np.array([67])
 dither_pattern = np.array([[0., 0.], [1.27, -0.73], [1.27, 0.73]])
 def_wave = np.arange(3470., 5542., 2.)
 color_dict = {'blue': [3600., 3900.], 'green': [4350, 4650],
@@ -543,9 +543,8 @@ ifuslots = h5table.cols.ifuslot[:]
 u_ifuslots = np.unique(ifuslots)
 sel1 = list(np.where(args.ifuslot == ifuslots)[0])
 ifuslotn = get_slot_neighbors(args.ifuslot, u_ifuslots, dist=2)
-for badslot in badifuslots:
-    log.info('Removing ifuslot %i from neighbors' % badslot)
-    ifuslotn.remove(badslot)
+ifuslotn = np.setdiff1d(ifuslotn, badifuslots)
+    
 for ifuslot in ifuslotn:
     sel1.append(np.where(ifuslot == ifuslots)[0])
 if args.sky_ifuslot is not None:
