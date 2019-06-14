@@ -78,10 +78,10 @@ parser.add_argument("-fp", "--fplane_file",
                     help='''fplane file''',
                     type=str, default=None)
 
-parser.add_argument("-si", "--sky_ifuslot",
-                    help='''If sky_ifuslot is not provided,
-                    then the ifuslot itself is used''',
-                    type=int, default=None)
+parser.add_argument("-nd", "--neighbor_dist",
+                    help='''Distance in x or y in the focal plane IFUSLOT 
+                    units to include in the reduction.''',
+                    type=int, default=3)
 
 parser.add_argument("-sf", "--source_file",
                     help='''file for spectrum to add in cube''',
@@ -577,18 +577,14 @@ filtg /= filtg.sum()
 ifuslots = h5table.cols.ifuslot[:]
 u_ifuslots = np.unique(ifuslots)
 sel1 = list(np.where(args.ifuslot == ifuslots)[0])
-ifuslotn = get_slot_neighbors(args.ifuslot, u_ifuslots, dist=2)
+ifuslotn = get_slot_neighbors(args.ifuslot, u_ifuslots,
+                              dist=args.neighbor_dist)
 ifuslotn = np.setdiff1d(ifuslotn, badifuslots)
 for ifuslot in ifuslotn:
     sel1.append(np.where(ifuslot == ifuslots)[0])
-if args.sky_ifuslot is not None:
-    sel1.append(np.where(args.sky_ifuslot == ifuslots)[0])
-else:
-    args.sky_ifuslot = args.ifuslot
-    sel1.append(np.where(args.sky_ifuslot == ifuslots)[0])
 ifuloop = np.array(np.hstack(sel1), dtype=int)
 nslots = len(ifuloop) / 4
-allifus = np.hstack([args.ifuslot, ifuslotn, args.sky_ifuslot])
+allifus = np.hstack([args.ifuslot, ifuslotn])
 
 
 # Reducing IFUSLOT
