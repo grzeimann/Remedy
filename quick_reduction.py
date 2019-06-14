@@ -484,9 +484,6 @@ def safe_division(num, denom, eps=1e-8, fillval=0.0):
 
 def simulate_source(simulated_spectrum, pos, spectra, xc, yc,
                     seeing=1.5):
-    # USE PSF TO DISTRIBUTE FLUX, build_weights
-    # multiply weights by spectra for simulation
-    # Norm includes throughput, amplifier to amplifier, and sky to sky
     E = Extract()
     boxsize = 10.5
     scale = 0.25
@@ -536,8 +533,7 @@ def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
     data = data * 1e29 * def_wave**2 / 3e18
     for c, f in zip(np.array_split(data, nchunks, axis=1),
                     np.array_split(filtg, nchunks)):
-        mask = np.isfinite(c)
-        chunks.append(np.sum(mask * c * f, axis=1))
+        chunks.append(np.nansum(c * f, axis=1))
     cDx = [np.mean(dx) for dx in np.array_split(Dx, nchunks)]
     cDy = [np.mean(dy) for dy in np.array_split(Dx, nchunks)]
     print(chunks[nchunks/2])
