@@ -528,26 +528,25 @@ def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
                                  np.linspace(ran[0], ran[3], N2))
     sel = good_fibers
     chunks = []
-    mask = np.isfinite(data)
-    weights = np.sum(mask * filtg, axis=1)
+    weights = np.array([np.mean(f) for f in np.array_split(filtg, nchunks)])
+    weights /= weights.sum()
     data = data * 1e29 * def_wave**2 / 3e18
-    for c, f in zip(np.array_split(data, nchunks, axis=1),
-                    np.array_split(filtg, nchunks)):
-        chunks.append(np.nansum(c * f, axis=1))
+    for c in np.array_split(data, nchunks, axis=1):
+        chunks.append(np.nanmedian(c, axis=1))
     cDx = [np.mean(dx) for dx in np.array_split(Dx, nchunks)]
     cDy = [np.mean(dy) for dy in np.array_split(Dx, nchunks)]
-    print(chunks[nchunks/2])
     S = np.zeros((len(x), 2))
     images = []
     for k in np.arange(nchunks):
         S[:, 0] = x - cDx[k]
         S[:, 1] = y - cDy[k]
-        image = chunks[k][sel] / weights[sel]
+        image = chunks[k][sel * np.isfinite(chunks[k])]
         grid_z0 = griddata(S[sel], image, (grid_x, grid_y),
                            method='cubic')
         grid_z0 *= np.nansum(chunks[k][sel]) / np.nansum(grid_z0)
         images.append(grid_z0)
-    image = np.nansum(images, axis=0)
+    images = np.array(images)
+    image = np.sum(images * weights) 
     return image
 
 # GET DIRECTORY NAME FOR PATH BUILDING
