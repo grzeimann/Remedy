@@ -690,7 +690,10 @@ for i, ui in enumerate(allifus):
     apertures = CircularAperture(positions, r=4.)
     phot_table = aperture_photometry(image, apertures,
                                      mask=~np.isfinite(image))
-    gmags = -2.5 * np.log10(phot_table['aperture_sum']) + 23.9
+    
+    gmags = np.where(phot_table['aperture_sum'] > 0.,
+                     -2.5 * np.log10(phot_table['aperture_sum']) + 23.9,
+                     99.)
     Sources = np.zeros((len(sources), 3))
     Sources[:, 0], Sources[:, 1] = (sources['xcentroid'], sources['ycentroid'])
     Sources[:, 2] = gmags
