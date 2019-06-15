@@ -173,6 +173,29 @@ def build_path(rootdir, date, obs, ifuslot, amp, base='sci', exp='exp*',
     return path
     
 
+def get_ifuslots():
+    file_glob = build_path(args.rootdir, args.date, args.observation,
+                           '*', 'LL', exp='exp01')
+        
+    filenames = sorted(glob.glob(file_glob))
+    
+    tfile = None
+    if len(filenames) == 0:
+        # do we have a tar?
+        path = splitall(file_glob)
+        tfile = op.join(*path[:-3]) + ".tar"
+        if op.exists(tfile):
+            print("This observation is tarred. Trying workaround...")
+            fnames_glob = op.join(*path[-4:])
+            with tarfile.open(tfile) as tf:
+                filenames = fnmatch.filter(tf.getnames(), fnames_glob)
+        else:
+            print("Could not find %s" % tfile)
+            print("Crap! How did I get here?")
+            sys.exit(1)
+    ifuslots = [int(op.basename(fn).split('_')[1][:3]) for fn in filenames]
+    return np.unique(ifuslots)
+
 def orient_image(image, amp, ampname):
     '''
     Orient the images from blue to red (left to right)
@@ -580,7 +603,10 @@ sel1 = list(np.where(args.ifuslot == ifuslots)[0])
 ifuslotn = get_slot_neighbors(args.ifuslot, u_ifuslots,
                               dist=args.neighbor_dist)
 ifuslotn = np.setdiff1d(ifuslotn, badifuslots)
+IFUs = get_ifuslots()
 for ifuslot in ifuslotn:
+    if ifuslot not in IFUs:
+        continue
     sel1.append(np.where(ifuslot == ifuslots)[0])
 ifuloop = np.array(np.hstack(sel1), dtype=int)
 nslots = len(ifuloop) / 4
