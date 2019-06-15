@@ -687,7 +687,7 @@ for i, ui in enumerate(allifus):
     sources = daofind(image)
     log.info('Found %i sources' % len(sources))
     positions = (sources['xcentroid'], sources['ycentroid'])
-    apertures = CircularAperture(positions, r=5.)
+    apertures = CircularAperture(positions, r=4.)
     phot_table = aperture_photometry(image, apertures,
                                      mask=~np.isfinite(image))
     gmags = -2.5 * np.log10(phot_table['aperture_sum']) + 23.9
