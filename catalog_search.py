@@ -155,7 +155,7 @@ def query_panstarrs(ra, dec, radius, debug=False):
     """
     Queries PANSTARRS
     """
-    T = panstarrs_query(ra, dec, radius/2.)
+    T = panstarrs_query(ra, dec, radius)
     sel1 = (~T['gMeanPSFMag'].mask) * (~T['rMeanPSFMag'].mask) * (~T['iMeanPSFMag'].mask)
     T = T[sel1]
     return T
