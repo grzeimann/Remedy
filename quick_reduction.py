@@ -684,6 +684,7 @@ for i, ui in enumerate(allifus):
     F = make_fits(image, fn, name, ui, tfile)
     mean, median, std = sigma_clipped_stats(image, sigma=3.0)
     daofind.threshold = 10. * std
+    print(daofind.threshold)
     sources = daofind(image)
     log.info('Found %i sources' % len(sources))
     positions = (sources['xcentroid'], sources['ycentroid'])
