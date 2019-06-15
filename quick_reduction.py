@@ -20,10 +20,12 @@ from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.convolution import interpolate_replace_nans, Gaussian1DKernel
 from astropy.io import fits
 from astropy.stats import biweight_location, sigma_clip
+from astropy.stats import sigma_clipped_stats
 from astropy.table import Table
 from datetime import datetime, timedelta
 from extract import Extract
 from input_utils import setup_logging
+from photutils import DAOStarFinder, aperture_photometry, CircularAperture
 from scipy.interpolate import griddata, interp1d
 from tables import open_file
 
@@ -402,7 +404,8 @@ def reduce_ifuslot(ifuloop, h5table):
     return p, t, s, fn , tfile
             
 
-def output_fits(image, fn, name, ifuslot, tfile=None):
+def make_fits(image, fn, name, ifuslot, tfile=None, ra=None,
+              dec=None, pa=None):
     '''
     Outputing collapsed image
     '''
@@ -418,7 +421,7 @@ def output_fits(image, fn, name, ifuslot, tfile=None):
     crx = image.shape[1] / 2.
     cry = image.shape[0] / 2.
     ifuslot = '%03d' % ifuslot
-    if (args.ra is None) or (args.dec is None):
+    if (ra is None) or (dec is None) or (pa is None):
         log.info('Using header for RA and Dec')
         RA = a[0].header['TRAJCRA'] * 15.
         DEC = a[0].header['TRAJCDEC']
@@ -426,13 +429,13 @@ def output_fits(image, fn, name, ifuslot, tfile=None):
         A.get_ifuslot_projection(ifuslot, imscale, crx, cry)
         wcs = A.tp_ifuslot
     else:
-        A = Astrometry(args.ra, args.dec, PA, 0., 0.,
+        A = Astrometry(ra, dec, pa, 0., 0.,
                        fplane_file=args.fplane_file)
         wcs = A.setup_TP(args.ra, args.dec, A.rot, crx, 
                          cry, x_scale=-imscale, y_scale=imscale)
     header = wcs.to_header()
     F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
-    F.writeto(name, overwrite=True)
+    return F
 
 
 def make_frame(xloc, yloc, data, Dx, Dy, ftf,
@@ -562,7 +565,6 @@ def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
     cDy = [np.mean(dy) for dy in np.array_split(Dx, nchunks)]
     S = np.zeros((len(x), 2))
     images = []
-    print(weights)
     for k in np.arange(nchunks):
         S[:, 0] = x - cDx[k]
         S[:, 1] = y - cDy[k]
@@ -596,7 +598,7 @@ T = Table.read(op.join(DIRNAME, 'filters/ps1g.dat'), format='ascii')
 filtg = np.interp(def_wave, T['col1'], T['col2'], left=0.0, right=0.0)
 filtg /= filtg.sum()
  
-# Collect indices for ifuslot
+# Collect indices for ifuslots (target and neighbors)
 ifuslots = h5table.cols.ifuslot[:]
 u_ifuslots = np.unique(ifuslots)
 sel1 = list(np.where(args.ifuslot == ifuslots)[0])
@@ -667,6 +669,7 @@ for j in np.arange(4*nslots):
         scispectra[cnt:(cnt+112)] = reorg[i, l:u]*1.
         cnt += 112
 
+daofind = DAOStarFinder(fwhm=3.0, threshold=0.1) 
 for i, ui in enumerate(allifus):
     log.info('Making collapsed frame for %03d' % ui)
     N = 448 * nexp
@@ -677,7 +680,20 @@ for i, ui in enumerate(allifus):
     image = make_photometric_image(P[:, 0], P[:, 1], data, filtg, F > 0.5,
                                    ADRx, 0.*ADRx, nchunks=11,
                                    ran=[-23, 25, -23, 25],  scale=0.75)
-    output_fits(image, fn, name, ui, tfile)
+    F = make_fits(image, fn, name, ui, tfile)
+    mean, median, std = sigma_clipped_stats(image, sigma=3.0)
+    daofind.threshold = 5. * std
+    sources = daofind(image)
+    log.info('Found %i sources' % len(sources))
+    positions = (sources['xcentroid'], sources['ycentroid'])
+    apertures = CircularAperture(positions, r=5.)
+    phot_table = aperture_photometry(image, apertures)
+    gmags = -2.5 * np.log10(phot_table['aperture_sum']) + 23.9
+    Sources = np.zeros((len(sources), 3))
+    Sources[:, 0], Sources[:, 1] = (sources['xcentroid'], sources['ycentroid'])
+    Sources[:, 2] = gmags
+    print(Sources)
+    F.writeto(name, overwrite=True)
 
 sys.exit(1)
 
