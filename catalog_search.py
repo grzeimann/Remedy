@@ -151,7 +151,7 @@ def panstarrs_query(ra_deg, dec_deg, rad_deg, mindet=1,
     return data.to_table(use_names_over_ids=True)
 
 
-def queryPANSTARRS(ra, dec, radius, debug=False):
+def query_panstarrs(ra, dec, radius, debug=False):
     """
     Queries PANSTARRS
     """
@@ -196,30 +196,3 @@ def querySDSS(ra, dec, radius):
                               photoobj_fields=['ra', 'dec', 'objid', 'type',
                                                'u', 'g', 'r', 'i', 'z'])
     return table[np.where(table['type'] == 6)[0]]
-
-
-def panstarrs_query(ra_deg, dec_deg, rad_deg, mindet=1,
-                    maxsources=10000,
-                    server=('https://archive.stsci.edu/panstarrs/search.php')):
-    """
-    Query Pan-STARRS DR1 @ MAST
-    parameters: ra_deg, dec_deg, rad_deg: RA, Dec, field
-                                          radius in degrees
-                mindet: minimum number of detection (optional)
-                maxsources: maximum number of sources
-                server: servername
-    returns: astropy.table object
-    """
-    r = requests.get(server, params={'RA': ra_deg, 'DEC': dec_deg,
-                                     'SR': rad_deg, 'max_records': maxsources,
-                                     'outputformat': 'VOTable',
-                                     'ndetections': ('>%d' % mindet)})
-
-    # write query data into local file
-    outf = open('panstarrs.xml', 'w')
-    outf.write(r.text)
-    outf.close()
-
-    # parse local file into astropy.table object
-    data = parse_single_table('panstarrs.xml')
-    return data.to_table(use_names_over_ids=True)
