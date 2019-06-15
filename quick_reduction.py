@@ -604,13 +604,15 @@ ifuslotn = get_slot_neighbors(args.ifuslot, u_ifuslots,
                               dist=args.neighbor_dist)
 ifuslotn = np.setdiff1d(ifuslotn, badifuslots)
 IFUs = get_ifuslots()
+allifus = [args.ifuslot]
 for ifuslot in ifuslotn:
     if ifuslot not in IFUs:
         continue
     sel1.append(np.where(ifuslot == ifuslots)[0])
+    allifus.append(ifuslot)
 ifuloop = np.array(np.hstack(sel1), dtype=int)
 nslots = len(ifuloop) / 4
-allifus = np.hstack([args.ifuslot, ifuslotn])
+allifus = np.hstack(allifus)
 
 
 # Reducing IFUSLOT
