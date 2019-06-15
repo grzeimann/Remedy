@@ -670,7 +670,6 @@ for j in np.arange(4*nslots):
         scispectra[cnt:(cnt+112)] = reorg[i, l:u]*1.
         cnt += 112
 
-daofind = DAOStarFinder(fwhm=3.0, threshold=0.1, exclude_border=True) 
 for i, ui in enumerate(allifus):
     log.info('Making collapsed frame for %03d' % ui)
     N = 448 * nexp
@@ -683,7 +682,7 @@ for i, ui in enumerate(allifus):
                                    ran=[-23, 25, -23, 25],  scale=0.75)
     F = make_fits(image, fn, name, ui, tfile)
     mean, median, std = sigma_clipped_stats(image, sigma=3.0)
-    daofind.threshold = 20. * std
+    daofind = DAOStarFinder(fwhm=4.0, threshold=20. * std, exclude_border=True) 
     print(daofind.threshold)
     sources = daofind(image)
     log.info('Found %i sources' % len(sources))
