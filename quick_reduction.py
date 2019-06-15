@@ -16,12 +16,14 @@ import warnings
 
 
 from astrometry import Astrometry
+from astropy.coordinates import SkyCoord, match_coordinates_sky
 from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.convolution import interpolate_replace_nans, Gaussian1DKernel
 from astropy.io import fits
 from astropy.stats import biweight_location, sigma_clip
 from astropy.stats import sigma_clipped_stats
 from astropy.table import Table
+import astropy.units as units
 from catalog_search import query_panstarrs
 from datetime import datetime, timedelta
 from extract import Extract
@@ -436,7 +438,7 @@ def make_fits(image, fn, name, ifuslot, tfile=None, ra=None,
                          cry, x_scale=-imscale, y_scale=imscale)
     header = wcs.to_header()
     F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
-    return F
+    return F, A
 
 
 def make_frame(xloc, yloc, data, Dx, Dy, ftf,
@@ -670,6 +672,16 @@ for j in np.arange(4*nslots):
         scispectra[cnt:(cnt+112)] = reorg[i, l:u]*1.
         cnt += 112
 
+
+if tfile is not None:
+    t = tarfile.open(tfile,'r')
+    a = fits.open(t.extractfile(fn))
+else:
+    a = fits.open(fn)
+ra = a[0].header['TRAJCRA'] * 15.
+dec = a[0].header['TRAJCDEC']
+PT = query_panstarrs(ra, dec, 0.1)
+coords = SkyCoord(T['raMean']*units.deg, T['decMean']*units.deg, frame='fk5')
 for i, ui in enumerate(allifus):
     log.info('Making collapsed frame for %03d' % ui)
     N = 448 * nexp
@@ -680,7 +692,7 @@ for i, ui in enumerate(allifus):
     image = make_photometric_image(P[:, 0], P[:, 1], data, filtg, F > 0.5,
                                    ADRx, 0.*ADRx, nchunks=11,
                                    ran=[-23, 25, -23, 25],  scale=0.75)
-    F = make_fits(image, fn, name, ui, tfile)
+    F, A = make_fits(image, fn, name, ui, tfile)
     mean, median, std = sigma_clipped_stats(image, sigma=3.0)
     daofind = DAOStarFinder(fwhm=4.0, threshold=10. * std, exclude_border=True) 
     print(daofind.threshold)
@@ -695,9 +707,17 @@ for i, ui in enumerate(allifus):
         gmags = np.where(phot_table['aperture_sum'] > 0.,
                          -2.5 * np.log10(phot_table['aperture_sum']) + 23.9,
                          99.)
-        Sources = np.zeros((len(sources), 3))
+        Sources = np.zeros((len(sources), 7))
         Sources[:, 0], Sources[:, 1] = (sources['xcentroid'], sources['ycentroid'])
         Sources[:, 2] = gmags
+        RA, Dec = A.get_ifupos_ra_dec('%03d' % ui, Sources[:, 0],
+                                      Sources[:, 1])
+        C = SkyCoord(RA*units.deg, Dec*units.deg, frame='fk5')
+        idx, d2d, d3d = match_coordinates_sky(C, coords)
+        Sources[:, 3] = d2d.arcsecond
+        Sources[:, 4] = PT['gMeanPSFMag'][idx]
+        Sources[:, 5] = coords[idx].ra
+        Sources[:, 6] = coords[idx].dec
         print(Sources)
     F.writeto(name, overwrite=True)
 
