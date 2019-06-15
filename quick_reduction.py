@@ -22,6 +22,7 @@ from astropy.io import fits
 from astropy.stats import biweight_location, sigma_clip
 from astropy.stats import sigma_clipped_stats
 from astropy.table import Table
+from catalog_search import query_panstarrs
 from datetime import datetime, timedelta
 from extract import Extract
 from input_utils import setup_logging
@@ -687,7 +688,8 @@ for i, ui in enumerate(allifus):
     log.info('Found %i sources' % len(sources))
     positions = (sources['xcentroid'], sources['ycentroid'])
     apertures = CircularAperture(positions, r=5.)
-    phot_table = aperture_photometry(image, apertures)
+    phot_table = aperture_photometry(image, apertures,
+                                     mask=~np.isfinite(image))
     gmags = -2.5 * np.log10(phot_table['aperture_sum']) + 23.9
     Sources = np.zeros((len(sources), 3))
     Sources[:, 0], Sources[:, 1] = (sources['xcentroid'], sources['ycentroid'])
