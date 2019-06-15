@@ -682,22 +682,23 @@ for i, ui in enumerate(allifus):
                                    ran=[-23, 25, -23, 25],  scale=0.75)
     F = make_fits(image, fn, name, ui, tfile)
     mean, median, std = sigma_clipped_stats(image, sigma=3.0)
-    daofind = DAOStarFinder(fwhm=4.0, threshold=20. * std, exclude_border=True) 
+    daofind = DAOStarFinder(fwhm=4.0, threshold=10. * std, exclude_border=True) 
     print(daofind.threshold)
     sources = daofind(image)
     log.info('Found %i sources' % len(sources))
-    positions = (sources['xcentroid'], sources['ycentroid'])
-    apertures = CircularAperture(positions, r=4.)
-    phot_table = aperture_photometry(image, apertures,
-                                     mask=~np.isfinite(image))
-    
-    gmags = np.where(phot_table['aperture_sum'] > 0.,
-                     -2.5 * np.log10(phot_table['aperture_sum']) + 23.9,
-                     99.)
-    Sources = np.zeros((len(sources), 3))
-    Sources[:, 0], Sources[:, 1] = (sources['xcentroid'], sources['ycentroid'])
-    Sources[:, 2] = gmags
-    print(Sources)
+    if len(sources):
+        positions = (sources['xcentroid'], sources['ycentroid'])
+        apertures = CircularAperture(positions, r=4.)
+        phot_table = aperture_photometry(image, apertures,
+                                         mask=~np.isfinite(image))
+        
+        gmags = np.where(phot_table['aperture_sum'] > 0.,
+                         -2.5 * np.log10(phot_table['aperture_sum']) + 23.9,
+                         99.)
+        Sources = np.zeros((len(sources), 3))
+        Sources[:, 0], Sources[:, 1] = (sources['xcentroid'], sources['ycentroid'])
+        Sources[:, 2] = gmags
+        print(Sources)
     F.writeto(name, overwrite=True)
 
 sys.exit(1)
