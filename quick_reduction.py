@@ -680,6 +680,7 @@ else:
     a = fits.open(fn)
 ra = a[0].header['TRAJCRA'] * 15.
 dec = a[0].header['TRAJCDEC']
+log.info('Querying Pan-STARRS at: %0.5f %0.5f' % (ra, dec))
 PT = query_panstarrs(ra, dec, 0.1)
 coords = SkyCoord(T['raMean']*units.deg, T['decMean']*units.deg, frame='fk5')
 for i, ui in enumerate(allifus):
