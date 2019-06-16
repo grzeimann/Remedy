@@ -127,6 +127,17 @@ def splitall(path):
     return allparts
 
 
+def get_ra_dec_from_header(tfile, fn):
+    if tfile is not None:
+        t = tarfile.open(tfile,'r')
+        a = fits.open(t.extractfile(fn))
+    else:
+        a = fits.open(fn)
+    ra = a[0].header['TRAJCRA'] * 15.
+    dec = a[0].header['TRAJCDEC'] * 1.
+    return ra, dec
+
+
 def read_sim(filename):
     '''
     Read an ascii simulation file with wavelength (A) and F_lam as columns
@@ -623,9 +634,13 @@ allifus = np.hstack(allifus)
 # Reducing IFUSLOT
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
 pos, twispectra, scispectra, fn, tfile = reduce_ifuslot(ifuloop, h5table)
+
+# Normalize twi spectra to correct fiber to fiber
 t = twispectra * 1.
 t[t< 1e-8] = np.nan
 g = t / np.nanmean(t, axis=0)[np.newaxis, :]
+
+# Fiber to fiber is an interpolation of median binned normalized twi spectra
 a = np.array([np.nanmedian(f, axis=1) for f in np.array_split(g, 25, axis=1)]).swapaxes(0, 1)
 x = np.array([np.mean(xi) for xi in np.array_split(np.arange(g.shape[1]), 25)])
 ftf = np.zeros(scispectra.shape)
@@ -637,12 +652,20 @@ for i, ai in enumerate(a):
         ftf[i] = I(np.arange(g.shape[1]))
     else:
         ftf[i] = 0.0
+
+# Correct fiber to fiber
 scispectra = safe_division(scispectra, ftf)
 
-# Subtracting Sky
+###################
+# Subtracting Sky #
+###################
 log.info('Subtracting sky for all ifuslots')
+
+# Number of exposures
 nexp = scispectra.shape[0] / 448 / nslots
 log.info('Number of exposures: %i' % nexp)
+
+# Reorganize spectra by exposure
 N, D = scispectra.shape
 reorg = np.zeros((nexp, N/nexp, D))
 for i in np.arange(nexp):
@@ -652,18 +675,33 @@ for i in np.arange(nexp):
         X.append(x + j * 336 + i * 112)
     X = np.array(np.hstack(X), dtype=int)
     reorg[i] = scispectra[X]*1.
+# Mask 0.0 values by setting to nan
 reorg[reorg < 1e-42] = np.nan
+
+# Correct offsets in the "gain" of each amplifier
+# Not yet sure why this is needed physically
+# But it is needed mathematically  
+# The corrections are ~few percent.
 reorg = np.array([r / correct_amplifier_offsets(r)[:, np.newaxis]
                   for r in reorg])
+
+# Estimate sky with sigma clipping to find "sky" fibers    
 skies = np.array([estimate_sky(r) for r in reorg])
-fits.PrimaryHDU(skies).writeto('test.fits', overwrite=True)
+
+# Take the ratio of the 2nd and 3rd sky to the first
+# Assume the ratio is due to illumination differences
+# Correct multiplicatively to the first exposure's illumination (scalar corrections)
 exp_ratio = np.ones((nexp,))
 for i in np.arange(1, nexp):
     exp_ratio[i] = np.nanmedian(skies[i] / skies[0])
     log.info('Ratio for exposure %i to exposure 1: %0.2f' %
              (i+1, exp_ratio[i]))
+
+# Subtract sky and correct normalization
 reorg[:] -= skies[:, np.newaxis, :]
 reorg[:] *= exp_ratio[:, np.newaxis, np.newaxis]
+
+# Reformat spectra back to 2d array [all exposures, amps, ifus]
 cnt = 0
 for j in np.arange(4*nslots): 
     for i in np.arange(nexp):
@@ -673,17 +711,38 @@ for j in np.arange(4*nslots):
         cnt += 112
 
 
-if tfile is not None:
-    t = tarfile.open(tfile,'r')
-    a = fits.open(t.extractfile(fn))
-else:
-    a = fits.open(fn)
-ra = a[0].header['TRAJCRA'] * 15.
-dec = a[0].header['TRAJCDEC']
+if args.simulate:
+    i = 0
+    N = 448 * nexp
+    data = scispectra[N*i:(i+1)*N]
+    P = pos[N*i:(i+1)*N]
+    log.info('Simulating spectrum from %s' % args.source_file)
+    simulated_spectrum = read_sim(args.source_file)
+    simdata = simulate_source(simulated_spectrum, P, data, 
+                                 args.source_x, args.source_y, 
+                                 args.source_seeing)
+    scispectra[N*i:(i+1)*N] = simdata * 1.
+
+
+# Get RA, Dec from header
+ra, dec = get_ra_dec_from_header(tfile, fn)
+
+# Query catalog Sources in the area
 log.info('Querying Pan-STARRS at: %0.5f %0.5f' % (ra, dec))
-PT = query_panstarrs(ra, dec, 0.1)
-print(PT.colnames)
-coords = SkyCoord(PT['raMean'], PT['decMean'], frame='fk5')
+Pan = query_panstarrs(ra, dec, 11. / 60.)
+raC, decC, gC = (np.array(Pan['raMean']), np.array(Pan['decMean']),
+                 np.array(Pan['gMeanKronMag']))
+coords = SkyCoord(raC*units.degree, decC*units.degree, frame='fk5')
+
+# Gather info from larger array
+# Make photometric image
+# Make into fits file with wcs
+# Find sources using DAOStarFinder
+# Get photometry/astrometry for sources
+# Match to catalog
+# Correct astrometry
+# Match again
+# Get photometric comparison
 for i, ui in enumerate(allifus):
     log.info('Making collapsed frame for %03d' % ui)
     N = 448 * nexp
@@ -697,7 +756,6 @@ for i, ui in enumerate(allifus):
     F, A = make_fits(image, fn, name, ui, tfile)
     mean, median, std = sigma_clipped_stats(image, sigma=3.0)
     daofind = DAOStarFinder(fwhm=4.0, threshold=10. * std, exclude_border=True) 
-    print(daofind.threshold)
     sources = daofind(image)
     log.info('Found %i sources' % len(sources))
     if len(sources):
@@ -712,12 +770,14 @@ for i, ui in enumerate(allifus):
         Sources = np.zeros((len(sources), 7))
         Sources[:, 0], Sources[:, 1] = (sources['xcentroid'], sources['ycentroid'])
         Sources[:, 2] = gmags
-        RA, Dec = A.get_ifupos_ra_dec('%03d' % ui, Sources[:, 0],
-                                      Sources[:, 1])
+        RA, Dec = A.get_ifupos_ra_dec('%03d' % ui, Sources[:, 0]*0.75 - 23.,
+                                      Sources[:, 1]*0.75 - 23.)
+        # Find closest bright source, use that for offset, then match
+        # Make image class that combines, does astrometry, detections, updates coords
         C = SkyCoord(RA*units.deg, Dec*units.deg, frame='fk5')
         idx, d2d, d3d = match_coordinates_sky(C, coords)
         Sources[:, 3] = d2d.arcsecond
-        Sources[:, 4] = PT['gMeanPSFMag'][idx]
+        Sources[:, 4] = gC[idx]
         Sources[:, 5] = coords[idx].ra
         Sources[:, 6] = coords[idx].dec
         print(Sources)
@@ -725,12 +785,6 @@ for i, ui in enumerate(allifus):
 
 sys.exit(1)
 
-if args.simulate:
-    log.info('Simulating spectrum from %s' % args.source_file)
-    simulated_spectrum = read_sim(args.source_file)
-    scispectra = simulate_source(simulated_spectrum, P, data, 
-                                 args.source_x, args.source_y, 
-                                 args.source_seeing)
 
 if args.simulate:
     name = ('%s_%07d_%03d_sim.fits' %
