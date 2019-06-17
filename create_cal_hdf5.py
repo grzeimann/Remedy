@@ -93,10 +93,8 @@ def main(argv=None):
 
     # Creates a new file if the "--append" option is not set or the file
     # does not already exist.
-    does_exist = False
     if op.exists(args.outfilename) and args.append:
         fileh = tb.open_file(args.outfilename, 'a')
-        does_exist = True
     else:
         fileh = tb.open_file(args.outfilename, 'w')
         imagetable = fileh.create_table(fileh.root, 'Cals', VIRUSImage,
