@@ -4,7 +4,9 @@ Created on Tue Jan 22 15:11:39 2019
  
 @author: gregz
 """
- 
+
+import matplotlib
+matplotlib.use('agg')
 import argparse as ap
 import fnmatch
 import glob
@@ -31,6 +33,7 @@ from input_utils import setup_logging
 from photutils import DAOStarFinder, aperture_photometry, CircularAperture
 from scipy.interpolate import griddata, interp1d
 from tables import open_file
+import matplotlib.pyplot as plt
 
 #################
 # Configuration #
@@ -354,6 +357,7 @@ def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
 def reduce_ifuslot(ifuloop, h5table):
     p, t, s = ([], [], [])
     mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.25
+    mult_fac *= 1e29 * def_wave**2 / 3e18
     for ind in ifuloop:
         ifuslot = '%03d' % h5table[ind]['ifuslot']
         amp = h5table[ind]['amp'].astype('U13')
@@ -373,7 +377,9 @@ def reduce_ifuslot(ifuloop, h5table):
         if np.all(amp2amp==0.):
             amp2amp = np.ones((112, 1036))
         if np.all(throughput==0.):
-            throughput = np.ones((112, 1036))
+            T = Table.read(op.join(DIRNAME, 'CALS/throughput.txt'),
+                           format='ascii.fixed_width_two_line')
+            throughput = np.array([T['throughput']]*112)
         twibase = build_path(args.rootdir, args.date, '*', ifuslot, amp,
                              base='twi')
         twibase, newdate = get_cal_path(twibase, args.date)
@@ -578,7 +584,6 @@ def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
     chunks = []
     weights = np.array([np.mean(f) for f in np.array_split(filtg, nchunks)])
     weights /= weights.sum()
-    data = data * 1e29 * def_wave**2 / 3e18
     for c in np.array_split(data, nchunks, axis=1):
         chunks.append(np.nanmedian(c, axis=1))
     cDx = [np.mean(dx) for dx in np.array_split(Dx, nchunks)]
@@ -755,6 +760,7 @@ coords = SkyCoord(raC*units.degree, decC*units.degree, frame='fk5')
 # Correct astrometry
 # Match again
 # Get photometric comparison
+Total_sources = []
 for i, ui in enumerate(allifus):
     log.info('Making collapsed frame for %03d' % ui)
     N = 448 * nexp
@@ -792,9 +798,14 @@ for i, ui in enumerate(allifus):
         Sources[:, 4] = gC[idx]
         Sources[:, 5] = coords[idx].ra
         Sources[:, 6] = coords[idx].dec
-        print(Sources)
+        Total_sources(Sources)
+    
     F.writeto(name, overwrite=True)
 
+Total_sources = np.vstack(Total_sources)
+plt.figure()
+sel = Total_sources[:, 3] < 5.
+plt.scatter(Sources[sel, 4], Sources[sel, 2] - Sources[sel,4])
 sys.exit(1)
 
 
