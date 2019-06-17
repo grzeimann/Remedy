@@ -22,6 +22,8 @@ from astropy.coordinates import SkyCoord, match_coordinates_sky
 from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.convolution import interpolate_replace_nans, Gaussian1DKernel
 from astropy.io import fits
+from astropy.modeling.models import Polynomial2D
+from astropy.modeling.fitting import LevMarLSQFitter
 from astropy.stats import biweight_location, sigma_clip
 from astropy.stats import sigma_clipped_stats
 from astropy.table import Table
@@ -777,7 +779,6 @@ for i, ui in enumerate(allifus):
                                    ADRx, 0.*ADRx, nchunks=11,
                                    ran=[-23, 25, -23, 25],  scale=0.75)
     F, A = make_fits(image, fn, name, ui, tfile)
-    print(A.rot)
     mean, median, std = sigma_clipped_stats(image, sigma=3.0)
     daofind = DAOStarFinder(fwhm=4.0, threshold=7. * std, exclude_border=True) 
     sources = daofind(image)
@@ -816,10 +817,28 @@ for i, ui in enumerate(allifus):
     F.writeto(name, overwrite=True)
 
 Total_sources = np.vstack(Total_sources)
-Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist', 'Cgmag',
-                              'RA', 'Dec', 'fx', 'fy',
-                              'dra', 'ddec']).write('sources.dat',
-      format='ascii.fixed_width_two_line')
+f = Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist', 'Cgmag',
+                              'RA', 'Dec', 'fx', 'fy', 'dra', 'ddec'])
+f.write('sources.dat', format='ascii.fixed_width_two_line')
+P = Polynomial2D(1)
+fitter = LevMarLSQFitter()
+sel = f['dist'] < 7.
+fitr = fitter(P, f['fx'][sel], f['fy'][sel], f['RA'][sel])
+fitd = fitter(P, f['fx'][sel], f['fy'][sel], f['Dec'][sel])
+RA0 = fitr(0., 0.)
+Dec0 = fitd(0., 0.)
+dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - RA0)
+dd = 3600. * (f['Dec'][sel] - Dec0)
+a1 = np.arctan2(dd, dr)
+a2 = np.arctan2(f['fy'][sel], f['fx'][sel])
+da = a1 - a2
+sel1 = np.abs(da) > np.pi
+da[sel1] -= np.sign(da[sel1]) * 2. * np.pi
+rot = np.median(np.rad2deg(np.median(da)))
+for i in [rot, 360. - rot]:
+    if np.abs(A.rot - i) < 1.5:
+        rot = i
+print(A.rot, rot)
 plt.figure(figsize=(12, 8))
 sel = Total_sources[:, 3] < 8.
 plt.scatter(Total_sources[sel, 4], Total_sources[sel, 2] - Total_sources[sel,4])
