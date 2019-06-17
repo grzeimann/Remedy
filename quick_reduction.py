@@ -362,7 +362,6 @@ def reduce_ifuslot(ifuloop, h5table):
         trace = h5table[ind]['trace']
         try:
             masterbias = h5table[ind]['masterbias']
-            
         except:
             masterbias = 0.0
         try:
@@ -370,6 +369,10 @@ def reduce_ifuslot(ifuloop, h5table):
             throughput = h5table[ind]['Throughput']
         except:
             amp2amp = np.ones((112, 1036))
+            throughput = np.ones((112, 1036))
+        if np.all(amp2amp==0.):
+            amp2amp = np.ones((112, 1036))
+        if np.all(throughput==0.):
             throughput = np.ones((112, 1036))
         twibase = build_path(args.rootdir, args.date, '*', ifuslot, amp,
                              base='twi')
