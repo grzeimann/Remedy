@@ -839,6 +839,15 @@ for i in [rot, 360. - rot]:
     if np.abs(A.rot - i) < 1.5:
         rot = i
 print(A.rot, rot)
+A.rot = rot * 1.
+A.tp = A.setup_TP(RA0, Dec0, A.rot, A.x0,  A.y0)
+mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
+plt.figure(figsize=(9, 8))
+dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - mRA)
+dd = 3600. * (f['Dec'][sel] - mDec)
+plt.scatter(dr, dd, alpha=0.3, s=25)
+plt.axis([-3., 3., -3., 3.])
+plt.savefig('astrometry.png', dpi=300)
 plt.figure(figsize=(12, 8))
 sel = Total_sources[:, 3] < 8.
 plt.scatter(Total_sources[sel, 4], Total_sources[sel, 2] - Total_sources[sel,4])
