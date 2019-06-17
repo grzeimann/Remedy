@@ -143,7 +143,8 @@ def get_ra_dec_from_header(tfile, fn):
         a = fits.open(fn)
     ra = a[0].header['TRAJCRA'] * 15.
     dec = a[0].header['TRAJCDEC'] * 1.
-    return ra, dec
+    pa = a[0].header['PARANGLE'] * 1.
+    return ra, dec, pa
 
 
 def read_sim(filename):
@@ -743,7 +744,7 @@ if args.simulate:
 
 
 # Get RA, Dec from header
-ra, dec = get_ra_dec_from_header(tfile, fn)
+ra, dec, pa = get_ra_dec_from_header(tfile, fn)
 
 # Query catalog Sources in the area
 log.info('Querying Pan-STARRS at: %0.5f %0.5f' % (ra, dec))
@@ -846,9 +847,11 @@ DR = (f['RA'][sel] - mRA)
 DD = (f['Dec'][sel] - mDec)
 RA0 += np.median(DR)
 Dec0 += np.median(DD)
-pa = 360. - rot - 90. - A.sys_rot
+pa1 = 360. - rot - 90. - A.sys_rot
+print(pa, pa1)
+
 for i in info:
-    A = Astrometry(RA0, Dec0, pa, 0., 0., fplane_file=args.fplane_file)
+    A = Astrometry(RA0, Dec0, pa1, 0., 0., fplane_file=args.fplane_file)
     imscale = 48. / i[0].shape[0]
     crx = i[0].shape[1] / 2.
     cry = i[0].shape[0] / 2.
