@@ -846,10 +846,19 @@ DR = (f['RA'][sel] - mRA)
 DD = (f['Dec'][sel] - mDec)
 RA0 += np.median(DR)
 Dec0 += np.median(DD)
-A.tp = A.setup_TP(RA0, Dec0, A.rot, A.x0,  A.y0)
+pa = 360. - rot - 90. - A.sys_rot
 for i in info:
-    F, A = make_fits(i[0], i[1], i[2], i[3], i[4], ra=RA0, dec=Dec0, rot=rot)
+    A = Astrometry(RA0, Dec0, pa, 0., 0., fplane_file=args.fplane_file)
+    imscale = 48. / i[0].shape[0]
+    crx = i[0].shape[1] / 2.
+    cry = i[0].shape[0] / 2.
+    ifuslot = '%03d' % i[3]
+    A.get_ifuslot_projection(ifuslot, imscale, crx, cry)
+    wcs = A.tp_ifuslot
+    header = wcs.to_header()
+    F = fits.PrimaryHDU(np.array(i[0], 'float32'), header=header)
     F.writeto(i[2], overwrite=True)
+A.tp = A.setup_TP(RA0, Dec0, A.rot, A.x0,  A.y0)
 with open('ds9.reg', 'w') as k:
     MakeRegionFile.writeHeader(k)
     MakeRegionFile.writeSource(k, coords.ra.deg, coords.dec.deg)
