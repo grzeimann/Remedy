@@ -808,8 +808,8 @@ for i, ui in enumerate(allifus):
         idx, d2d, d3d = match_coordinates_sky(C, coords)
         Sources[:, 3] = d2d.arcsecond
         Sources[:, 4] = gC[idx]
-        Sources[:, 5] = coords[idx].ra
-        Sources[:, 6] = coords[idx].dec
+        Sources[:, 5] = coords[idx].ra.deg
+        Sources[:, 6] = coords[idx].dec.deg
         Sources[:, 7], Sources[:, 8] = (sources['xcentroid']*0.75 - 23. + ifux,
                                         sources['ycentroid']*0.75 - 23. + ifuy)
         Sources[:, 9], Sources[:, 10] = (RA-Sources[:,5], Dec-Sources[:, 6])
@@ -852,7 +852,7 @@ for i in info:
     F.writeto(i[2], overwrite=True)
 with open('ds9.reg', 'w') as k:
     MakeRegionFile.writeHeader(k)
-    MakeRegionFile.writeSource(k, coords.ra, coords.dec)
+    MakeRegionFile.writeSource(k, coords.ra.deg, coords.dec.deg)
 mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
 plt.figure(figsize=(9, 8))
 dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - mRA)
