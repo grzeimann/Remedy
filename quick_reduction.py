@@ -847,14 +847,12 @@ DR = (f['RA'][sel] - mRA)
 DD = (f['Dec'][sel] - mDec)
 RA0 += np.median(DR)
 Dec0 += np.median(DD)
-pa1 = 360. - rot - 90. - A.sys_rot
-print(pa, pa1)
+A.tp = A.setup_TP(RA0, Dec0, A.rot, A.x0,  A.y0)
 
 for i in info:
-    A = Astrometry(RA0, Dec0, pa1, 0., 0., fplane_file=args.fplane_file)
     imscale = 48. / i[0].shape[0]
-    crx = i[0].shape[1] / 2.
-    cry = i[0].shape[0] / 2.
+    crx = 23. / 0.75
+    cry = 23. / 0.75
     ifuslot = '%03d' % i[3]
     A.get_ifuslot_projection(ifuslot, imscale, crx, cry)
     wcs = A.tp_ifuslot
