@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Created on Tue Jan 22 15:11:39 2019
-
+ 
 @author: gregz
 """
-
+ 
 import argparse as ap
 import fnmatch
 import glob
@@ -729,7 +729,13 @@ ra, dec = get_ra_dec_from_header(tfile, fn)
 
 # Query catalog Sources in the area
 log.info('Querying Pan-STARRS at: %0.5f %0.5f' % (ra, dec))
-Pan = query_panstarrs(ra, dec, 11. / 60.)
+pname = 'Panstarrs_%0.6f_%0.5f_%0.4f.dat'
+if op.exists(pname):
+    Pan = Table.read(pname, format='ascii.fixed_width_two_line')
+else:
+    Pan = query_panstarrs(ra, dec, 11. / 60.)
+    Pan.write(pname, format='ascii.fixed_width_two_line')
+
 raC, decC, gC = (np.array(Pan['raMean']), np.array(Pan['decMean']),
                  np.array(Pan['gMeanKronMag']))
 coords = SkyCoord(raC*units.degree, decC*units.degree, frame='fk5')
