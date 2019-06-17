@@ -850,7 +850,11 @@ mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
 plt.figure(figsize=(9, 8))
 dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - mRA)
 dd = 3600. * (f['Dec'][sel] - mDec)
-nsel = np.sqrt(dr**2 + dd**2) < 1.
+D = np.sqrt((f['fx'][sel] - f['fx'][sel][:, np.newaxis])**2 +
+            (f['fy'][sel] - f['fy'][sel][:, np.newaxis])**2)
+D[D==0.] = 999.
+noneigh = np.min(D, axis=0) > 8.
+nsel = (np.sqrt(dr**2 + dd**2) < 1.) * noneigh
 plt.scatter(dr, dd, alpha=0.3, s=25)
 plt.axis([-1.5, 1.5, -1.5, 1.5])
 plt.savefig('astrometry.png', dpi=300)
