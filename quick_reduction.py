@@ -798,12 +798,13 @@ for i, ui in enumerate(allifus):
         Sources[:, 4] = gC[idx]
         Sources[:, 5] = coords[idx].ra
         Sources[:, 6] = coords[idx].dec
-        Total_sources(Sources)
+        print(Sources)
+        Total_sources.append(Sources)
     
     F.writeto(name, overwrite=True)
 
 Total_sources = np.vstack(Total_sources)
-plt.figure()
+plt.figure(figsize=(12, 8))
 sel = Total_sources[:, 3] < 5.
 plt.scatter(Sources[sel, 4], Sources[sel, 2] - Sources[sel,4])
 sys.exit(1)
