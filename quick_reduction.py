@@ -34,7 +34,10 @@ from photutils import DAOStarFinder, aperture_photometry, CircularAperture
 from scipy.interpolate import griddata, interp1d
 from tables import open_file
 import matplotlib.pyplot as plt
+import seaborn as sns
 
+sns.set_context('talk')
+sns.set_style('whitegrid')
 #################
 # Configuration #
 #################
@@ -807,6 +810,9 @@ Total_sources = np.vstack(Total_sources)
 plt.figure(figsize=(12, 8))
 sel = Total_sources[:, 3] < 5.
 plt.scatter(Sources[sel, 4], Sources[sel, 2] - Sources[sel,4])
+plt.xlim([15, 22])
+plt.ylim([-0.5, 1.5])
+plt.savefig('mag_offset.png', dpi=300)
 sys.exit(1)
 
 
