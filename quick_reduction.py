@@ -593,6 +593,7 @@ def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
     cDy = [np.mean(dy) for dy in np.array_split(Dx, nchunks)]
     S = np.zeros((len(x), 2))
     images = []
+    G = Gaussian2DKernel(1.5)
     for k in np.arange(nchunks):
         S[:, 0] = x - cDx[k]
         S[:, 1] = y - cDy[k]
@@ -601,6 +602,7 @@ def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
             image = chunks[k][sel]
             grid_z0 = griddata(S[sel], image, (grid_x, grid_y),
                                method='linear')
+            grid_z0 = convolve(grid_z0, G)
             grid_z0 *= np.nansum(chunks[k][sel]) / np.nansum(grid_z0)
         else:
             grid_z0 = 0. * grid_x
