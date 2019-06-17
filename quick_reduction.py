@@ -28,7 +28,7 @@ from astropy.stats import biweight_location, sigma_clip
 from astropy.stats import sigma_clipped_stats
 from astropy.table import Table
 import astropy.units as units
-from catalog_search import query_panstarrs
+from catalog_search import query_panstarrs, MakeRegionFile
 from datetime import datetime, timedelta
 from extract import Extract
 from input_utils import setup_logging
@@ -433,7 +433,7 @@ def reduce_ifuslot(ifuloop, h5table):
             
 
 def make_fits(image, fn, name, ifuslot, tfile=None, ra=None,
-              dec=None, pa=None):
+              dec=None, rot=None):
     '''
     Outputing collapsed image
     '''
@@ -449,7 +449,7 @@ def make_fits(image, fn, name, ifuslot, tfile=None, ra=None,
     crx = image.shape[1] / 2.
     cry = image.shape[0] / 2.
     ifuslot = '%03d' % ifuslot
-    if (ra is None) or (dec is None) or (pa is None):
+    if (ra is None) or (dec is None) or (rot is None):
         log.info('Using header for RA and Dec')
         RA = a[0].header['TRAJCRA'] * 15.
         DEC = a[0].header['TRAJCDEC']
@@ -457,9 +457,9 @@ def make_fits(image, fn, name, ifuslot, tfile=None, ra=None,
         A.get_ifuslot_projection(ifuslot, imscale, crx, cry)
         wcs = A.tp_ifuslot
     else:
-        A = Astrometry(ra, dec, pa, 0., 0.,
+        A = Astrometry(ra, dec, rot, 0., 0.,
                        fplane_file=args.fplane_file)
-        wcs = A.setup_TP(args.ra, args.dec, A.rot, crx, 
+        wcs = A.setup_TP(ra, dec, rot, crx, 
                          cry, x_scale=-imscale, y_scale=imscale)
     header = wcs.to_header()
     F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
@@ -755,7 +755,7 @@ else:
     Pan.write(pname, format='ascii.fixed_width_two_line')
 
 raC, decC, gC = (np.array(Pan['raMean']), np.array(Pan['decMean']),
-                 np.array(Pan['gMeanPSFMag']))
+                 np.array(Pan['gMeanApMag']))
 coords = SkyCoord(raC*units.degree, decC*units.degree, frame='fk5')
 
 # Gather info from larger array
@@ -768,6 +768,7 @@ coords = SkyCoord(raC*units.degree, decC*units.degree, frame='fk5')
 # Match again
 # Get photometric comparison
 Total_sources = []
+info = []
 for i, ui in enumerate(allifus):
     log.info('Making collapsed frame for %03d' % ui)
     N = 448 * nexp
@@ -779,6 +780,7 @@ for i, ui in enumerate(allifus):
                                    ADRx, 0.*ADRx, nchunks=11,
                                    ran=[-23, 25, -23, 25],  scale=0.75)
     F, A = make_fits(image, fn, name, ui, tfile)
+    info.append([image, fn, name, ui, tfile])
     mean, median, std = sigma_clipped_stats(image, sigma=3.0)
     daofind = DAOStarFinder(fwhm=4.0, threshold=7. * std, exclude_border=True) 
     sources = daofind(image)
@@ -812,7 +814,6 @@ for i, ui in enumerate(allifus):
                                         sources['ycentroid']*0.75 - 23. + ifuy)
         Sources[:, 9], Sources[:, 10] = (RA-Sources[:,5], Dec-Sources[:, 6])
         Total_sources.append(Sources)
-    
     F.writeto(name, overwrite=True)
 
 Total_sources = np.vstack(Total_sources)
@@ -846,6 +847,12 @@ DD = (f['Dec'][sel] - mDec)
 RA0 += np.median(DR)
 Dec0 += np.median(DD)
 A.tp = A.setup_TP(RA0, Dec0, A.rot, A.x0,  A.y0)
+for i in info:
+    F, A = make_fits(i[0], i[1], i[2], i[3], i[4], ra=RA0, dec=Dec0, rot=rot)
+    F.writeto(i[2], overwrite=True)
+with open('ds9.reg', 'w') as k:
+    MakeRegionFile.writeHeader(k)
+    MakeRegionFile.writeSource(k, coords.ra, coords.dec)
 mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
 plt.figure(figsize=(9, 8))
 dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - mRA)
