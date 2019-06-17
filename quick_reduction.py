@@ -790,11 +790,14 @@ for i, ui in enumerate(allifus):
         gmags = np.where(phot_table['aperture_sum'] > 0.,
                          -2.5 * np.log10(phot_table['aperture_sum']) + 23.9,
                          99.)
-        Sources = np.zeros((len(sources), 7))
+        Sources = np.zeros((len(sources), 9))
         Sources[:, 0], Sources[:, 1] = (sources['xcentroid'], sources['ycentroid'])
         Sources[:, 2] = gmags
         RA, Dec = A.get_ifupos_ra_dec('%03d' % ui, Sources[:, 0]*0.75 - 23.,
                                       Sources[:, 1]*0.75 - 23.)
+        ifu = A.fplane.by_ifuslot('%03d' % ui)
+        ifux, ifuy = (ifu.y, ifu.x) 
+
         # Find closest bright source, use that for offset, then match
         # Make image class that combines, does astrometry, detections, updates coords
         C = SkyCoord(RA*units.deg, Dec*units.deg, frame='fk5')
@@ -803,12 +806,17 @@ for i, ui in enumerate(allifus):
         Sources[:, 4] = gC[idx]
         Sources[:, 5] = coords[idx].ra
         Sources[:, 6] = coords[idx].dec
+        Sources[:, 7], Sources[:, 8] = (sources['xcentroid']*0.75 - 23. + ifux,
+                                        sources['ycentroid']*0.75 - 23. + ifuy)
         print(Sources)
         Total_sources.append(Sources)
     
     F.writeto(name, overwrite=True)
 
 Total_sources = np.vstack(Total_sources)
+Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist', 'Cgmag',
+                              'RA', 'Dec', 'fx', 'fy']).write('sources.dat',
+      format='ascii.fixed_width_two_line')
 plt.figure(figsize=(12, 8))
 sel = Total_sources[:, 3] < 8.
 plt.scatter(Total_sources[sel, 4], Total_sources[sel, 2] - Total_sources[sel,4])
