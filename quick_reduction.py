@@ -790,7 +790,7 @@ for i, ui in enumerate(allifus):
         gmags = np.where(phot_table['aperture_sum'] > 0.,
                          -2.5 * np.log10(phot_table['aperture_sum']) + 23.9,
                          99.)
-        Sources = np.zeros((len(sources), 9))
+        Sources = np.zeros((len(sources), 11))
         Sources[:, 0], Sources[:, 1] = (sources['xcentroid'], sources['ycentroid'])
         Sources[:, 2] = gmags
         RA, Dec = A.get_ifupos_ra_dec('%03d' % ui, Sources[:, 0]*0.75 - 23.,
@@ -808,6 +808,7 @@ for i, ui in enumerate(allifus):
         Sources[:, 6] = coords[idx].dec
         Sources[:, 7], Sources[:, 8] = (sources['xcentroid']*0.75 - 23. + ifux,
                                         sources['ycentroid']*0.75 - 23. + ifuy)
+        Sources[:, 9], Sources[:, 10] = (RA-Sources[:,5], Dec-Sources[:, 6])
         print(Sources)
         Total_sources.append(Sources)
     
