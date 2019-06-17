@@ -850,7 +850,7 @@ Dec0 += np.median(DD)
 A.tp = A.setup_TP(RA0, Dec0, A.rot, A.x0,  A.y0)
 
 for i in info:
-    imscale = 48. / i[0].shape[0]
+    imscale = 0.75
     crx = 23. / 0.75
     cry = 23. / 0.75
     ifuslot = '%03d' % i[3]
