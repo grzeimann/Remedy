@@ -549,9 +549,9 @@ def correct_amplifier_offsets(data, fibers_in_amp=112, order=1):
         if skysel.sum() > 10:
             model.append(np.polyval(np.polyfit(x[skysel], yi[skysel], order), x))
         else:
-            model.append(yi * 0.)
+            model.append(np.ones(yi.shape))
     model = np.hstack(model)
-    avg = np.mean(model)
+    avg = np.nanmean(model)
     return model / avg
 
 def estimate_sky(data):
