@@ -777,6 +777,7 @@ for i, ui in enumerate(allifus):
                                    ADRx, 0.*ADRx, nchunks=11,
                                    ran=[-23, 25, -23, 25],  scale=0.75)
     F, A = make_fits(image, fn, name, ui, tfile)
+    print(A.rot)
     mean, median, std = sigma_clipped_stats(image, sigma=3.0)
     daofind = DAOStarFinder(fwhm=4.0, threshold=7. * std, exclude_border=True) 
     sources = daofind(image)
