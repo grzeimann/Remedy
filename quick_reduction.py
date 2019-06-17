@@ -816,7 +816,8 @@ for i, ui in enumerate(allifus):
 
 Total_sources = np.vstack(Total_sources)
 Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist', 'Cgmag',
-                              'RA', 'Dec', 'fx', 'fy']).write('sources.dat',
+                              'RA', 'Dec', 'fx', 'fy',
+                              'dra', 'ddec']).write('sources.dat',
       format='ascii.fixed_width_two_line')
 plt.figure(figsize=(12, 8))
 sel = Total_sources[:, 3] < 8.
