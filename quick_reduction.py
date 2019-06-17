@@ -811,7 +811,6 @@ for i, ui in enumerate(allifus):
         Sources[:, 7], Sources[:, 8] = (sources['xcentroid']*0.75 - 23. + ifux,
                                         sources['ycentroid']*0.75 - 23. + ifuy)
         Sources[:, 9], Sources[:, 10] = (RA-Sources[:,5], Dec-Sources[:, 6])
-        print(Sources)
         Total_sources.append(Sources)
     
     F.writeto(name, overwrite=True)
@@ -851,13 +850,13 @@ mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
 plt.figure(figsize=(9, 8))
 dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - mRA)
 dd = 3600. * (f['Dec'][sel] - mDec)
-
+nsel = np.sqrt(dr**2 + dd**2) < 1.
 plt.scatter(dr, dd, alpha=0.3, s=25)
 plt.axis([-1.5, 1.5, -1.5, 1.5])
 plt.savefig('astrometry.png', dpi=300)
 plt.figure(figsize=(12, 8))
-sel = Total_sources[:, 3] < 8.
-plt.scatter(Total_sources[sel, 4], Total_sources[sel, 2] - Total_sources[sel,4])
+plt.scatter(Total_sources[sel, 4][nsel], Total_sources[sel, 2][nsel] -
+            Total_sources[sel, 4][nsel])
 plt.xlim([15, 22])
 plt.ylim([-0.5, 1.5])
 plt.savefig('mag_offset.png', dpi=300)
