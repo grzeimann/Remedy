@@ -808,7 +808,7 @@ for i, ui in enumerate(allifus):
 
 Total_sources = np.vstack(Total_sources)
 plt.figure(figsize=(12, 8))
-sel = Total_sources[:, 3] < 7.
+sel = Total_sources[:, 3] < 8.
 plt.scatter(Total_sources[sel, 4], Total_sources[sel, 2] - Total_sources[sel,4])
 plt.xlim([15, 22])
 plt.ylim([-0.5, 1.5])
