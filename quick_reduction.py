@@ -593,7 +593,7 @@ def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
     cDy = [np.mean(dy) for dy in np.array_split(Dx, nchunks)]
     S = np.zeros((len(x), 2))
     images = []
-    G = Gaussian2DKernel(1.5)
+    G = Gaussian2DKernel(1.0)
     for k in np.arange(nchunks):
         S[:, 0] = x - cDx[k]
         S[:, 1] = y - cDy[k]
@@ -753,7 +753,7 @@ else:
     Pan.write(pname, format='ascii.fixed_width_two_line')
 
 raC, decC, gC = (np.array(Pan['raMean']), np.array(Pan['decMean']),
-                 np.array(Pan['gMeanKronMag']))
+                 np.array(Pan['gMeanPSFMag']))
 coords = SkyCoord(raC*units.degree, decC*units.degree, frame='fk5')
 
 # Gather info from larger array
@@ -778,12 +778,12 @@ for i, ui in enumerate(allifus):
                                    ran=[-23, 25, -23, 25],  scale=0.75)
     F, A = make_fits(image, fn, name, ui, tfile)
     mean, median, std = sigma_clipped_stats(image, sigma=3.0)
-    daofind = DAOStarFinder(fwhm=4.0, threshold=10. * std, exclude_border=True) 
+    daofind = DAOStarFinder(fwhm=4.0, threshold=7. * std, exclude_border=True) 
     sources = daofind(image)
     log.info('Found %i sources' % len(sources))
     if len(sources):
         positions = (sources['xcentroid'], sources['ycentroid'])
-        apertures = CircularAperture(positions, r=4.)
+        apertures = CircularAperture(positions, r=5.)
         phot_table = aperture_photometry(image, apertures,
                                          mask=~np.isfinite(image))
         
