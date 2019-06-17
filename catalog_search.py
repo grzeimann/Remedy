@@ -49,8 +49,10 @@ class MakeRegionFile(object):
 
     @classmethod
     def writeSource(cls, f, ra, dec, rad=2):
-        s = ('circle(%0.6f, %0.6f, %0.2f")' % (ra, dec, rad))
-        f.write(s + "\n")
+        s = []
+        for r, d in zip(ra, dec):
+            s.append('circle(%0.6f, %0.6f, %0.2f")' % (r, d, rad))
+        f.write('\n'.join(s) + '\n')
         f.flush()
 
 
