@@ -743,7 +743,10 @@ allifus = [args.ifuslot]
 for ifuslot in ifuslotn:
     if ifuslot not in IFUs:
         continue
-    sel1.append(np.where(ifuslot == ifuslots)[0])
+    silly = np.where(ifuslot == ifuslots)[0]
+    if len(silly) != 4:
+        continue
+    sel1.append(silly)
     allifus.append(ifuslot)
 ifuloop = np.array(np.hstack(sel1), dtype=int)
 nslots = len(ifuloop) / 4
