@@ -820,10 +820,10 @@ for i, ui in enumerate(allifus):
         yind, xind = np.indices(image.shape)
         for s in sources:
             d = np.sqrt((s['xcentroid'] - xind)**2 + (s['ycentroid']-yind)**2)
-            mask[d < 8.] = True
+            mask[d < 12.] = True
     nimage = image * 1.
     nimage[mask] = np.nan
-    G = Gaussian2DKernel(7.)
+    G = Gaussian2DKernel(15.)
     back = convolve(nimage, G, boundary='wrap')
     info[-1][0] = image - back
     F.writeto(name, overwrite=True)
