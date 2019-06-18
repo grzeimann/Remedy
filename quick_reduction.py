@@ -786,6 +786,7 @@ for i, ui in enumerate(allifus):
     daofind = DAOStarFinder(fwhm=4.0, threshold=7. * std, exclude_border=True) 
     sources = daofind(image)
     log.info('Found %i sources' % len(sources))
+    mask = np.zeros(image.shape, dtype=bool)
     if len(sources):
         positions = (sources['xcentroid'], sources['ycentroid'])
         apertures = CircularAperture(positions, r=5.)
@@ -815,6 +816,16 @@ for i, ui in enumerate(allifus):
                                         sources['ycentroid']*0.75 - 23. + ifuy)
         Sources[:, 9], Sources[:, 10] = (RA-Sources[:,5], Dec-Sources[:, 6])
         Total_sources.append(Sources)
+        
+        yind, xind = np.indices(image.shape)
+        for s in sources:
+            d = np.sqrt((s['xcentroid'] - xind)**2 + (s['ycentroid']-yind)**2)
+            mask[d < 8.] = True
+    nimage = image * 1.
+    nimage[mask] = np.nan
+    G = Gaussian2DKernel(7.)
+    back = convolve(nimage, G, boundary='wrap')
+    info[-1][0] = image - back
     F.writeto(name, overwrite=True)
 
 Total_sources = np.vstack(Total_sources)
@@ -839,7 +850,6 @@ rot = np.median(np.rad2deg(np.median(da)))
 for i in [rot, 360. - rot]:
     if np.abs(A.rot - i) < 1.5:
         rot = i
-print(A.rot, rot)
 A.rot = rot * 1.
 A.tp = A.setup_TP(RA0, Dec0, A.rot, A.x0,  A.y0)
 mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
