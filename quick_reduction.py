@@ -875,7 +875,7 @@ for j in np.arange(2):
         if Sources is not None:
             print(Sources[:,:5])
             Total_sources.append(Sources) 
-        Total_sources = np.vstack(Total_sources)
+    Total_sources = np.vstack(Total_sources)
     f = Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist',
                                       'Cgmag', 'RA', 'Dec', 'fx', 'fy', 'dra',
                                       'ddec'])
