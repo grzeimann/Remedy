@@ -879,7 +879,7 @@ D[D==0.] = 999.
 noneigh = np.min(D, axis=0) > 8.
 lowifu = f['fy'][sel] < 0.
 nsel = (np.sqrt(dr**2 + dd**2) < 1.) * noneigh * lowifu
-plt.scatter(dr, dd, alpha=0.3, s=25)
+plt.scatter(dr, dd, alpha=0.3, s=45)
 plt.axis([-1.5, 1.5, -1.5, 1.5])
 plt.savefig('astrometry_%s_%07d.png'  % (args.date, args.observation), dpi=300)
 plt.figure(figsize=(9, 8))
