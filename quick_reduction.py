@@ -851,8 +851,8 @@ A.tp = A.setup_TP(RA0, Dec0, A.rot, A.x0,  A.y0)
 
 for i in info:
     imscale = 0.75
-    crx = 23. / 0.75
-    cry = 23. / 0.75
+    crx = 23. / 0.75 + 1.
+    cry = 23. / 0.75 + 1.
     ifuslot = '%03d' % i[3]
     A.get_ifuslot_projection(ifuslot, imscale, crx, cry)
     wcs = A.tp_ifuslot
