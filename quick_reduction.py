@@ -886,6 +886,7 @@ Mg = Total_sources[sel, 4][nsel]
 mg = Total_sources[sel, 2][nsel]
 ss = (Mg > 15) * (Mg < 20)
 mean, median, std = sigma_clipped_stats((mg - Mg)[ss])
+plt.gca().set_position([0.15, 0.15, 0.7, 0.7])
 plt.scatter(Mg, mg - Mg - median, alpha=0.4, s=75)
 plt.plot([15, 20], [std, std], 'r--', lw=1)
 plt.plot([15, 20], [-std, -std], 'r--', lw=1)
