@@ -821,11 +821,6 @@ for i, ui in enumerate(allifus):
         for s in sources:
             d = np.sqrt((s['xcentroid'] - xind)**2 + (s['ycentroid']-yind)**2)
             mask[d < 12.] = True
-    nimage = image * 1.
-    nimage[mask] = np.nan
-    G = Gaussian2DKernel(15.)
-    back = convolve(nimage, G, boundary='wrap')
-    info[-1][0] = image - back
     F.writeto(name, overwrite=True)
 
 Total_sources = np.vstack(Total_sources)
