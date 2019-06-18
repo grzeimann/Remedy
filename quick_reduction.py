@@ -302,7 +302,9 @@ def get_mastertwi(files, masterbias, twitarfile):
 
 def get_twi_tarfile(pathname, date):
     datec = date
-    daten = date
+    datec_ = datetime(int(date[:4]), int(date[4:6]), int(date[6:]))
+    daten_ = datec_ + timedelta(days=1)
+    daten = '%04d%02d%02d' % (daten_.year, daten_.month, daten_.day)
     pathnamen = pathname[:]
     twitarfile = None
     while twitarfile is None:
@@ -316,15 +318,16 @@ def get_twi_tarfile(pathname, date):
             flag = True
             while flag:
                 a = T.next()
-            try:
-                name = a.name
-            except:
-                flag = False
-            if name[-5:] == '.fits':
-                if name[-8:-5] == 'twi':
-                    twitarfile = tarfolder
-                    break
-                flag = False
+                try:
+                    name = a.name
+                except:
+                    flag = False
+                if name[-5:] == '.fits':
+                    if name[-8:-5] == 'twi':
+                        twitarfile = tarfolder
+                    flag = False
+            if twitarfile is not None:
+                break
     return twitarfile
 
 def roll_through_dates(pathname, date):
