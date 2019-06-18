@@ -400,6 +400,7 @@ def get_sci_twi_files():
     if scitarfile is None:
         pathname = build_path(args.rootdir, args.date, '*', '*', '*',
                              base='twi')
+        print(pathname)
         twinames = roll_through_dates(pathname, args.date)
         twitarfile = None
     else:
@@ -419,6 +420,8 @@ def reduce_ifuslot(ifuloop, h5table):
     # Check if tarred
 
     scinames, twinames, scitarfile, twitarfile = get_sci_twi_files()
+    print(scinames, twinames, scitarfile, twitarfile)
+    sys.exit(1)
 
     for ind in ifuloop:
         ifuslot = '%03d' % h5table[ind]['ifuslot']
