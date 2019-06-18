@@ -17,6 +17,7 @@ import sys
 
 if len(sys.argv) > 0:
     datestr = sys.argv[1]
+    print(datestr)
     date = datestr
 else:
     datestr = ''
