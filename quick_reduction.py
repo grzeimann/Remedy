@@ -446,14 +446,14 @@ def reduce_ifuslot(ifuloop, h5table):
                            format='ascii.fixed_width_two_line')
             throughput = np.array([T['throughput']]*112)
         
-        fnames_glob = '2*%s%s*%s.fits' % (ifuslot, amp, 'twi')
+        fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'twi')
         twibase = fnmatch.filter(twinames, fnames_glob)
         log.info('Making mastertwi for %s%s' % (ifuslot, amp))
         print(twibase)
         masterflt = get_mastertwi(twibase, masterbias, twitarfile)
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
 
-        fnames_glob = '2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
+        fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
         filenames = fnmatch.filter(scinames, fnames_glob)
         for j, fn in enumerate(filenames):
             sciimage, scierror = base_reduction(fn, tfile=scitarfile)
