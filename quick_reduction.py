@@ -449,7 +449,6 @@ def reduce_ifuslot(ifuloop, h5table):
         fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'twi')
         twibase = fnmatch.filter(twinames, fnames_glob)
         log.info('Making mastertwi for %s%s' % (ifuslot, amp))
-        print(twibase)
         masterflt = get_mastertwi(twibase, masterbias, twitarfile)
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
 
