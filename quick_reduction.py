@@ -402,6 +402,7 @@ def get_sci_twi_files():
                              base='twi')
         print(pathname)
         twinames = roll_through_dates(pathname, args.date)
+        print(twinames)
         twitarfile = None
     else:
         file_glob = build_path(args.rootdir, args.date, '*',
