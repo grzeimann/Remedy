@@ -46,7 +46,7 @@ sns.set_style('whitegrid')
 # Amps
 amps = ['LL', 'LU', 'RL', 'RU']
 # Ignore these ifuslots
-badifuslots = np.array([67, 46])
+badifuslots = np.array([67, 46, 84, 83, 96, 104, 86, 42, 91, 88, 86, 95, 75])
 # Default dither pattern for 3 exposures
 dither_pattern = np.array([[0., 0.], [1.27, -0.73], [1.27, 0.73]])
 # Rectified wavelength
@@ -637,7 +637,10 @@ u_ifuslots = np.unique(ifuslots)
 sel1 = list(np.where(args.ifuslot == ifuslots)[0])
 ifuslotn = get_slot_neighbors(args.ifuslot, u_ifuslots,
                               dist=args.neighbor_dist)
+print(len(ifuslotn))
 ifuslotn = np.setdiff1d(ifuslotn, badifuslots)
+print(len(ifuslotn))
+
 IFUs = get_ifuslots()
 allifus = [args.ifuslot]
 for ifuslot in ifuslotn:
@@ -881,12 +884,12 @@ nsel = (np.sqrt(dr**2 + dd**2) < 1.) * noneigh * lowifu
 plt.scatter(dr, dd, alpha=0.3, s=25)
 plt.axis([-1.5, 1.5, -1.5, 1.5])
 plt.savefig('astrometry.png', dpi=300)
-plt.figure(figsize=(12, 8))
+plt.figure(figsize=(9, 8))
 Mg = Total_sources[sel, 4][nsel]
 mg = Total_sources[sel, 2][nsel]
 ss = (Mg > 15) * (Mg < 20)
 mean, median, std = sigma_clipped_stats((mg - Mg)[ss])
-plt.gca().set_position([0.15, 0.15, 0.7, 0.7])
+plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
 plt.scatter(Mg, mg - Mg - median, alpha=0.4, s=75)
 plt.plot([15, 20], [std, std], 'r--', lw=1)
 plt.plot([15, 20], [-std, -std], 'r--', lw=1)
