@@ -817,11 +817,7 @@ for i, ui in enumerate(allifus):
                                         sources['ycentroid']*0.75 - 23. + ifuy)
         Sources[:, 9], Sources[:, 10] = (RA-Sources[:,5], Dec-Sources[:, 6])
         Total_sources.append(Sources)
-        
-        yind, xind = np.indices(image.shape)
-        for s in sources:
-            d = np.sqrt((s['xcentroid'] - xind)**2 + (s['ycentroid']-yind)**2)
-            mask[d < 12.] = True
+        print(Sources[:,:5])
     F.writeto(name, overwrite=True)
 
 Total_sources = np.vstack(Total_sources)
