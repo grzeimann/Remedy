@@ -875,8 +875,9 @@ dd = 3600. * (f['Dec'][sel] - mDec)
 D = np.sqrt((f['fx'][sel] - f['fx'][sel][:, np.newaxis])**2 +
             (f['fy'][sel] - f['fy'][sel][:, np.newaxis])**2)
 D[D==0.] = 999.
-noneigh = np.min(D, axis=0) > 8.
-nsel = (np.sqrt(dr**2 + dd**2) < 1.) * noneigh
+noneigh = np.min(D, axis=0) > 12.
+lowifu = f['fy'][sel] < 0.
+nsel = (np.sqrt(dr**2 + dd**2) < 1.) * noneigh * lowifu
 plt.scatter(dr, dd, alpha=0.3, s=25)
 plt.axis([-1.5, 1.5, -1.5, 1.5])
 plt.savefig('astrometry.png', dpi=300)
