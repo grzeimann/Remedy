@@ -749,7 +749,7 @@ ra, dec, pa = get_ra_dec_from_header(tfile, fn)
 
 # Query catalog Sources in the area
 log.info('Querying Pan-STARRS at: %0.5f %0.5f' % (ra, dec))
-pname = 'Panstarrs_%0.6f_%0.5f_%0.4f.dat'
+pname = 'Panstarrs_%0.6f_%0.5f_%0.4f.dat' % (ra, dec, 11. / 60.)
 if op.exists(pname):
     Pan = Table.read(pname, format='ascii.fixed_width_two_line')
 else:
