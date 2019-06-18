@@ -709,8 +709,9 @@ def fit_astrometry(f, A):
     mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
     DR = (f['RA'][sel] - mRA)
     DD = (f['Dec'][sel] - mDec)
-    print('OFFSET: %0.3f, %0.3f, %0.2f' %(np.median(DR), np.median(DD),
-                                          A.rot-rot_i))
+    print('%s_%07d offsets: %0.3f, %0.3f, %0.2f' %(args.date, args.observation,
+                                                   np.median(DR), np.median(DD),
+                                                   A.rot-rot_i))
     RA0 += np.median(DR)
     Dec0 += np.median(DD)
     A.tp = A.setup_TP(RA0, Dec0, A.rot, A.x0,  A.y0)
