@@ -300,8 +300,34 @@ def get_mastertwi(files, masterbias, twitarfile):
     norm = np.median(twi_array, axis=(1, 2))[:, np.newaxis, np.newaxis]
     return np.median(twi_array / norm, axis=0) * np.median(norm)
 
+def get_twi_tarfile(pathname, date):
+    datec = date
+    daten = date
+    pathnamen = pathname[:]
+    twitarfile = None
+    while twitarfile is None:
+        datec_ = datetime(int(daten[:4]), int(daten[4:6]), int(daten[6:]))
+        daten_ = datec_ - timedelta(days=1)
+        daten = '%04d%02d%02d' % (daten_.year, daten_.month, daten_.day)
+        pathnamen = pathname.replace(datec, daten)
+        tarfolders = glob.glob(pathnamen)
+        for tarfolder in tarfolders:
+            T = tarfile.open(tarfolder, 'r')
+            flag = True
+            while flag:
+                a = T.next()
+            try:
+                name = a.name
+            except:
+                flag = False
+            if name[-5:] == '.fits':
+                if name[-8:-5] == 'twi':
+                    twitarfile = tarfolder
+                    break
+                flag = False
+    return twitarfile
 
-def get_cal_path(pathname, date):
+def roll_through_dates(pathname, date):
     '''
     Get appropriate cals on the closest night back 60 days in time
     '''
@@ -319,7 +345,7 @@ def get_cal_path(pathname, date):
         if cnt > 60:
             log.error('Could not find cal within 60 days.')
             break
-    return pathnamen, daten
+    return glob.glob(pathnamen)
 
 
 def get_script_path():
@@ -374,40 +400,14 @@ def get_sci_twi_files():
     if scitarfile is None:
         pathname = build_path(args.rootdir, args.date, '*', '*', '*',
                              base='twi')
-        datec = args.date
-        daten = args.date
-        cnt = 0
-        pathnamen = pathname[:]
-        while len(glob.glob(pathnamen)) == 0:
-            datec_ = datetime(int(daten[:4]), int(daten[4:6]), int(daten[6:]))
-            daten_ = datec_ - timedelta(days=1)
-            daten = '%04d%02d%02d' % (daten_.year, daten_.month, daten_.day)
-            pathnamen = pathname.replace(datec, daten)
-            cnt += 1
-            log.info(pathnamen)
-            if cnt > 60:
-                log.error('Could not find cal within 60 days.')
-                break
-        twinames = glob.glob(pathnamen)
+        twinames = roll_through_dates(pathname, args.date)
         twitarfile = None
     else:
         file_glob = build_path(args.rootdir, args.date, '*',
                            '047', 'LL')
         path = splitall(file_glob)
-        tarfolders = glob.glob(op.join(*path[:-3]) + ".tar")
-        for tarfolder in tarfolders:
-            T = tarfile.open(tarfolder, 'r')
-            flag = True
-            while flag:
-                a = T.next()
-            try:
-                name = a.name
-            except:
-                flag = False
-            if name[-5:] == '.fits':
-                if name[-8:-5] == 'twi':
-                    twitarfile = tarfolder
-                flag = False
+        tarname = op.join(*path[:-3]) + ".tar"
+        twitarfile = get_twi_tarfile(tarname, args.date)
         with tarfile.open(twitarfile) as tf:
             twinames = tf.getnames()
     return scinames, twinames, scitarfile, twitarfile
