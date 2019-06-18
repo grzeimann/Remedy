@@ -400,16 +400,16 @@ def get_sci_twi_files():
     if scitarfile is None:
         pathname = build_path(args.rootdir, args.date, '*', '*', '*',
                              base='twi')
-        print(pathname)
         twinames = roll_through_dates(pathname, args.date)
-        print(twinames)
         twitarfile = None
     else:
         file_glob = build_path(args.rootdir, args.date, '*',
                            '047', 'LL')
         path = splitall(file_glob)
         tarname = op.join(*path[:-3]) + ".tar"
+        print(tarname)
         twitarfile = get_twi_tarfile(tarname, args.date)
+        print(twitarfile)
         with tarfile.open(twitarfile) as tf:
             twinames = tf.getnames()
     return scinames, twinames, scitarfile, twitarfile
