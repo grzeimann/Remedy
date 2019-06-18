@@ -287,14 +287,13 @@ def base_reduction(filename, get_header=False, tfile=None):
     return a, E
 
 
-def get_mastertwi(twi_path, masterbias):
+def get_mastertwi(files, masterbias, twitarfile):
     '''
     Make a master flat image from the twilight frames
     '''
-    files = glob.glob(twi_path)
     listtwi = []
     for filename in files:
-        a, e = base_reduction(filename)
+        a, e = base_reduction(filename, tfile=twitarfile)
         a[:] -= masterbias
         listtwi.append(a)
     twi_array = np.array(listtwi, dtype=float)
@@ -359,11 +358,68 @@ def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
     sci_spectrum[~np.isfinite(sci_spectrum)] = 0.0
     return twi_spectrum, sci_spectrum / 2.
 
+def get_sci_twi_files():
+    file_glob = build_path(args.rootdir, args.date, args.observation,
+                           '047', 'LL')
+    path = splitall(file_glob)
+    scitarfile = op.join(*path[:-3]) + ".tar"
+    if op.exists(scitarfile):
+        with tarfile.open(scitarfile) as tf:
+            scinames = tf.getnames()
+    else:
+        file_glob = build_path(args.rootdir, args.date, args.observation,
+                           '*', '*')
+        scinames = glob.glob(file_glob)
+        scitarfile = None
+    if scitarfile is None:
+        pathname = build_path(args.rootdir, args.date, '*', '*', '*',
+                             base='twi')
+        datec = args.date
+        daten = args.date
+        cnt = 0
+        pathnamen = pathname[:]
+        while len(glob.glob(pathnamen)) == 0:
+            datec_ = datetime(int(daten[:4]), int(daten[4:6]), int(daten[6:]))
+            daten_ = datec_ - timedelta(days=1)
+            daten = '%04d%02d%02d' % (daten_.year, daten_.month, daten_.day)
+            pathnamen = pathname.replace(datec, daten)
+            cnt += 1
+            log.info(pathnamen)
+            if cnt > 60:
+                log.error('Could not find cal within 60 days.')
+                break
+        twinames = glob.glob(pathnamen)
+        twitarfile = None
+    else:
+        file_glob = build_path(args.rootdir, args.date, '*',
+                           '047', 'LL')
+        path = splitall(file_glob)
+        tarfolders = glob.glob(op.join(*path[:-3]) + ".tar")
+        for tarfolder in tarfolders:
+            T = tarfile.open(tarfolder, 'r')
+            flag = True
+            while flag:
+                a = T.next()
+            try:
+                name = a.name
+            except:
+                flag = False
+            if name[-5:] == '.fits':
+                if name[-8:-5] == 'twi':
+                    twitarfile = tarfolder
+                flag = False
+        with tarfile.open(twitarfile) as tf:
+            twinames = tf.getnames()
+    return scinames, twinames, scitarfile, twitarfile
 
 def reduce_ifuslot(ifuloop, h5table):
     p, t, s = ([], [], [])
     mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.25
     mult_fac *= 1e29 * def_wave**2 / 3e18
+    # Check if tarred
+
+    scinames, twinames, scitarfile, twitarfile = get_sci_twi_files()
+
     for ind in ifuloop:
         ifuslot = '%03d' % h5table[ind]['ifuslot']
         amp = h5table[ind]['amp'].astype('U13')
@@ -386,39 +442,17 @@ def reduce_ifuslot(ifuloop, h5table):
             T = Table.read(op.join(DIRNAME, 'CALS/throughput.txt'),
                            format='ascii.fixed_width_two_line')
             throughput = np.array([T['throughput']]*112)
-        twibase = build_path(args.rootdir, args.date, '*', ifuslot, amp,
-                             base='twi')
-        twibase, newdate = get_cal_path(twibase, args.date)
-    
-        if newdate != args.date:
-            log.info('Found twi files on %s and using them for %s' %
-                     (newdate, args.date))
+        
+        fnames_glob = '2*%s%s*%s.fits' % (ifuslot, amp, 'twi')
+        twibase = fnmatch.filter(twinames, fnames_glob)
         log.info('Making mastertwi for %s%s' % (ifuslot, amp))
-        masterflt = get_mastertwi(twibase, masterbias)
+        masterflt = get_mastertwi(twibase, masterbias, twitarfile)
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
 
-        file_glob = build_path(args.rootdir, args.date, args.observation,
-                               ifuslot, amp)
-        
-        filenames = sorted(glob.glob(file_glob))
-        
-        tfile = None
-        if len(filenames) == 0:
-            # do we have a tar?
-            path = splitall(file_glob)
-            tfile = op.join(*path[:-3]) + ".tar"
-            if op.exists(tfile):
-                print("This observation is tarred. Trying workaround...")
-                fnames_glob = op.join(*path[-4:])
-                with tarfile.open(tfile) as tf:
-                    filenames = fnmatch.filter(tf.getnames(), fnames_glob)
-            else:
-                print("Couldn't find observation: expanding {} was empty, and"
-                      "{} doesn't exist.".format(file_glob,tfile))
-                sys.exit(-1)
-
+        fnames_glob = '2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
+        filenames = fnmatch.filter(scinames, fnames_glob)
         for j, fn in enumerate(filenames):
-            sciimage, scierror = base_reduction(fn, tfile=tfile)
+            sciimage, scierror = base_reduction(fn, tfile=scitarfile)
             sciimage[:] = sciimage - masterbias
             twi, spec = get_spectra(sciimage, masterflt, trace, wave, def_wave)
             twi[:] = safe_division(twi, amp2amp*throughput)
@@ -430,7 +464,7 @@ def reduce_ifuslot(ifuloop, h5table):
     
     p, t, s = [np.vstack(j) for j in [p, t, s]]
     
-    return p, t, s, fn , tfile
+    return p, t, s, fn , scitarfile
             
 
 def make_fits(image, fn, name, ifuslot, tfile=None, ra=None,
