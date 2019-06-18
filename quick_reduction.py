@@ -637,9 +637,7 @@ u_ifuslots = np.unique(ifuslots)
 sel1 = list(np.where(args.ifuslot == ifuslots)[0])
 ifuslotn = get_slot_neighbors(args.ifuslot, u_ifuslots,
                               dist=args.neighbor_dist)
-print(len(ifuslotn))
 ifuslotn = np.setdiff1d(ifuslotn, badifuslots)
-print(len(ifuslotn))
 
 IFUs = get_ifuslots()
 allifus = [args.ifuslot]
@@ -883,7 +881,7 @@ lowifu = f['fy'][sel] < 0.
 nsel = (np.sqrt(dr**2 + dd**2) < 1.) * noneigh * lowifu
 plt.scatter(dr, dd, alpha=0.3, s=25)
 plt.axis([-1.5, 1.5, -1.5, 1.5])
-plt.savefig('astrometry.png', dpi=300)
+plt.savefig('astrometry_%s_%07d.png'  % (args.date, args.observation), dpi=300)
 plt.figure(figsize=(9, 8))
 Mg = Total_sources[sel, 4][nsel]
 mg = Total_sources[sel, 2][nsel]
@@ -897,7 +895,7 @@ plt.xlim([15, 20])
 plt.ylim([-0.5, 0.5])
 plt.xlabel('Pan-STARRS g (AB mag)', fontsize=20, labelpad=20)
 plt.ylabel('VIRUS g - Pan-STARRS g (AB mag)', fontsize=20, labelpad=20)
-plt.savefig('mag_offset.png', dpi=300)
+plt.savefig('mag_offset_%s_%07d.png'  % (args.date, args.observation), dpi=300)
 sys.exit(1)
 
 
