@@ -699,6 +699,7 @@ def fit_astrometry(f, A):
     da = a1 - a2
     sel1 = np.abs(da) > np.pi
     da[sel1] -= np.sign(da[sel1]) * 2. * np.pi
+    rot_i = A.rot * 1.
     rot = np.median(np.rad2deg(np.median(da)))
     for i in [rot, 360. - rot]:
         if np.abs(A.rot - i) < 1.5:
@@ -708,6 +709,8 @@ def fit_astrometry(f, A):
     mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
     DR = (f['RA'][sel] - mRA)
     DD = (f['Dec'][sel] - mDec)
+    print('OFFSET: %0.3f, %0.3f, %0.2f' %(np.median(DR), np.median(DD),
+                                          A.rot-rot_i))
     RA0 += np.median(DR)
     Dec0 += np.median(DD)
     A.tp = A.setup_TP(RA0, Dec0, A.rot, A.x0,  A.y0)
