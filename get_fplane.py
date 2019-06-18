@@ -13,6 +13,14 @@ except ImportError:
 
 import datetime
 now = datetime.datetime.now()
+import sys
+
+if len(sys.argv) > 0:
+    datestr = sys.argv[1]
+    date = datestr
+else:
+    datestr = ''
+    date = '%04d%02d%02d' % (now.year, now.month, now.day)
 
 def get_fplane(filename, datestr='', actpos=False, full=True):
 
@@ -37,5 +45,5 @@ def get_fplane(filename, datestr='', actpos=False, full=True):
     with open(filename, 'w') as f:
         f.write(resp.read().decode())
 
-date = '%04d%02d%02d' % (now.year, now.month, now.day)
-get_fplane('fplane%s.txt' % date)
+
+get_fplane('fplane%s.txt' % date, datestr=datestr)
