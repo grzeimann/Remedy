@@ -882,10 +882,15 @@ plt.scatter(dr, dd, alpha=0.3, s=25)
 plt.axis([-1.5, 1.5, -1.5, 1.5])
 plt.savefig('astrometry.png', dpi=300)
 plt.figure(figsize=(12, 8))
-plt.scatter(Total_sources[sel, 4][nsel], Total_sources[sel, 2][nsel] -
-            Total_sources[sel, 4][nsel])
+Mg = Total_sources[sel, 4][nsel]
+mg = Total_sources[sel, 2][nsel]
+ss = (Mg > 15) * (Mg < 20)
+mean, median, std = sigma_clipped_stats((mg - Mg)[ss])
+plt.scatter(Mg, mg - Mg - median, alpha=0.5, s=45)
+plt.plot([15, 20], [std, std], 'r--', lw=1)
+plt.plot([15, 20], [-std, -std], 'r--', lw=1)
 plt.xlim([15, 22])
-plt.ylim([-0.5, 1.5])
+plt.ylim([-0.5, 0.5])
 plt.savefig('mag_offset.png', dpi=300)
 sys.exit(1)
 
