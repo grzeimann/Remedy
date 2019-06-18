@@ -898,16 +898,18 @@ with open('ds9_%s_%07d.reg' % (args.date, args.observation), 'w') as k:
 sel = f['dist'] < 2.5
 mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
 plt.figure(figsize=(9, 8))
+plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
 dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - mRA)
 dd = 3600. * (f['Dec'][sel] - mDec)
 D = np.sqrt((f['fx'][sel] - f['fx'][sel][:, np.newaxis])**2 +
             (f['fy'][sel] - f['fy'][sel][:, np.newaxis])**2)
 D[D==0.] = 999.
 noneigh = np.min(D, axis=0) > 8.
-
 nsel = (np.sqrt(dr**2 + dd**2) < 1.) * noneigh 
-plt.scatter(dr, dd, alpha=0.3, s=45)
+plt.scatter(dr, dd, alpha=0.75, s=45)
 plt.axis([-1.5, 1.5, -1.5, 1.5])
+plt.xlabel(r'$\Delta$ RA (")', fontsize=20, labelpad=20)
+plt.ylabel(r'$\Delta$ Dec (")', fontsize=20, labelpad=20)
 plt.savefig('astrometry_%s_%07d.png'  % (args.date, args.observation), dpi=300)
 plt.figure(figsize=(9, 8))
 Mg = Total_sources[sel, 4][nsel]
@@ -915,7 +917,7 @@ mg = Total_sources[sel, 2][nsel]
 ss = (Mg > 15) * (Mg < 20)
 mean, median, std = sigma_clipped_stats((mg - Mg)[ss])
 plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
-plt.scatter(Mg, mg - Mg - median, alpha=0.4, s=75)
+plt.scatter(Mg, mg - Mg - median, alpha=0.75, s=75)
 plt.plot([15, 20], [std, std], 'r--', lw=1)
 plt.plot([15, 20], [-std, -std], 'r--', lw=1)
 plt.xlim([15, 20])
