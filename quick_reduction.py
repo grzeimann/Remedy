@@ -614,6 +614,68 @@ def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
     image = np.sum(images * weights[:, np.newaxis, np.newaxis], axis=0) 
     return image
 
+def match_to_archive(sources, image, A, ifuslot, scale, ran, coords):
+    if len(sources) == 0:
+        return None
+
+    positions = (sources['xcentroid'], sources['ycentroid'])
+    apertures = CircularAperture(positions, r=5.)
+    phot_table = aperture_photometry(image, apertures,
+                                     mask=~np.isfinite(image))
+    gmags = np.where(phot_table['aperture_sum'] > 0.,
+                     -2.5 * np.log10(phot_table['aperture_sum']) + 23.9,
+                     99.)
+    Sources = np.zeros((len(sources), 11))
+    Sources[:, 0], Sources[:, 1] = (sources['xcentroid'], sources['ycentroid'])
+    Sources[:, 2] = gmags
+    RA, Dec = A.get_ifupos_ra_dec('%03d' % ifuslot,
+                                  Sources[:, 0]*scale + ran[0],
+                                  Sources[:, 1]*scale + ran[2])
+    ifu = A.fplane.by_ifuslot('%03d' % ifuslot)
+    ifux, ifuy = (ifu.y, ifu.x) 
+
+    # Find closest bright source, use that for offset, then match
+    # Make image class that combines, does astrometry, detections, updates coords
+    C = SkyCoord(RA*units.deg, Dec*units.deg, frame='fk5')
+    idx, d2d, d3d = match_coordinates_sky(C, coords)
+    Sources[:, 3] = d2d.arcsecond
+    Sources[:, 4] = gC[idx]
+    Sources[:, 5] = coords[idx].ra.deg
+    Sources[:, 6] = coords[idx].dec.deg
+    Sources[:, 7], Sources[:, 8] = (sources['xcentroid']*scale + ran[0] + ifux,
+                                    sources['ycentroid']*scale + ran[2] + ifuy)
+    Sources[:, 9], Sources[:, 10] = (RA-Sources[:,5], Dec-Sources[:, 6])
+    return Sources
+
+def fit_astrometry(f, A):
+    P = Polynomial2D(1)
+    fitter = LevMarLSQFitter()
+    sel = f['dist'] < 7.
+    fitr = fitter(P, f['fx'][sel], f['fy'][sel], f['RA'][sel])
+    fitd = fitter(P, f['fx'][sel], f['fy'][sel], f['Dec'][sel])
+    RA0 = fitr(0., 0.)
+    Dec0 = fitd(0., 0.)
+    dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - RA0)
+    dd = 3600. * (f['Dec'][sel] - Dec0)
+    a1 = np.arctan2(dd, dr)
+    a2 = np.arctan2(f['fy'][sel], f['fx'][sel])
+    da = a1 - a2
+    sel1 = np.abs(da) > np.pi
+    da[sel1] -= np.sign(da[sel1]) * 2. * np.pi
+    rot = np.median(np.rad2deg(np.median(da)))
+    for i in [rot, 360. - rot]:
+        if np.abs(A.rot - i) < 1.5:
+            rot = i
+    A.rot = rot * 1.
+    A.tp = A.setup_TP(RA0, Dec0, A.rot, A.x0,  A.y0)
+    mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
+    DR = (f['RA'][sel] - mRA)
+    DD = (f['Dec'][sel] - mDec)
+    RA0 += np.median(DR)
+    Dec0 += np.median(DD)
+    A.tp = A.setup_TP(RA0, Dec0, A.rot, A.x0,  A.y0)
+    return A
+
 # GET DIRECTORY NAME FOR PATH BUILDING
 DIRNAME = get_script_path()
 instrument = 'virus'
@@ -760,108 +822,75 @@ raC, decC, gC = (np.array(Pan['raMean']), np.array(Pan['decMean']),
                  np.array(Pan['gMeanApMag']))
 coords = SkyCoord(raC*units.degree, decC*units.degree, frame='fk5')
 
-# Gather info from larger array
-# Make photometric image
-# Make into fits file with wcs
-# Find sources using DAOStarFinder
-# Get photometry/astrometry for sources
-# Match to catalog
-# Correct astrometry
-# Match again
-# Get photometric comparison
+
+# Make g-band image and find sources
 Total_sources = []
 info = []
+# Image scale and range
+scale = 0.75
+ran = [-23., 25., -23., 25.]
 for i, ui in enumerate(allifus):
+    # Get the info for the given ifuslot
     log.info('Making collapsed frame for %03d' % ui)
     N = 448 * nexp
     data = scispectra[N*i:(i+1)*N]
     F = np.nanmedian(ftf[N*i:(i+1)*N], axis=1)
     P = pos[N*i:(i+1)*N]
     name = '%s_%07d_%03d.fits' % (args.date, args.observation, ui)
+    
+    # Make g-band image
     image = make_photometric_image(P[:, 0], P[:, 1], data, filtg, F > 0.5,
                                    ADRx, 0.*ADRx, nchunks=11,
-                                   ran=[-23, 25, -23, 25],  scale=0.75)
+                                   ran=ran,  scale=scale)
+    
+    # Make full fits file with wcs info (using default header)
     F, A = make_fits(image, fn, name, ui, tfile)
-    info.append([image, fn, name, ui, tfile])
     mean, median, std = sigma_clipped_stats(image, sigma=3.0)
     daofind = DAOStarFinder(fwhm=4.0, threshold=7. * std, exclude_border=True) 
     sources = daofind(image)
     log.info('Found %i sources' % len(sources))
-    mask = np.zeros(image.shape, dtype=bool)
-    if len(sources):
-        positions = (sources['xcentroid'], sources['ycentroid'])
-        apertures = CircularAperture(positions, r=5.)
-        phot_table = aperture_photometry(image, apertures,
-                                         mask=~np.isfinite(image))
-        
-        gmags = np.where(phot_table['aperture_sum'] > 0.,
-                         -2.5 * np.log10(phot_table['aperture_sum']) + 23.9,
-                         99.)
-        Sources = np.zeros((len(sources), 11))
-        Sources[:, 0], Sources[:, 1] = (sources['xcentroid'], sources['ycentroid'])
-        Sources[:, 2] = gmags
-        RA, Dec = A.get_ifupos_ra_dec('%03d' % ui, Sources[:, 0]*0.75 - 23.,
-                                      Sources[:, 1]*0.75 - 23.)
-        ifu = A.fplane.by_ifuslot('%03d' % ui)
-        ifux, ifuy = (ifu.y, ifu.x) 
-
-        # Find closest bright source, use that for offset, then match
-        # Make image class that combines, does astrometry, detections, updates coords
-        C = SkyCoord(RA*units.deg, Dec*units.deg, frame='fk5')
-        idx, d2d, d3d = match_coordinates_sky(C, coords)
-        Sources[:, 3] = d2d.arcsecond
-        Sources[:, 4] = gC[idx]
-        Sources[:, 5] = coords[idx].ra.deg
-        Sources[:, 6] = coords[idx].dec.deg
-        Sources[:, 7], Sources[:, 8] = (sources['xcentroid']*0.75 - 23. + ifux,
-                                        sources['ycentroid']*0.75 - 23. + ifuy)
-        Sources[:, 9], Sources[:, 10] = (RA-Sources[:,5], Dec-Sources[:, 6])
-        Total_sources.append(Sources)
+    
+    # Keep certain info for new loops
+    info.append([image, fn, name, ui, tfile, A, sources, F])
+    
+    # Match sources to archive catalog
+    Sources = match_to_archive(sources, image, A, ui, scale, ran, coords)
+    if Sources is not None:
         print(Sources[:,:5])
-    F.writeto(name, overwrite=True)
+        Total_sources.append(Sources) 
 
+# Write temporary info out
 Total_sources = np.vstack(Total_sources)
 f = Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist', 'Cgmag',
                               'RA', 'Dec', 'fx', 'fy', 'dra', 'ddec'])
 f.write('sources.dat', format='ascii.fixed_width_two_line')
-P = Polynomial2D(1)
-fitter = LevMarLSQFitter()
-sel = f['dist'] < 7.
-fitr = fitter(P, f['fx'][sel], f['fy'][sel], f['RA'][sel])
-fitd = fitter(P, f['fx'][sel], f['fy'][sel], f['Dec'][sel])
-RA0 = fitr(0., 0.)
-Dec0 = fitd(0., 0.)
-dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - RA0)
-dd = 3600. * (f['Dec'][sel] - Dec0)
-a1 = np.arctan2(dd, dr)
-a2 = np.arctan2(f['fy'][sel], f['fx'][sel])
-da = a1 - a2
-sel1 = np.abs(da) > np.pi
-da[sel1] -= np.sign(da[sel1]) * 2. * np.pi
-rot = np.median(np.rad2deg(np.median(da)))
-for i in [rot, 360. - rot]:
-    if np.abs(A.rot - i) < 1.5:
-        rot = i
-A.rot = rot * 1.
-A.tp = A.setup_TP(RA0, Dec0, A.rot, A.x0,  A.y0)
-mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
-DR = (f['RA'][sel] - mRA)
-DD = (f['Dec'][sel] - mDec)
-RA0 += np.median(DR)
-Dec0 += np.median(DD)
-A.tp = A.setup_TP(RA0, Dec0, A.rot, A.x0,  A.y0)
+
+# Fit astrometric offset
+for j in np.arange(2):
+    A = fit_astrometry(f, A)
+    Total_sources = []
+    for i, ui in enumerate(allifus):
+        image, fn, name, ui, tfile, Aold, sources, F = info[i]
+        Sources = match_to_archive(sources, image, A, ui, scale, ran, coords)
+        if Sources is not None:
+            print(Sources[:,:5])
+            Total_sources.append(Sources) 
+        Total_sources = np.vstack(Total_sources)
+    f = Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist',
+                                      'Cgmag', 'RA', 'Dec', 'fx', 'fy', 'dra',
+                                      'ddec'])
+    f.write('sources.dat', format='ascii.fixed_width_two_line')
 
 for i in info:
-    imscale = 0.75
-    crx = 23. / 0.75 + 1.
-    cry = 23. / 0.75 + 1.
+    crx = ran[0] / scale + 1.
+    cry = ran[2] / scale + 1.
     ifuslot = '%03d' % i[3]
-    A.get_ifuslot_projection(ifuslot, imscale, crx, cry)
+    A.get_ifuslot_projection(ifuslot, scale, crx, cry)
     wcs = A.tp_ifuslot
     header = wcs.to_header()
     F = fits.PrimaryHDU(np.array(i[0], 'float32'), header=header)
     F.writeto(i[2], overwrite=True)
-A.tp = A.setup_TP(RA0, Dec0, A.rot, A.x0,  A.y0)
+
 with open('ds9.reg', 'w') as k:
     MakeRegionFile.writeHeader(k)
     MakeRegionFile.writeSource(k, coords.ra.deg, coords.dec.deg)
