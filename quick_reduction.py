@@ -701,9 +701,8 @@ def fit_astrometry(f, A1, thresh=7.):
     Dec0 = fitd(0., 0.)
     dR = np.cos(np.deg2rad(Dec0)) * 3600. * (ra0 - RA0)
     dD = 3600. * (dec0 - Dec0)
-    print('%s_%07d initial offsets: %0.2f, %0.2f, %0.2f' %(args.date, 
-                                                           args.observation,
-                                                           dR, dD))
+    print('%s_%07d initial offsets: %0.2f, %0.2f' %(args.date, 
+                                                    args.observation, dR, dD))
     dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - RA0)
     dd = 3600. * (f['Dec'][sel] - Dec0)
     a1 = np.arctan2(dd, dr)
