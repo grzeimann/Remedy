@@ -22,7 +22,10 @@ from astropy import units as u
 from astropy.coordinates import SkyCoord
 from astropy.io.votable import parse_single_table
 from astropy.table import Table
-from astropy.vo.client import vos_catalog
+try:
+    from astropy.vo.client import vos_catalog
+except:
+    print("Can't find astropy.vo")
 from urllib import pathname2url as urlencode
 
 
