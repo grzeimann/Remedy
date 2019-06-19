@@ -17,7 +17,6 @@ import sys
 
 if len(sys.argv) > 1:
     datestr = sys.argv[1]
-    print(datestr)
     date = datestr
 else:
     datestr = ''
@@ -26,7 +25,7 @@ else:
 def get_fplane(filename, datestr='', actpos=False, full=True):
 
     url = 'https://luna.mpe.mpg.de/fplane/' + datestr
-    print(url)
+
     if actpos:
         url += '?actual_pos=1'
     else:
