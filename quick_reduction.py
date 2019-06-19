@@ -782,7 +782,11 @@ pos, twispectra, scispectra, fn, tfile = reduce_ifuslot(ifuloop, h5table)
 # Normalize twi spectra to correct fiber to fiber
 t = twispectra * 1.
 t[t< 1e-8] = np.nan
-g = t / np.nanmean(t, axis=0)[np.newaxis, :]
+if nslots > 10:
+    g = t / np.nanpercentile(t, 90, axis=0)[np.newaxis, :]
+else:
+    g = t / np.nanmean(t, axis=0)[np.newaxis, :]
+
 
 # Fiber to fiber is an interpolation of median binned normalized twi spectra
 a = np.array([np.nanmedian(f, axis=1) for f in np.array_split(g, 25, axis=1)]).swapaxes(0, 1)
