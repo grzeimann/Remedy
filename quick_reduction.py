@@ -688,6 +688,7 @@ def fit_astrometry(f, A):
     P = Polynomial2D(1)
     fitter = LevMarLSQFitter()
     sel = f['dist'] < 7.
+    print('Number of sources with 7": %i' % sel.sum())
     fitr = fitter(P, f['fx'][sel], f['fy'][sel], f['RA'][sel])
     fitd = fitter(P, f['fx'][sel], f['fy'][sel], f['Dec'][sel])
     ra0 = A.ra0 * 1.
@@ -935,8 +936,7 @@ for i in info:
     cry = ran[2] / scale + 1.
     ifuslot = '%03d' % i[3]
     A.get_ifuslot_projection(ifuslot, scale, crx, cry)
-    wcs = A.tp_ifuslot
-    header = wcs.to_header()
+    header = A.tp_ifuslot.to_header()
     F = fits.PrimaryHDU(np.array(i[0], 'float32'), header=header)
     F.writeto(i[2], overwrite=True)
 
