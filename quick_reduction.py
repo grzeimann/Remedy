@@ -687,11 +687,11 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords):
     Sources[:, 9], Sources[:, 10] = (RA-Sources[:,5], Dec-Sources[:, 6])
     return Sources
 
-def fit_astrometry(f, A1):
+def fit_astrometry(f, A1, thresh=7.):
     A = A1
     P = Polynomial2D(1)
     fitter = LevMarLSQFitter()
-    sel = f['dist'] < 7.
+    sel = f['dist'] < thresh
     print('Number of sources with 7": %i' % sel.sum())
     fitr = fitter(P, f['fx'][sel], f['fy'][sel], f['RA'][sel])
     fitd = fitter(P, f['fx'][sel], f['fy'][sel], f['Dec'][sel])
@@ -699,6 +699,11 @@ def fit_astrometry(f, A1):
     dec0 = A.dec0 * 1.
     RA0 = fitr(0., 0.)
     Dec0 = fitd(0., 0.)
+    dR = np.cos(np.deg2rad(Dec0)) * 3600. * (ra0 - RA0)
+    dD = 3600. * (dec0 - Dec0)
+    print('%s_%07d initial offsets: %0.2f, %0.2f, %0.2f' %(args.date, 
+                                                           args.observation,
+                                                           dR, dD))
     dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - RA0)
     dd = 3600. * (f['Dec'][sel] - Dec0)
     a1 = np.arctan2(dd, dr)
