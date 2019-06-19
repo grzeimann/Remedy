@@ -714,7 +714,7 @@ def fit_astrometry(f, A):
     
     RA0 += np.median(DR)
     Dec0 += np.median(DD)
-    dR = np.cos(np.deg2rad(f['Dec'][sel])) * 3600. * (ra0 - RA0)
+    dR = np.cos(np.deg2rad(Dec0)) * 3600. * (ra0 - RA0)
     dD = 3600. * (dec0 - Dec0)
     print('%s_%07d offsets: %0.2f, %0.2f, %0.2f' %(args.date, args.observation,
                                                    dR, dD,
