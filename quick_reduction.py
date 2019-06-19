@@ -710,7 +710,7 @@ def fit_astrometry(f, A1, thresh=7.):
     da = a1 - a2
     sel1 = np.abs(da) > np.pi
     da[sel1] -= np.sign(da[sel1]) * 2. * np.pi
-    print(da)
+    print(np.rad2deg(da), rot_i)
     rot_i = A.rot * 1.
     rot = np.median(np.rad2deg(np.median(da)))
     for i in [rot, 360. - rot]:
