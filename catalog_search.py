@@ -138,7 +138,7 @@ def queryTESS_IC(ra, dec, radius):
 
 def panstarrs_query(ra_deg, dec_deg, rad_deg, mindet=1,
                     maxsources=30000,
-                    server=('https://catalogs.mast.stsci.edu/api/v0.1/panstarrs/dr1/mean.votable')):
+                    server=('https://catalogs.mast.stsci.edu/api/v0.1/panstarrs/dr1/stack.votable')):
     """
     Query Pan-STARRS DR1 @ MAST
     parameters: ra_deg, dec_deg, rad_deg: RA, Dec, field
@@ -168,7 +168,7 @@ def query_panstarrs(ra, dec, radius, debug=False):
     Queries PANSTARRS
     """
     T = panstarrs_query(ra, dec, radius)
-    sel1 = (~T['gMeanPSFMag'].mask) * (~T['rMeanPSFMag'].mask) * (~T['iMeanPSFMag'].mask)
+    sel1 = (~T['gApMag'].mask) * (~T['rApMag'].mask) * (~T['iApMag'].mask)
     T = T[sel1]
     return T
 
