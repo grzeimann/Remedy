@@ -5,7 +5,10 @@ Created on Tue Dec  5 09:28:59 2017
 @author: gregz
 """
 
-import httplib
+try:
+    import httplib
+except:
+    import httplib2 as httplib
 import json
 import sys
 import warnings
