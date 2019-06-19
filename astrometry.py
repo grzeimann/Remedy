@@ -32,7 +32,7 @@ class Astrometry:
     useful for reconstructed VIRUS images.
     '''
     def __init__(self, ra0, dec0, pa, x0, y0, x_scale=-1., y_scale=1.,
-                 sys_rot=1.50, fplane_file=None, kind='fplane'):
+                 sys_rot=1.55, fplane_file=None, kind='fplane'):
         self.setup_logging()
         self.ra0 = ra0
         self.dec0 = dec0
