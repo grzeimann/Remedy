@@ -942,8 +942,8 @@ A = fit_astrometry(f, A)
 #    f.write('sources.dat', format='ascii.fixed_width_two_line', overwrite=True)
 
 for i in info:
-    crx = ran[0] / scale + 1.
-    cry = ran[2] / scale + 1.
+    crx = np.abs(ran[0]) / scale + 1.
+    cry = np.abs(ran[2]) / scale + 1.
     ifuslot = '%03d' % i[3]
     A.get_ifuslot_projection(ifuslot, scale, crx, cry)
     header = A.tp_ifuslot.to_header()
