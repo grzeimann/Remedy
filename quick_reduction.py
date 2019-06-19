@@ -594,9 +594,9 @@ def correct_amplifier_offsets(data, fibers_in_amp=112, order=1):
     for i in np.arange(0, len(y), fibers_in_amp):
         yi = y[i:i+fibers_in_amp]
         try:
-            mask = sigma_clip(yi, masked=True, maxiters=None)
+            mask = sigma_clip(yi, masked=True, maxiters=None, stdfunc=mad_std)
         except:
-            mask = sigma_clip(yi, iters=None) 
+            mask = sigma_clip(yi, iters=None, stdfunc=mad_std) 
         skysel = ~mask.mask
         if skysel.sum() > 10:
             model.append(np.polyval(np.polyfit(x[skysel], yi[skysel], order), x))
@@ -609,9 +609,9 @@ def correct_amplifier_offsets(data, fibers_in_amp=112, order=1):
 def estimate_sky(data):
     y = np.nanmedian(data[:, 200:-200], axis=1)
     try:
-        mask = sigma_clip(y, masked=True, maxiters=None)
+        mask = sigma_clip(y, masked=True, maxiters=None, stdfunc=mad_std)
     except:
-        mask = sigma_clip(y, iters=None)
+        mask = sigma_clip(y, iters=None, stdfunc=mad_std)
     log.info('Number of masked fibers is %i / %i' % (mask.mask.sum(), len(y)))
     skyfibers = ~mask.mask
     init_sky = np.nanmedian(data[skyfibers], axis=0)
@@ -907,7 +907,7 @@ for i, ui in enumerate(allifus):
     
     # Make full fits file with wcs info (using default header)
     F, A = make_fits(image, fn, name, ui, tfile)
-    mean, median, std = sigma_clipped_stats(image, sigma=3.0)
+    mean, median, std = sigma_clipped_stats(image, sigma=3.0, stdfunc=mad_std)
     daofind = DAOStarFinder(fwhm=4.0, threshold=7. * std, exclude_border=True) 
     sources = daofind(image)
     log.info('Found %i sources' % len(sources))
