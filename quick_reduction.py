@@ -687,7 +687,8 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords):
     Sources[:, 9], Sources[:, 10] = (RA-Sources[:,5], Dec-Sources[:, 6])
     return Sources
 
-def fit_astrometry(f, A):
+def fit_astrometry(f, A1):
+    A = A1
     P = Polynomial2D(1)
     fitter = LevMarLSQFitter()
     sel = f['dist'] < 7.
@@ -723,9 +724,10 @@ def fit_astrometry(f, A):
     print('%s_%07d offsets: %0.2f, %0.2f, %0.2f' %(args.date, args.observation,
                                                    dR, dD,
                                                    A.rot-rot_i))
-    A.tp = A.setup_TP(RA0, Dec0, A.rot, A.x0,  A.y0)
-    A.ra0, A.dec0 = (RA0, Dec0)
-    return A
+    A.get_pa()
+    A1 = Astrometry(RA0, Dec0, A.pa, 0., 0., fplane_file=args.fplane_file)
+    A1.tp = A1.setup_TP(RA0, Dec0, A1.rot, A1.x0,  A1.y0)
+    return A1
 
 # GET DIRECTORY NAME FOR PATH BUILDING
 DIRNAME = get_script_path()
@@ -918,9 +920,8 @@ f = Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist', 'Cgmag',
                               'RA', 'Dec', 'fx', 'fy', 'dra', 'ddec'])
 f.write('sources.dat', format='ascii.fixed_width_two_line',
         overwrite=True)
-print(A.rot, A.ra0, A.dec0, A.x0, A.y0)
-#A = fit_astrometry(f, A)
-print(A.rot, A.ra0, A.dec0, A.x0, A.y0)
+
+A1 = fit_astrometry(f, A)
 # Fit astrometric offset
 #for j in np.arange(1):
 #    
