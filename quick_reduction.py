@@ -709,7 +709,7 @@ def fit_astrometry(f, A):
     mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
     DR = (f['RA'][sel] - mRA)
     DD = (f['Dec'][sel] - mDec)
-    dR = np.median(np.cos(np.deg2rad(F['Dec'][sel])) * 3600. * DR)
+    dR = np.median(np.cos(np.deg2rad(f['Dec'][sel])) * 3600. * DR)
     dD = np.median(3600. * DD)
     print('%s_%07d offsets: %0.2f, %0.2f, %0.2f' %(args.date, args.observation,
                                                    dR, dD,
