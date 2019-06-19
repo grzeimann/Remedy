@@ -603,7 +603,7 @@ def correct_amplifier_offsets(data, fibers_in_amp=112, order=1):
         else:
             model.append(np.ones(yi.shape))
     model = np.hstack(model)
-    avg = np.nanmean(model)
+    avg = np.nanmedian(model)
     return model / avg
 
 def estimate_sky(data):
