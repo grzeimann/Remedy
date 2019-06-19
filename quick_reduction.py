@@ -925,21 +925,20 @@ f = Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist', 'Cgmag',
 f.write('sources.dat', format='ascii.fixed_width_two_line',
         overwrite=True)
 
-A = fit_astrometry(f, A)
 # Fit astrometric offset
-#for j in np.arange(1):
-#    
-#    Total_sources = []
-#    for i, ui in enumerate(allifus):
-#        image, fn, name, ui, tfile, Aold, sources, F = info[i]
-#        Sources = match_to_archive(sources, image, A, ui, scale, ran, coords)
-#        if Sources is not None:
-#            Total_sources.append(Sources) 
-#    Total_sources = np.vstack(Total_sources)
-#    f = Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist',
-#                                      'Cgmag', 'RA', 'Dec', 'fx', 'fy', 'dra',
-#                                      'ddec'])
-#    f.write('sources.dat', format='ascii.fixed_width_two_line', overwrite=True)
+for j in np.arange(1):
+    A = fit_astrometry(f, A)
+    Total_sources = []
+    for i, ui in enumerate(allifus):
+        image, fn, name, ui, tfile, Aold, sources, F = info[i]
+        Sources = match_to_archive(sources, image, A, ui, scale, ran, coords)
+        if Sources is not None:
+            Total_sources.append(Sources) 
+    Total_sources = np.vstack(Total_sources)
+    f = Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist',
+                                      'Cgmag', 'RA', 'Dec', 'fx', 'fy', 'dra',
+                                      'ddec'])
+    f.write('sources.dat', format='ascii.fixed_width_two_line', overwrite=True)
 
 for i in info:
     crx = np.abs(ran[0]) / scale + 1.
@@ -955,6 +954,7 @@ with open('ds9_%s_%07d.reg' % (args.date, args.observation), 'w') as k:
     MakeRegionFile.writeSource(k, coords.ra.deg, coords.dec.deg)
 
 sel = f['dist'] < 2.5
+print('Number of sources within 2.5": %i' % sel.sum())
 mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
 plt.figure(figsize=(9, 8))
 plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
