@@ -690,6 +690,8 @@ def fit_astrometry(f, A):
     sel = f['dist'] < 7.
     fitr = fitter(P, f['fx'][sel], f['fy'][sel], f['RA'][sel])
     fitd = fitter(P, f['fx'][sel], f['fy'][sel], f['Dec'][sel])
+    ra0 = A.ra0 * 1.
+    dec0 = A.dec0 * 1.
     RA0 = fitr(0., 0.)
     Dec0 = fitd(0., 0.)
     dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - RA0)
@@ -709,13 +711,14 @@ def fit_astrometry(f, A):
     mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
     DR = (f['RA'][sel] - mRA)
     DD = (f['Dec'][sel] - mDec)
-    dR = np.median(np.cos(np.deg2rad(f['Dec'][sel])) * 3600. * DR)
-    dD = np.median(3600. * DD)
+    
+    RA0 += np.median(DR)
+    Dec0 += np.median(DD)
+    dR = np.cos(np.deg2rad(f['Dec'][sel])) * 3600. * (ra0 - RA0)
+    dD = 3600. * (dec0 - Dec0)
     print('%s_%07d offsets: %0.2f, %0.2f, %0.2f' %(args.date, args.observation,
                                                    dR, dD,
                                                    A.rot-rot_i))
-    RA0 += np.median(DR)
-    Dec0 += np.median(DD)
     A.tp = A.setup_TP(RA0, Dec0, A.rot, A.x0,  A.y0)
     return A
 
