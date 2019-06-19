@@ -975,8 +975,8 @@ plt.savefig('astrometry_%s_%07d.png'  % (args.date, args.observation), dpi=300)
 plt.figure(figsize=(9, 8))
 Mg = Total_sources[sel, 4][nsel]
 mg = Total_sources[sel, 2][nsel]
-print(mg)
 ss = (Mg > 15) * (Mg < 20) * (mg < 25.)
+print((mg - Mg)[ss])
 mean, median, std = sigma_clipped_stats((mg - Mg)[ss])
 print('The mean, median, and std for the mag offset is: %0.2f, %0.2f, %0.2f' %
       (mean, median, std))
