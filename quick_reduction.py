@@ -917,8 +917,9 @@ f = Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist', 'Cgmag',
                               'RA', 'Dec', 'fx', 'fy', 'dra', 'ddec'])
 f.write('sources.dat', format='ascii.fixed_width_two_line',
         overwrite=True)
-
+print(A.rot, A.ra0, A.dec0, A.x0, A.y0)
 A = fit_astrometry(f, A)
+print(A.rot, A.ra0, A.dec0, A.x0, A.y0)
 # Fit astrometric offset
 #for j in np.arange(1):
 #    
