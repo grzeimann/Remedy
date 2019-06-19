@@ -17,6 +17,7 @@ import tarfile
 import warnings
 
 
+
 from astrometry import Astrometry
 from astropy.coordinates import SkyCoord, match_coordinates_sky
 from astropy.convolution import convolve, Gaussian2DKernel
@@ -40,6 +41,8 @@ import seaborn as sns
 
 sns.set_context('talk')
 sns.set_style('whitegrid')
+warnings.filterwarnings("ignore")
+
 #################
 # Configuration #
 #################
@@ -394,16 +397,16 @@ def get_sci_twi_files():
     scitarfile = op.join(*path[:-3]) + ".tar"
     if op.exists(scitarfile):
         with tarfile.open(scitarfile) as tf:
-            scinames = tf.getnames()
+            scinames = sorted(tf.getnames())
     else:
         file_glob = build_path(args.rootdir, args.date, args.observation,
                            '*', '*')
-        scinames = glob.glob(file_glob)
+        scinames = sorted(glob.glob(file_glob))
         scitarfile = None
     if scitarfile is None:
         pathname = build_path(args.rootdir, args.date, '*', '*', '*',
                              base='twi')
-        twinames = roll_through_dates(pathname, args.date)
+        twinames = sorted(roll_through_dates(pathname, args.date))
         twitarfile = None
     else:
         file_glob = build_path(args.rootdir, args.date, '*',
@@ -412,7 +415,7 @@ def get_sci_twi_files():
         tarname = op.join(*path[:-3]) + ".tar"
         twitarfile = get_twi_tarfile(tarname, args.date)
         with tarfile.open(twitarfile) as tf:
-            twinames = tf.getnames()
+            twinames = sorted(tf.getnames())
     return scinames, twinames, scitarfile, twitarfile
 
 def reduce_ifuslot(ifuloop, h5table):
