@@ -978,6 +978,8 @@ Mg = Total_sources[sel, 4][nsel]
 mg = Total_sources[sel, 2][nsel]
 ss = (Mg > 15) * (Mg < 20)
 mean, median, std = sigma_clipped_stats((mg - Mg)[ss])
+print('The mean, median, and std for the mag offset is: %0.2f, %0.2f, %0.2f' %
+      (mean, median, std))
 plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
 plt.scatter(Mg, mg - Mg - median, alpha=0.75, s=75)
 plt.plot([15, 20], [std, std], 'r--', lw=1)
