@@ -710,7 +710,6 @@ def fit_astrometry(f, A1, thresh=7.):
     da = a1 - a2
     sel1 = np.abs(da) > np.pi
     da[sel1] -= np.sign(da[sel1]) * 2. * np.pi
-    print(np.rad2deg(da), A.rot)
     rot_i = A.rot * 1.
     rot = np.median(np.rad2deg(np.median(da)))
     for i in [rot, 360. - rot, -rot]:
@@ -976,6 +975,7 @@ plt.savefig('astrometry_%s_%07d.png'  % (args.date, args.observation), dpi=300)
 plt.figure(figsize=(9, 8))
 Mg = Total_sources[sel, 4][nsel]
 mg = Total_sources[sel, 2][nsel]
+print(mg)
 ss = (Mg > 15) * (Mg < 20)
 mean, median, std = sigma_clipped_stats((mg - Mg)[ss])
 print('The mean, median, and std for the mag offset is: %0.2f, %0.2f, %0.2f' %
