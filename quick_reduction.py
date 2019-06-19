@@ -26,7 +26,7 @@ from astropy.io import fits
 from astropy.modeling.models import Polynomial2D
 from astropy.modeling.fitting import LevMarLSQFitter
 from astropy.stats import biweight_location, sigma_clip
-from astropy.stats import sigma_clipped_stats
+from astropy.stats import sigma_clipped_stats, mad_std
 from astropy.table import Table
 import astropy.units as units
 from catalog_search import query_panstarrs, MakeRegionFile
@@ -977,7 +977,7 @@ Mg = Total_sources[sel, 4][nsel]
 mg = Total_sources[sel, 2][nsel]
 ss = (Mg > 15) * (Mg < 20) * (mg < 25.)
 print((mg - Mg)[ss])
-mean, median, std = sigma_clipped_stats((mg - Mg)[ss])
+mean, median, std = sigma_clipped_stats((mg - Mg)[ss], stdfunc=mad_std)
 print('The mean, median, and std for the mag offset is: %0.2f, %0.2f, %0.2f' %
       (mean, median, std))
 plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
