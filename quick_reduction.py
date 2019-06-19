@@ -39,25 +39,36 @@ from tables import open_file
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+
+# Plot Style
 sns.set_context('talk')
 sns.set_style('whitegrid')
+
+# Turn off annoying warnings (even though some deserve attention)
 warnings.filterwarnings("ignore")
 
-#################
-# Configuration #
-#################
+###############################################################################
+# CONFIGURATION AND GLOBAL VARIABLES 
+
 # Amps
 amps = ['LL', 'LU', 'RL', 'RU']
-# Ignore these ifuslots
+
+# Ignore these ifuslots because they are subpar or look poor
 badifuslots = np.array([67, 46, 84, 83, 96, 104, 86, 42, 91, 88, 86, 95, 75])
+
 # Default dither pattern for 3 exposures
 dither_pattern = np.array([[0., 0.], [1.27, -0.73], [1.27, 0.73]])
+
 # Rectified wavelength
 def_wave = np.arange(3470., 5542., 2.)
+
 # ADR model
 wADR = [3500., 4000., 4500., 5000., 5500.]
 ADRx = [-0.74, -0.4, -0.08, 0.08, 0.20]
 ADRx = np.polyval(np.polyfit(wADR, ADRx, 3), def_wave)
+
+###############################################################################
+# PARSED INPUT PARAMETERS FROM THE COMMAND LINE
 
 parser = ap.ArgumentParser(add_help=True)
 
@@ -121,8 +132,23 @@ parser.add_argument("-ss", "--source_seeing",
 
 args = parser.parse_args(args=None)
 
+###############################################################################
+# FUNCTIONS FOR THE MAIN BODY BELOW                                                       
+
 def splitall(path):
-    ''' Split path into list '''
+    ''' 
+    Split path into list 
+    
+    Parameters
+    ----------
+    path : str
+        file path
+    
+    Returns
+    -------
+    allparts : str
+        list of constituent parts of the path
+    '''
     allparts = []
     while 1:
         parts = op.split(path)
@@ -139,6 +165,26 @@ def splitall(path):
 
 
 def get_ra_dec_from_header(tfile, fn):
+    ''' 
+    Grab RA, Dec, and PA from header
+    The fits header may be in a tar file, "tfile"
+    
+    Parameters
+    ----------
+    tfile : str
+        Tarfile name
+    fn : str
+        fits filename containing the header in the primary HDU
+    
+    Returns
+    -------
+    ra : float
+        Right Ascension
+    dec : float
+        Declination
+    pa : float
+        Parangle
+    '''
     if tfile is not None:
         t = tarfile.open(tfile,'r')
         a = fits.open(t.extractfile(fn))
@@ -153,6 +199,20 @@ def get_ra_dec_from_header(tfile, fn):
 def read_sim(filename):
     '''
     Read an ascii simulation file with wavelength (A) and F_lam as columns
+    The columns should not have headers, just an ascii file with wavelength
+    and F_lam (ergs/s/cm^2/A)
+    
+    Parameters
+    ----------
+    filename : str
+        filename of the simulation data
+    def_wave : 1d numpy array [GLOBAL]
+        global variable for the rectified wavelength array
+    
+    Returns
+    -------
+    spectrum : 1d numpy array
+        simulated spectrum interpolated to the rectified wavelength
     '''
     T = Table.read(filename, format='ascii')
     spectrum = np.interp(def_wave, T['col1'], T['col2'])
@@ -161,6 +221,18 @@ def read_sim(filename):
 def convert_slot_to_coords(ifuslots):
     '''
     Convert ifuslot integer to x, y focal plane coordinates [row, column]
+    
+    Parameters
+    ----------
+    ifuslots : list
+        a list of integers, e.g. 47
+    
+    Returns
+    -------
+    x : 1d numpy array
+        Row in focal plane: 47 --> 4
+    y : 1d numpy array
+        Column in focal plane: 47 --> 7
     '''
     x, y = ([], [])
     for i in ifuslots:
@@ -177,9 +249,22 @@ def get_slot_neighbors(ifuslot, u_ifuslots, dist=1):
     '''
     Get ifuslots within square distance, dist, from target ifuslot.
     
-    A dist 1 will return a square of 3 x 3 ifuslots (excluding center ifuslot),
-    for all ifuslots within that 3 x 3 box that are populated.  A dist = 2
-    will return an equivalent 5 x 5 box.
+    A dist = 1 will return a square of 3 x 3 ifuslots (excluding central ifu).
+    A dist = 2 will return an equivalent 5 x 5 box.
+    
+    If an ifu does not occupy an ifuslot, then that slot is not returned.
+    
+    Parameters
+    ----------
+    ifuslot : integer
+        Target IFU slot
+    u_ifuslots : 1d numpy array [type=int]
+        iFU slots in the observation
+    
+    Returns
+    -------
+    u_ifuslots : 1d numpy array [type=int]
+        neighbor ifuslots as explained above
     '''
     sel = np.zeros(u_ifuslots.shape, dtype=bool)
     xi, yi = convert_slot_to_coords([ifuslot])
@@ -193,6 +278,30 @@ def build_path(rootdir, date, obs, ifuslot, amp, base='sci', exp='exp*',
                instrument='virus'):
     '''
     Build path for a given ifuslot, amplifier, observation, date, and rootdir
+    
+    Parameters
+    ----------
+    rootdir : str
+        root directory where raw data is stored
+    date : str
+        date for path
+    obs : integer
+        observation for path
+    ifuslot : str
+        IFU slot for path
+    amp : str
+        Amplifier for path
+    base : str
+        Type of exposure
+    exp : str
+        Exposure number for path
+    instrument : str
+        Instrument for path
+    
+    Returns
+    -------
+    path : str
+        File path constructed for the given date, obs, ect.
     '''
     if obs != '*':
         obs = '%07d' % obs
@@ -202,6 +311,21 @@ def build_path(rootdir, date, obs, ifuslot, amp, base='sci', exp='exp*',
     
 
 def get_ifuslots():
+    '''
+    Get ifuslots for the rootdir, date, and observation in the global variable
+    args.
+    
+    Parameters
+    ----------
+    args : object [GLOBAL]
+        Object containing the command line inputs from the python call
+    
+    Returns
+    -------
+    ifuslots : 1d numpy array [type=int]
+        ifuslots for the input date, observation
+    '''
+        
     file_glob = build_path(args.rootdir, args.date, args.observation,
                            '*', 'LL', exp='exp01')
         
@@ -228,6 +352,21 @@ def orient_image(image, amp, ampname):
     '''
     Orient the images from blue to red (left to right)
     Fibers are oriented to match configuration files
+    
+    Parameters
+    ----------
+    image : 2d numpy array
+        fits image
+    amp : str
+        Amplifier for the fits image
+    ampname : str
+        Amplifier name is the location of the amplifier
+    
+    Returns
+    -------
+    image : 2d numpy array
+        Oriented fits image correcting for what amplifier it comes from
+        These flips are unique to the VIRUS/LRS2 amplifiers
     '''
     if amp == "LU":
         image[:] = image[::-1, ::-1]
@@ -249,6 +388,22 @@ def base_reduction(filename, get_header=False, tfile=None):
         3) Orientation
         4) Gain Multiplication
         5) Error propagation
+    
+    Parameters
+    ----------
+    filename : str
+        Filename of the fits file
+    get_header : boolean
+        Flag to get and return the header
+    tfile : str
+        Tar filename if the fits file is in a tarred file
+    
+    Returns
+    -------
+    a : 2d numpy array
+        Reduced fits image, see steps above
+    e : 2d numpy array
+        Associated error frame
     '''
     # Load fits file
     if tfile is not None:
@@ -293,6 +448,20 @@ def base_reduction(filename, get_header=False, tfile=None):
 def get_mastertwi(files, masterbias, twitarfile):
     '''
     Make a master flat image from the twilight frames
+    
+    Parameters
+    ----------
+    files : list
+        list of fits file names
+    masterbias : 2d numpy array
+        masterbias in e-
+    twitarfile : str or None
+        Name of the tar file if the fits file is tarred
+    
+    Returns
+    -------
+    mastertwi : 2d numy array
+        median stacked twilight frame
     '''
     listtwi = []
     for filename in files:
@@ -304,6 +473,22 @@ def get_mastertwi(files, masterbias, twitarfile):
     return np.median(twi_array / norm, axis=0) * np.median(norm)
 
 def get_twi_tarfile(pathname, date):
+    '''
+    Go through many dates if necessary and find the tar file that contains
+    twilight exposures.
+    
+    Parameters
+    ----------
+    pathname : str
+        File path to look for the tar file containing twilight exposures
+    date : str
+        Date for initial search for twilight exposures
+    
+    Returns
+    -------
+    twitarfile : str
+        Name of the tarred file containing twilight exposures
+    '''
     datec = date
     datec_ = datetime(int(date[:4]), int(date[4:6]), int(date[6:]))
     daten_ = datec_ + timedelta(days=1)
@@ -336,6 +521,18 @@ def get_twi_tarfile(pathname, date):
 def roll_through_dates(pathname, date):
     '''
     Get appropriate cals on the closest night back 60 days in time
+    
+    Parameters
+    ----------
+    pathname : str
+        File path to look for the tar file containing twilight exposures
+    date : str
+        Date for initial search for twilight exposures
+    
+    Returns
+    -------
+    twinames : list
+        list of twilight fits file names
     '''
     datec = date
     daten = date
@@ -356,7 +553,7 @@ def roll_through_dates(pathname, date):
 
 def get_script_path():
     '''
-    Get script path 
+    Get script path, aka, where does Remedy live?
     '''
     return op.dirname(op.realpath(sys.argv[0]))
 
@@ -365,6 +562,26 @@ def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
     '''
     Extract spectra by dividing the flat field and averaging the central
     two pixels
+    
+    Parameters
+    ----------
+    array_sci : 2d numpy array
+        science image
+    array_flt : 2d numpy array
+        twilight image
+    array_trace : 2d numpy array
+        trace for each fiber
+    wave : 2d numpy array
+        wavelength for each fiber
+    def_wave : 1d numpy array [GLOBAL]
+        rectified wavelength
+    
+    Returns
+    -------
+    twi_spectrum : 2d numpy array
+        rectified twilight spectrum for each fiber
+    sci_spectrum : 2d numpy array
+        rectified science spectrum for each fiber   
     '''
     sci_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
     twi_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
@@ -373,24 +590,44 @@ def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
     for fiber in np.arange(array_trace.shape[0]):
         dw = np.diff(wave[fiber])
         dw = np.hstack([dw[0], dw])
-        if array_trace[fiber].min() < 0.:
+        if array_trace[fiber].min() < 1.:
             continue
-        if np.ceil(array_trace[fiber]).max() >= N:
+        if np.ceil(array_trace[fiber]).max() >= (N-1):
             continue
         indl = np.floor(array_trace[fiber]).astype(int)
         indh = np.ceil(array_trace[fiber]).astype(int)
         tw = array_flt[indl, x] / 2. + array_flt[indh, x] / 2.
         twi_spectrum[fiber] = np.interp(def_wave, wave[fiber], tw / dw,
                                         left=0.0, right=0.0)
-        sw = (array_sci[indl, x] +#/ array_flt[indl, x] +
-              array_sci[indh, x] )#/ array_flt[indh, x])
+        sw = (array_sci[indl, x] + array_sci[indh, x]) / 2.
         sci_spectrum[fiber] = np.interp(def_wave, wave[fiber], sw / dw,
                                         left=0.0, right=0.0)
     twi_spectrum[~np.isfinite(twi_spectrum)] = 0.0
     sci_spectrum[~np.isfinite(sci_spectrum)] = 0.0
-    return twi_spectrum, sci_spectrum / 2.
+    return twi_spectrum, sci_spectrum
 
 def get_sci_twi_files():
+    '''
+    Get the names of the fits files for the science frames of interest
+    and the twilight frames of interest.  If the files are tarred,
+    return the names of the tar files as well.
+    
+    Parameters
+    ----------
+    args : object [GLOBAL]
+        Object containing the command line inputs from the python call
+    
+    Returns
+    -------
+    scinames : list
+        names of the science fits files
+    twinames : list
+        names of the twilight fits files
+    scitarfile : str or None
+        name of the tar file containing the fits files if there is one
+    twitarfile : str or None
+        name of the tar file containing the fits files if there is one
+    '''
     file_glob = build_path(args.rootdir, args.date, args.observation,
                            '047', 'LL')
     path = splitall(file_glob)
@@ -419,7 +656,31 @@ def get_sci_twi_files():
     return scinames, twinames, scitarfile, twitarfile
 
 def reduce_ifuslot(ifuloop, h5table):
+    '''
+    Parameters
+    ----------
+    ifuloop : list
+        list of indices for ifuslots in the hdf5 table
+    h5table: hdf5 table [tables object]
+        the hdf5 calibration table with wavelength, trace, ect. for all ifus
+    
+    Returns
+    -------
+    p : 2d numpy array
+        x and y positions for all fibers in ifuloop [ifu frame]
+    t : 2d numpy array
+        twilight spectrum for all fibers in ifuloop
+    s : 2d numpy array
+        science spectrum for all fibers in ifuloop
+    fn : str
+        last fits filename to get info from later
+    scitarfile : str or None
+        name of the tar file for the science frames if there is one
+    
+    '''
     p, t, s = ([], [], [])
+    
+    # Calibration factors to convert electrons to uJy
     mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.25
     mult_fac *= 1e29 * def_wave**2 / 3e18
     # Check if tarred
@@ -979,16 +1240,16 @@ plt.savefig('astrometry_%s_%07d.png'  % (args.date, args.observation), dpi=300)
 plt.figure(figsize=(9, 8))
 Mg = Total_sources[sel, 4][nsel]
 mg = Total_sources[sel, 2][nsel]
-ss = (Mg > 15) * (Mg < 20) * (mg < 25.)
+ss = (Mg > 15) * (Mg < 22) * (mg < 25.)
 print((mg - Mg)[ss])
 mean, median, std = sigma_clipped_stats((mg - Mg)[ss], stdfunc=mad_std)
 print('The mean, median, and std for the mag offset is: %0.2f, %0.2f, %0.2f' %
       (mean, median, std))
 plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
 plt.scatter(Mg, mg - Mg - median, alpha=0.75, s=75)
-plt.plot([15, 20], [std, std], 'r--', lw=1)
-plt.plot([15, 20], [-std, -std], 'r--', lw=1)
-plt.xlim([15, 20])
+plt.plot([15, 22], [std, std], 'r--', lw=1)
+plt.plot([15, 22], [-std, -std], 'r--', lw=1)
+plt.xlim([15, 22])
 plt.ylim([-0.5, 0.5])
 plt.xlabel('Pan-STARRS g (AB mag)', fontsize=20, labelpad=20)
 plt.ylabel('VIRUS g - Pan-STARRS g (AB mag)', fontsize=20, labelpad=20)
