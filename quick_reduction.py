@@ -724,6 +724,7 @@ def fit_astrometry(f, A):
                                                    dR, dD,
                                                    A.rot-rot_i))
     A.tp = A.setup_TP(RA0, Dec0, A.rot, A.x0,  A.y0)
+    A.ra0, A.dec0 = (RA0, Dec0)
     return A
 
 # GET DIRECTORY NAME FOR PATH BUILDING
