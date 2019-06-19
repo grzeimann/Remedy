@@ -26,7 +26,11 @@ try:
     from astropy.vo.client import vos_catalog
 except:
     print("Can't find astropy.vo")
-from urllib import pathname2url as urlencode
+try:
+    from urllib import pathname2url as urlencode
+except:
+    print("Can't find urllib")
+
 
 
 with warnings.catch_warnings():
