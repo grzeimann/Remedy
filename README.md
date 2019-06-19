@@ -47,6 +47,8 @@ If you want to create your own calibration file:
 If you need an up-to-date fplane file, simply run Jan Snigula's get_fplane.py, which is included with Remedy:
 ```
 python WHEREVER/Remedy/get_fplane.py
+OR
+python WHEREVER/Remedy/get_fplane.py 20190412
 ```
 
 A new fplane file will be created in the current directory in the format, fplane{DATE}.txt. 
@@ -54,14 +56,16 @@ A new fplane file will be created in the current directory in the format, fplane
 ### Running the code
 An example call to reduce ifuslot 043 on 20190204 and obseravtion 17 using the ifuslot 047 for sky is shown below:
 ```
-python Remedy/quick_reduction.py 20190204 17 43 Remedy/CALS/test_cal_20190112.h5 --sky_ifuslot 47 --fplane_file fplane20190129.txt --rootdir /work/03946/hetdex/maverick
+python Remedy/quick_reduction.py 20190204 17 43 Remedy/CALS/test_cal_20190112.h5 --fplane_file fplane20190129.txt --rootdir /work/03946/hetdex/maverick --neighbor_dist 7
 ```
 To run at the mountain, replace the "--rootdir" as appropriate, the "--fplane_file" as approriate, and the calibration file if needed.  The other arguments will be specific to the choice of ifuslot and if you want to use another ifu for sky.
 
 More details with respect to the input arguments are below.
 ```
 usage: quick_reduction.py [-h] [-r ROOTDIR] [-ra RA] [-dec DEC]
-                          [-fp FPLANE_FILE] [-si SKY_IFUSLOT]
+                          [-fp FPLANE_FILE] [-nd NEIGHBOR_DIST]
+                          [-sf SOURCE_FILE] [-s] [-sx SOURCE_X] [-sy SOURCE_Y]
+                          [-ss SOURCE_SEEING]
                           date observation ifuslot hdf5file
 
 positional arguments:
@@ -78,9 +82,18 @@ optional arguments:
   -dec DEC, --dec DEC   Dec of the IFUSLOT to be reduced
   -fp FPLANE_FILE, --fplane_file FPLANE_FILE
                         fplane file
-  -si SKY_IFUSLOT, --sky_ifuslot SKY_IFUSLOT
-                        If sky_ifuslot is not provided, then the ifuslot
-                        itself is used
+  -nd NEIGHBOR_DIST, --neighbor_dist NEIGHBOR_DIST
+                        Distance in x or y in the focal plane IFUSLOT units to
+                        include in the reduction.
+  -sf SOURCE_FILE, --source_file SOURCE_FILE
+                        file for spectrum to add in cube
+  -s, --simulate        Simulate source
+  -sx SOURCE_X, --source_x SOURCE_X
+                        x-position for spectrum to add in cube
+  -sy SOURCE_Y, --source_y SOURCE_Y
+                        y-position for spectrum to add in cube
+  -ss SOURCE_SEEING, --source_seeing SOURCE_SEEING
+                        seeing conditions manually entered
 ```
 ## Data Products
 
