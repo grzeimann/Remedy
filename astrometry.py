@@ -137,6 +137,20 @@ class Astrometry:
             self.log.info('Exiting due to error.')
             sys.exit(1)
 
+    def get_pa(self):
+        ''' The rotation for the acam is correct '''
+        if self.kind == 'fplane':
+            self.pa = 360. - (90. + self.rot + self.sys_rot)
+        elif self.kind == 'acam':
+            self.pa = self.rot - self.sys_rot - 90.
+        else:
+            self.log.error('"kind" was not set to available options.')
+            self.log.info('Available options are: %s and %s' % ('fplane',
+                                                                'acam'))
+            self.log.info('Next time please choose one of the options above.')
+            self.log.info('Exiting due to error.')
+            sys.exit(1)
+
     def update_projection(self):
         ''' Use this for a new projection with small adjustments '''
         self.set_effective_rotation()
