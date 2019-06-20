@@ -113,5 +113,5 @@ You can see the reduction of an IFU with a g'~12 star in it.  At this brightness
 </p>
 
 <p align="center">
-  <img src="images/qfitsview_example.png" width="850"/>
+  <img src="images/qfitsview_ginga_example.png" width="850"/>
 </p>
