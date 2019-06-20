@@ -1146,7 +1146,7 @@ else:
     Pan.write(pname, format='ascii.fixed_width_two_line')
 
 raC, decC, gC = (np.array(Pan['raMean']), np.array(Pan['decMean']),
-                 np.array(Pan['gMeanApMag']))
+                 np.array(Pan['gApMag']))
 coords = SkyCoord(raC*units.degree, decC*units.degree, frame='fk5')
 
 
@@ -1243,8 +1243,8 @@ mg = Total_sources[sel, 2][nsel]
 ss = (Mg > 15) * (Mg < 22) * (mg < 25.)
 print((mg - Mg)[ss])
 mean, median, std = sigma_clipped_stats((mg - Mg)[ss], stdfunc=mad_std)
-print('The mean, median, and std for the mag offset is: %0.2f, %0.2f, %0.2f' %
-      (mean, median, std))
+print('The mean, median, and std for the mag offset is for %s_%07d: '
+      '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean, median, std))
 plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
 plt.scatter(Mg, mg - Mg - median, alpha=0.75, s=75)
 plt.plot([15, 21], [std, std], 'r--', lw=1)
