@@ -141,10 +141,10 @@ args = parser.parse_args(args=None)
 ###############################################################################
 # FUNCTIONS FOR THE MAIN BODY BELOW                                                       
 
-class Reduce_IFUslot:
-    def __init(self, h5table, T, twinames, twitarfile,
-               scinames, scitarfile, def_wave, mult_fac,
-               dither_pattern):
+class Reduce_IFUslot(object):
+    def __init__(self, h5table, T, twinames, twitarfile,
+                 scinames, scitarfile, def_wave, mult_fac,
+                 dither_pattern):
         self.h5table = h5table
         self.T = T
         self.twinames = twinames
