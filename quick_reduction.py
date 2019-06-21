@@ -15,7 +15,7 @@ import os.path as op
 import sys
 import tarfile
 import warnings
-
+import multiprocessing
 
 
 from astrometry import Astrometry
@@ -33,11 +33,12 @@ from catalog_search import query_panstarrs, MakeRegionFile
 from datetime import datetime, timedelta
 from extract import Extract
 from input_utils import setup_logging
+import matplotlib.pyplot as plt
+from multiprocessing import Pool
 from photutils import DAOStarFinder, aperture_photometry, CircularAperture
 from scipy.interpolate import griddata, interp1d
-from tables import open_file
-import matplotlib.pyplot as plt
 import seaborn as sns
+from tables import open_file
 
 
 # Plot Style
@@ -130,7 +131,12 @@ parser.add_argument("-ss", "--source_seeing",
                     help='''seeing conditions manually entered''',
                     type=float, default=1.5)
 
+parser.add_argument("-p", "--parallelize",
+                    help='''Parallelize some of the processing''',
+                    action="count", default=0)
+
 args = parser.parse_args(args=None)
+
 
 ###############################################################################
 # FUNCTIONS FOR THE MAIN BODY BELOW                                                       
@@ -676,7 +682,6 @@ def reduce_ifuslot(ifuloop, h5table):
         last fits filename to get info from later
     scitarfile : str or None
         name of the tar file for the science frames if there is one
-    
     '''
     p, t, s = ([], [], [])
     
@@ -686,8 +691,7 @@ def reduce_ifuslot(ifuloop, h5table):
     # Check if tarred
 
     scinames, twinames, scitarfile, twitarfile = get_sci_twi_files()
-
-    for ind in ifuloop:
+    def parallel_loop(ind):
         ifuslot = '%03d' % h5table[ind]['ifuslot']
         amp = h5table[ind]['amp'].astype('U13')
         amppos = h5table[ind]['ifupos']
@@ -724,60 +728,64 @@ def reduce_ifuslot(ifuloop, h5table):
             twi, spec = get_spectra(sciimage, masterflt, trace, wave, def_wave)
             twi[:] = safe_division(twi, amp2amp*throughput)
             spec[:] = safe_division(spec, amp2amp*throughput) * mult_fac
-            
             pos = amppos + dither_pattern[j]
+        return pos, twi, spec
+    
+    if args.parallelize:
+        big_list = pool.map(ifuloop)
+        for itm in big_list:
+            for x, i in zip([p, t, s], itm):
+                x.append(i * 1.)
+    else:
+        for ind in ifuloop:
+            pos, twi, spec = parallel_loop(ind)
             for x, i in zip([p, t, s], [pos, twi, spec]):
                 x.append(i * 1.)        
     
     p, t, s = [np.vstack(j) for j in [p, t, s]]
     
     return p, t, s, fn , scitarfile
-            
 
-def make_fits(image, fn, name, ifuslot, tfile=None, ra=None,
-              dec=None, rot=None):
+
+def make_cube(xloc, yloc, data, Dx, Dy, ftf, scale, ran,
+              seeing_fac=2.3, radius=1.5):
     '''
-    Outputing collapsed image
+    Make data cube for a given ifuslot
+    
+    Parameters
+    ----------
+    xloc : 1d numpy array
+        fiber positions in the x-direction [ifu frame]
+    yloc : 1d numpy array
+        fiber positions in the y-direction [ifu frame]
+    data : 2d numpy array
+        fiber spectra [N fibers x M wavelength]
+    Dx : 1d numpy array
+        Atmospheric refraction in x-direction as a function of wavelength
+    Dy : 1d numpy array
+        Atmospheric refraction in y-direction as a function of wavelength
+    ftf : 1d numpy array
+        Average fiber to fiber normalization (1 value for each fiber)
+    scale : float
+        Spatial pixel scale in arcseconds
+    seeing_fac : float
+    
+    Returns
+    -------
+    Dcube : 3d numpy array
+        Data cube, corrected for ADR
+    xgrid : 2d numpy array
+        x-coordinates for data cube
+    ygrid : 2d numpy array
+        y-coordinates for data cube
     '''
-    if tfile is not None:
-        import tarfile
-        t = tarfile.open(tfile,'r')
-        a = fits.open(t.extractfile(fn))
-    else:
-        a = fits.open(fn)
-
-    PA = a[0].header['PARANGLE']
-    imscale = 48. / image.shape[0]
-    crx = image.shape[1] / 2.
-    cry = image.shape[0] / 2.
-    ifuslot = '%03d' % ifuslot
-    if (ra is None) or (dec is None) or (rot is None):
-        log.info('Using header for RA and Dec')
-        RA = a[0].header['TRAJCRA'] * 15.
-        DEC = a[0].header['TRAJCDEC']
-        A = Astrometry(RA, DEC, PA, 0., 0., fplane_file=args.fplane_file)
-        A.get_ifuslot_projection(ifuslot, imscale, crx, cry)
-        wcs = A.tp_ifuslot
-    else:
-        A = Astrometry(ra, dec, rot, 0., 0.,
-                       fplane_file=args.fplane_file)
-        wcs = A.setup_TP(ra, dec, rot, crx, 
-                         cry, x_scale=-imscale, y_scale=imscale)
-    header = wcs.to_header()
-    F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
-    return F, A
-
-
-def make_frame(xloc, yloc, data, Dx, Dy, ftf,
-               scale=0.75, seeing_fac=2.3, radius=1.5):
     seeing = seeing_fac / scale
     a, b = data.shape
-    x = np.arange(-23.-scale,
-                  25.+1*scale, scale)
-    y = np.arange(-23.-scale,
-                  25.+1*scale, scale)
-    xgrid, ygrid = np.meshgrid(x, y)
-    zgrid = np.zeros((b,)+xgrid.shape)
+    N1 = int((ran[1] - ran[0]) / scale) + 1
+    N2 = int((ran[3] - ran[2]) / scale) + 1
+    xgrid, ygrid = np.meshgrid(np.linspace(ran[0], ran[1], N1),
+                               np.linspace(ran[2], ran[3], N2))
+    Dcube = np.zeros((b,)+xgrid.shape)
     area = np.pi * 0.75**2
     G = Gaussian2DKernel(seeing / 2.35)
     S = np.zeros((data.shape[0], 2))
@@ -797,14 +805,32 @@ def make_frame(xloc, yloc, data, Dx, Dy, ftf,
         sel *= np.isfinite(data[:, k]) * (ftf > 0.5)
         if np.any(sel):
             grid_z = griddata(S[sel], data[sel, k],
-                              (xgrid, ygrid), method='cubic')
-            zgrid[k, :, :] = (convolve(grid_z, G, boundary='extend') *
+                              (xgrid, ygrid), method='linear')
+            Dcube[k, :, :] = (convolve(grid_z, G, boundary='extend') *
                               scale**2 / area)
-    return zgrid[:, 1:-1, 1:-1], xgrid[1:-1, 1:-1], ygrid[1:-1, 1:-1]
+    return Dcube[:, 1:-1, 1:-1], xgrid[1:-1, 1:-1], ygrid[1:-1, 1:-1]
 
 
-def write_cube(wave, xgrid, ygrid, zgrid, outname, he):
-    hdu = fits.PrimaryHDU(np.array(zgrid, dtype='float32'))
+def write_cube(wave, xgrid, ygrid, Dcube, outname, he):
+    '''
+    Write data cube to fits file
+    
+    Parameters
+    ----------
+    wave : 1d numpy array
+        Wavelength for data cube
+    xgrid : 2d numpy array
+        x-coordinates for data cube
+    ygrid : 2d numpy array
+        y-coordinates for data cube
+    Dcube : 3d numpy array
+        Data cube, corrected for ADR
+    outname : str
+        Name of the outputted fits file
+    he : object
+        hdu header object to carry original header information
+    '''
+    hdu = fits.PrimaryHDU(np.array(Dcube, dtype='float32'))
     hdu.header['CRVAL1'] = xgrid[0, 0]
     hdu.header['CRVAL2'] = ygrid[0, 0]
     hdu.header['CRVAL3'] = wave[0]
@@ -828,6 +854,26 @@ def write_cube(wave, xgrid, ygrid, zgrid, outname, he):
     hdu.writeto(outname, overwrite=True)
 
 def safe_division(num, denom, eps=1e-8, fillval=0.0):
+    '''
+    Do a safe division in case denominator has zeros.  This is a personal
+    favorite solution to this common problem.
+    
+    Parameters
+    ----------
+    num : numpy array
+        Numerator in the division
+    denom : numpy array
+        Denominator in the division
+    eps : float
+        low value to check for zeros
+    fillval : float
+        value to fill in if the denominator is zero
+    
+    Returns
+    -------
+    div : numpy array
+        The safe division product of num / denom
+    '''
     good = np.isfinite(denom) * (np.abs(denom) > eps)
     div = num * 0.
     if num.ndim == denom.ndim:
@@ -840,6 +886,32 @@ def safe_division(num, denom, eps=1e-8, fillval=0.0):
 
 def simulate_source(simulated_spectrum, pos, spectra, xc, yc,
                     seeing=1.5):
+    '''
+    Simulate a point source using the Extract class
+    
+    Start with a simulated spectrum.  Spread the flux over fibers using a
+    Moffat PSF.  Then add to the original fiber spectra.
+    
+    Parameters
+    ----------
+    simulated_spectrum : 1d numpy array
+        simulated spectrum at appropriate rectified wavelengths (def_wave)
+    pos : 2d numpy array
+        x and y positions of the fibers to place the simulated spectrum
+    spectra : 2d numpy array
+        all fiber spectra correspoding to the x and y positions in pos
+    xc : float
+        x centroid of the source [ifu frame]
+    yc : float
+        y centroid of the source [ifu frame]
+    seeing : float
+        seeing for the moffat psf profile to spread out the simulated spectrum
+        
+    Returns
+    -------
+    spectra : 2d numpy array
+        original spectra + the new fiber spectra of the simulated source
+    '''
     E = Extract()
     boxsize = 10.5
     scale = 0.25
@@ -849,6 +921,21 @@ def simulate_source(simulated_spectrum, pos, spectra, xc, yc,
     return spectra + s_spec
 
 def correct_amplifier_offsets(data, fibers_in_amp=112, order=1):
+    '''
+    Correct the offsets (in multiplication) between various amplifiers.
+    These offsets originate from incorrect gain values in the amplifier 
+    headers and/or mismatches in the amplifier to amplifier correction
+    going from twilight to science exposures
+    
+    Parameters
+    ----------
+    data : 2d numpy array
+        all spectra in a given exposure
+    fiber_in_amp : int
+        number of fibers in an amplifier
+    order : int
+        polynomial order of correction across amplifiers
+    '''
     y = np.nanmedian(data[:, 200:-200], axis=1)
     x = np.arange(fibers_in_amp)
     model = []
@@ -860,7 +947,8 @@ def correct_amplifier_offsets(data, fibers_in_amp=112, order=1):
             mask = sigma_clip(yi, iters=None, stdfunc=mad_std) 
         skysel = ~mask.mask
         if skysel.sum() > 10:
-            model.append(np.polyval(np.polyfit(x[skysel], yi[skysel], order), x))
+            model.append(np.polyval(np.polyfit(x[skysel], yi[skysel], order),
+                                    x))
         else:
             model.append(np.ones(yi.shape))
     model = np.hstack(model)
@@ -868,6 +956,20 @@ def correct_amplifier_offsets(data, fibers_in_amp=112, order=1):
     return model / avg
 
 def estimate_sky(data):
+    '''
+    Model the sky for all fibers using a sigma clip to exlude fibers with
+    sources in them, then take a median of the remaining fibers
+    
+    Parameters
+    ----------
+    data : 2d numpy array
+        all spectra in a given exposure
+    
+    Returns
+    -------
+    init_sky : 1d numpy array
+        estimate of the sky spectrum for all fibers
+    '''
     y = np.nanmedian(data[:, 200:-200], axis=1)
     try:
         mask = sigma_clip(y, masked=True, maxiters=None, stdfunc=mad_std)
@@ -882,12 +984,43 @@ def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
                            nchunks=25,
                            ran=[-23, 25, -23, 25], scale=0.75):
     '''
-    Make collapsed frame (uJy) for filtg
+    Make collapsed frame (uJy) for g' filter.
+    
+    Due to ADR, we must chunk out the spectra in wavelength, make individual
+    frames and then coadd them with the g' filter weight to make g-band image.
+    
+    Parameters
+    ----------
+    x : 1d numpy array
+        fiber x positions
+    y : 1d numpy array
+        fiber y positions
+    data : 2d numpy array
+        fiber spectra
+    filtg : 1d numpy array
+        g' filter rectified to def_wave
+    good_fibers : 1d numpy array
+        fibers with significant throughput
+    Dx : 1d numpy array
+        Atmospheric refraction in x-direction as a function of wavelength
+    Dy : 1d numpy array
+        Atmospheric refraction in y-direction as a function of wavelength
+    nchunks : int
+        Number of wavelength chunks to make individual images for coaddition
+    ran : list
+        min(x), max(x), min(y), max(y) for image
+    scale : float
+        pixel scale of image
+    
+    Returns
+    -------
+    image : 2d numpy array
+        g-band image from VIRUS spectra of a given IFU slot
     '''    
     N1 = int((ran[1] - ran[0]) / scale) + 1
-    N2 = int((ran[1] - ran[0]) / scale) + 1
+    N2 = int((ran[3] - ran[2]) / scale) + 1
     grid_x, grid_y = np.meshgrid(np.linspace(ran[0], ran[1], N1),
-                                 np.linspace(ran[0], ran[3], N2))
+                                 np.linspace(ran[2], ran[3], N2))
     chunks = []
     weights = np.array([np.mean(f) for f in np.array_split(filtg, nchunks)])
     weights /= weights.sum()
@@ -915,12 +1048,46 @@ def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
     image = np.sum(images * weights[:, np.newaxis, np.newaxis], axis=0) 
     return image
 
-def match_to_archive(sources, image, A, ifuslot, scale, ran, coords):
+def match_to_archive(sources, image, A, ifuslot, scale, ran, coords,
+                     apradius=3.5):
+    '''
+    Match list of sources in a given IFU slot to a set of coordinates from
+    an existing survey, coords.  The sources comes from DAOStarFinder.  We
+    will also perform aperture photometry on the sources, keep a series of
+    information on the sources and matches, and return the information.
+    
+    Parameters
+    ----------
+    sources : DAOStarFinder table
+        Output from running DAOStarFinder on the IFU slot g-band image
+    image : 2d numpy array
+        IFU slot g-band image
+    A : Astrometry class
+        astrometry object from the Astrometry Class
+    ifuslot : int
+        IFU slot
+    scale : float
+        pixel scale of the g-band image
+    ran : list
+        min(x), max(x), min(y), max(y) for image
+    coords : Skycoord Object
+        coordinates from an archival catalog (Pan-STARRS, likely)
+    apradius : float
+        radius of the aperture in pixels for aperture photometry
+    
+    Returns
+    -------
+    Sources : 2d numpy array
+        columns include image x coordinate, image y coordinate, aperture g-band
+        magnitude of IFU slot image, distance to closest catalog match,
+        catalog g-band magnitude, catalog RA, catalog Dec, focal plane x-coord,
+        focal plane y-coord, delta RA, delta Dec
+    '''
     if len(sources) == 0:
         return None
 
     positions = (sources['xcentroid'], sources['ycentroid'])
-    apertures = CircularAperture(positions, r=3.5)
+    apertures = CircularAperture(positions, r=apradius)
     phot_table = aperture_photometry(image, apertures,
                                      mask=~np.isfinite(image))
     gmags = np.where(phot_table['aperture_sum'] > 0.,
@@ -949,11 +1116,36 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords):
     return Sources
 
 def fit_astrometry(f, A1, thresh=7.):
+    '''
+    Fit astrometry using a linear fit to the conversion of focal plane x and y
+    to RA as well as a linear fit to the conversion of focal plane x and y to
+    Dec.  This gets a new RA and Dec of the 0, 0 coordinate in focal plane
+    units.  Then solve for the adjust rotation angle from the parallactic 
+    angle.  Iterate one last time for the RA and Dec of 0, 0.  Return the
+    new astometry class assuming the solution is reasonable.
+    
+    Parameters
+    ----------
+    f : astropy Table
+        columns include image x coordinate, image y coordinate, aperture g-band
+        magnitude of IFU slot image, distance to closest catalog match,
+        catalog g-band magnitude, catalog RA, catalog Dec, focal plane x-coord,
+        focal plane y-coord, delta RA, delta Dec 
+    A1 : Astrometry Class
+        Astrometry object 
+    thresh : float
+        Matching threshold for considering a match to be real (")
+    
+    Returns
+    -------
+    A1 : Astrometry Class
+        Astrometry object 
+    '''
     A = A1
     P = Polynomial2D(1)
     fitter = LevMarLSQFitter()
     sel = f['dist'] < thresh
-    print('Number of sources with 7": %i' % sel.sum())
+    log.info('Number of sources with 7": %i' % sel.sum())
     fitr = fitter(P, f['fx'][sel], f['fy'][sel], f['RA'][sel])
     fitd = fitter(P, f['fx'][sel], f['fy'][sel], f['Dec'][sel])
     ra0 = A.ra0 * 1.
@@ -962,8 +1154,9 @@ def fit_astrometry(f, A1, thresh=7.):
     Dec0 = fitd(0., 0.)
     dR = np.cos(np.deg2rad(Dec0)) * 3600. * (ra0 - RA0)
     dD = 3600. * (dec0 - Dec0)
-    print('%s_%07d initial offsets: %0.2f, %0.2f' %(args.date, 
-                                                    args.observation, dR, dD))
+    log.info('%s_%07d initial offsets: %0.2f, %0.2f' %(args.date, 
+                                                       args.observation, dR,
+                                                       dD))
     dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - RA0)
     dd = 3600. * (f['Dec'][sel] - Dec0)
     a1 = np.arctan2(dd, dr)
@@ -986,9 +1179,10 @@ def fit_astrometry(f, A1, thresh=7.):
     Dec0 += np.median(DD)
     dR = np.cos(np.deg2rad(Dec0)) * 3600. * (ra0 - RA0)
     dD = 3600. * (dec0 - Dec0)
-    print('%s_%07d offsets: %0.2f, %0.2f, %0.2f' %(args.date, args.observation,
-                                                   dR, dD,
-                                                   A.rot-rot_i))
+    log.info('%s_%07d offsets: %0.2f, %0.2f, %0.2f' %(args.date,
+                                                      args.observation,
+                                                      dR, dD,
+                                                      A.rot-rot_i))
     A.get_pa()
     if (np.sqrt(dR**2 + dD**2) > 7.) or (np.abs(A.rot-rot_i) > 1.):
         return A1
@@ -996,17 +1190,34 @@ def fit_astrometry(f, A1, thresh=7.):
     A1.tp = A1.setup_TP(RA0, Dec0, A1.rot, A1.x0,  A1.y0)
     return A1
 
-# GET DIRECTORY NAME FOR PATH BUILDING
+
+###############################################################################
+# MAIN SCRIPT
+
+# Get directory name for path building
 DIRNAME = get_script_path()
+
+# Instrument for reductions
 instrument = 'virus'
+
+# Multiprocessing 
+if args.parallelize:
+    NCPU = np.array(np.max([multiprocessing.cpu_count()-2, 1]), dtype=int)
+    pool = Pool(NCPU)
+
+# Setup logging
 log = setup_logging()
 if args.hdf5file is None:
     log.error('Please specify an hdf5file.  A default is not yet setup.')
     sys.exit(1)
 
-# OPEN HDF5 FILE
+# Open HDF5 file
 h5file = open_file(args.hdf5file, mode='r')
 h5table = h5file.root.Cals
+ifuslots = h5table.cols.ifuslot[:]
+
+# Get unique IFU slot names
+u_ifuslots = np.unique(ifuslots)
 
 # Get photometric filter
 T = Table.read(op.join(DIRNAME, 'filters/ps1g.dat'), format='ascii')
@@ -1014,13 +1225,10 @@ filtg = np.interp(def_wave, T['col1'], T['col2'], left=0.0, right=0.0)
 filtg /= filtg.sum()
  
 # Collect indices for ifuslots (target and neighbors)
-ifuslots = h5table.cols.ifuslot[:]
-u_ifuslots = np.unique(ifuslots)
 sel1 = list(np.where(args.ifuslot == ifuslots)[0])
 ifuslotn = get_slot_neighbors(args.ifuslot, u_ifuslots,
                               dist=args.neighbor_dist)
 ifuslotn = np.setdiff1d(ifuslotn, badifuslots)
-
 IFUs = get_ifuslots()
 allifus = [args.ifuslot]
 for ifuslot in ifuslotn:
@@ -1120,21 +1328,11 @@ for j in np.arange(4*nslots):
         cnt += 112
 
 
-if args.simulate:
-    i = 0
-    N = 448 * nexp
-    data = scispectra[N*i:(i+1)*N]
-    P = pos[N*i:(i+1)*N]
-    log.info('Simulating spectrum from %s' % args.source_file)
-    simulated_spectrum = read_sim(args.source_file)
-    simdata = simulate_source(simulated_spectrum, P, data, 
-                                 args.source_x, args.source_y, 
-                                 args.source_seeing)
-    scispectra[N*i:(i+1)*N] = simdata * 1.
-
-
 # Get RA, Dec from header
 ra, dec, pa = get_ra_dec_from_header(tfile, fn)
+
+# Build astrometry class
+A = Astrometry(ra, dec, pa, 0., 0., fplane_file=args.fplane_file)
 
 # Query catalog Sources in the area
 log.info('Querying Pan-STARRS at: %0.5f %0.5f' % (ra, dec))
@@ -1171,14 +1369,13 @@ for i, ui in enumerate(allifus):
                                    ran=ran,  scale=scale)
     
     # Make full fits file with wcs info (using default header)
-    F, A = make_fits(image, fn, name, ui, tfile)
     mean, median, std = sigma_clipped_stats(image, sigma=3.0, stdfunc=mad_std)
     daofind = DAOStarFinder(fwhm=4.0, threshold=7. * std, exclude_border=True) 
     sources = daofind(image)
     log.info('Found %i sources' % len(sources))
     
     # Keep certain info for new loops
-    info.append([image, fn, name, ui, tfile, A, sources, F])
+    info.append([image, fn, name, ui, tfile, sources])
     
     # Match sources to archive catalog
     Sources = match_to_archive(sources, image, A, ui, scale, ran, coords)
@@ -1197,7 +1394,7 @@ for j in np.arange(1):
     A = fit_astrometry(f, A)
     Total_sources = []
     for i, ui in enumerate(allifus):
-        image, fn, name, ui, tfile, Aold, sources, F = info[i]
+        image, fn, name, ui, tfile, sources = info[i]
         Sources = match_to_archive(sources, image, A, ui, scale, ran, coords)
         if Sources is not None:
             Total_sources.append(Sources) 
@@ -1208,17 +1405,31 @@ for j in np.arange(1):
     f.write('sources.dat', format='ascii.fixed_width_two_line', overwrite=True)
 
 for i in info:
+    image, fn, name, ui, tfile, sources = i
     crx = np.abs(ran[0]) / scale + 1.
     cry = np.abs(ran[2]) / scale + 1.
-    ifuslot = '%03d' % i[3]
+    ifuslot = '%03d' % ui
     A.get_ifuslot_projection(ifuslot, scale, crx, cry)
     header = A.tp_ifuslot.to_header()
-    F = fits.PrimaryHDU(np.array(i[0], 'float32'), header=header)
-    F.writeto(i[2], overwrite=True)
+    F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
+    F.writeto(name, overwrite=True)
 
 with open('ds9_%s_%07d.reg' % (args.date, args.observation), 'w') as k:
     MakeRegionFile.writeHeader(k)
     MakeRegionFile.writeSource(k, coords.ra.deg, coords.dec.deg)
+
+if args.simulate:
+    i = 0
+    N = 448 * nexp
+    F = np.nanmedian(ftf[N*i:(i+1)*N], axis=1)
+    data = scispectra[N*i:(i+1)*N]
+    P = pos[N*i:(i+1)*N]
+    log.info('Simulating spectrum from %s' % args.source_file)
+    simulated_spectrum = read_sim(args.source_file)
+    simdata = simulate_source(simulated_spectrum, P, data, 
+                                 args.source_x, args.source_y, 
+                                 args.source_seeing)
+    scispectra[N*i:(i+1)*N] = simdata * 1.
 
 sel = f['dist'] < 2.5
 print('Number of sources within 2.5": %i' % sel.sum())
@@ -1274,7 +1485,7 @@ else:
 log.info('Making Cube')
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
-    zgrid, xgrid, ygrid = make_frame(pos[:, 0], pos[:, 1], scispectra, 
+    zgrid, xgrid, ygrid = make_cube(pos[:, 0], pos[:, 1], scispectra, 
                                      ADRx, 0. * def_wave, ftf)
 
 if tfile is not None:
