@@ -15,6 +15,7 @@ import os.path as op
 import sys
 import tarfile
 import warnings
+import multiprocessing
 
 
 from astrometry import Astrometry
