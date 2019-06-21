@@ -141,6 +141,59 @@ args = parser.parse_args(args=None)
 ###############################################################################
 # FUNCTIONS FOR THE MAIN BODY BELOW                                                       
 
+class Reduce_IFUslot(object):
+    def __init(self, h5table, T, twinames, twitarfile,
+               scinames, scitarfile, def_wave, mult_fac,
+               dither_pattern):
+        self.h5table = h5table
+        self.T = T
+        self.twinames = twinames
+        self.scinames = scinames
+        self.twitarfile = twitarfile
+        self.scitarfile = scitarfile
+        self.def_wave = def_wave
+        self.mult_fac = mult_fac
+        self.dither_pattern = dither_pattern
+
+    def parallel_loop(self, ind):
+        ifuslot = '%03d' % self.h5table[ind]['ifuslot']
+        amp = self.h5table[ind]['amp'].astype('U13')
+        amppos = self.h5table[ind]['ifupos']
+        wave = self.h5table[ind]['wavelength']
+        trace = self.h5table[ind]['trace']
+        try:
+            masterbias = self.h5table[ind]['masterbias']
+        except:
+            masterbias = 0.0
+        try:
+            amp2amp = self.h5table[ind]['Amp2Amp']
+            throughput = self.h5table[ind]['Throughput']
+        except:
+            amp2amp = np.ones((112, 1036))
+            throughput = np.ones((112, 1036))
+        if np.all(amp2amp==0.):
+            amp2amp = np.ones((112, 1036))
+        if np.all(throughput==0.):
+            throughput = np.array([self.T['throughput']]*112)
+        
+        fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'twi')
+        twibase = fnmatch.filter(self.twinames, fnames_glob)
+        log.info('Making mastertwi for %s%s' % (ifuslot, amp))
+        masterflt = get_mastertwi(twibase, masterbias, self.twitarfile)
+        log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
+
+        fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
+        filenames = fnmatch.filter(self.scinames, fnames_glob)
+        for j, fn in enumerate(filenames):
+            sciimage, scierror = base_reduction(fn, tfile=self.scitarfile)
+            sciimage[:] = sciimage - masterbias
+            twi, spec = get_spectra(sciimage, masterflt, trace, wave, 
+                                    self.def_wave)
+            twi[:] = safe_division(twi, amp2amp*throughput)
+            spec[:] = safe_division(spec, amp2amp*throughput) * self.mult_fac
+            pos = amppos + self.dither_pattern[j]
+        return pos, twi, spec, fn
+
 def splitall(path):
     ''' 
     Split path into list 
@@ -692,53 +745,18 @@ def reduce_ifuslot(ifuloop, h5table):
     T = Table.read(op.join(DIRNAME, 'CALS/throughput.txt'),
                            format='ascii.fixed_width_two_line')
     scinames, twinames, scitarfile, twitarfile = get_sci_twi_files()
-    def parallel_loop(ind):
-        ifuslot = '%03d' % h5table[ind]['ifuslot']
-        amp = h5table[ind]['amp'].astype('U13')
-        amppos = h5table[ind]['ifupos']
-        wave = h5table[ind]['wavelength']
-        trace = h5table[ind]['trace']
-        try:
-            masterbias = h5table[ind]['masterbias']
-        except:
-            masterbias = 0.0
-        try:
-            amp2amp = h5table[ind]['Amp2Amp']
-            throughput = h5table[ind]['Throughput']
-        except:
-            amp2amp = np.ones((112, 1036))
-            throughput = np.ones((112, 1036))
-        if np.all(amp2amp==0.):
-            amp2amp = np.ones((112, 1036))
-        if np.all(throughput==0.):
-            throughput = np.array([T['throughput']]*112)
-        
-        fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'twi')
-        twibase = fnmatch.filter(twinames, fnames_glob)
-        log.info('Making mastertwi for %s%s' % (ifuslot, amp))
-        masterflt = get_mastertwi(twibase, masterbias, twitarfile)
-        log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
-
-        fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
-        filenames = fnmatch.filter(scinames, fnames_glob)
-        for j, fn in enumerate(filenames):
-            sciimage, scierror = base_reduction(fn, tfile=scitarfile)
-            sciimage[:] = sciimage - masterbias
-            twi, spec = get_spectra(sciimage, masterflt, trace, wave, def_wave)
-            twi[:] = safe_division(twi, amp2amp*throughput)
-            spec[:] = safe_division(spec, amp2amp*throughput) * mult_fac
-            pos = amppos + dither_pattern[j]
-        return pos, twi, spec, fn
-    
+    R = Reduce_IFUslot(h5table, T, twinames, twitarfile,
+                       scinames, scitarfile, def_wave, mult_fac,
+                       dither_pattern)
     if args.parallelize:
-        big_list = pool.map(parallel_loop, ifuloop)
+        big_list = pool.map(R.parallel_loop, ifuloop)
         for itm in big_list:
             pos, twi, spec, fn = itm
             for x, i in zip([p, t, s], [pos, twi, spec]):
                 x.append(i * 1.)
     else:
         for ind in ifuloop:
-            pos, twi, spec = parallel_loop(ind)
+            pos, twi, spec = R.parallel_loop(ind)
             for x, i in zip([p, t, s], [pos, twi, spec]):
                 x.append(i * 1.)        
     
