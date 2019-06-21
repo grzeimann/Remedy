@@ -756,7 +756,7 @@ def reduce_ifuslot(ifuloop, h5table):
                 x.append(i * 1.)
     else:
         for ind in ifuloop:
-            pos, twi, spec = R.parallel_loop(ind)
+            pos, twi, spec, fn = R.parallel_loop(ind)
             for x, i in zip([p, t, s], [pos, twi, spec]):
                 x.append(i * 1.)        
     
