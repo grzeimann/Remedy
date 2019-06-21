@@ -15,7 +15,6 @@ import os.path as op
 import sys
 import tarfile
 import warnings
-import multiprocessing
 
 
 from astrometry import Astrometry
@@ -34,7 +33,7 @@ from datetime import datetime, timedelta
 from extract import Extract
 from input_utils import setup_logging
 import matplotlib.pyplot as plt
-from multiprocessing import Pool
+from pathos.multiprocessing import ProcessingPool as Pool
 from photutils import DAOStarFinder, aperture_photometry, CircularAperture
 from scipy.interpolate import griddata, interp1d
 import seaborn as sns
@@ -689,7 +688,8 @@ def reduce_ifuslot(ifuloop, h5table):
     mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.25
     mult_fac *= 1e29 * def_wave**2 / 3e18
     # Check if tarred
-
+    T = Table.read(op.join(DIRNAME, 'CALS/throughput.txt'),
+                           format='ascii.fixed_width_two_line')
     scinames, twinames, scitarfile, twitarfile = get_sci_twi_files()
     def parallel_loop(ind):
         ifuslot = '%03d' % h5table[ind]['ifuslot']
@@ -710,8 +710,6 @@ def reduce_ifuslot(ifuloop, h5table):
         if np.all(amp2amp==0.):
             amp2amp = np.ones((112, 1036))
         if np.all(throughput==0.):
-            T = Table.read(op.join(DIRNAME, 'CALS/throughput.txt'),
-                           format='ascii.fixed_width_two_line')
             throughput = np.array([T['throughput']]*112)
         
         fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'twi')
@@ -729,12 +727,13 @@ def reduce_ifuslot(ifuloop, h5table):
             twi[:] = safe_division(twi, amp2amp*throughput)
             spec[:] = safe_division(spec, amp2amp*throughput) * mult_fac
             pos = amppos + dither_pattern[j]
-        return pos, twi, spec
+        return pos, twi, spec, fn
     
     if args.parallelize:
         big_list = pool.map(parallel_loop, ifuloop)
         for itm in big_list:
-            for x, i in zip([p, t, s], itm):
+            pos, twi, spec, fn = itm
+            for x, i in zip([p, t, s], [pos, twi, spec]):
                 x.append(i * 1.)
     else:
         for ind in ifuloop:
@@ -744,7 +743,7 @@ def reduce_ifuslot(ifuloop, h5table):
     
     p, t, s = [np.vstack(j) for j in [p, t, s]]
     
-    return p, t, s, fn , scitarfile
+    return p, t, s, fn, scitarfile
 
 
 def make_cube(xloc, yloc, data, Dx, Dy, ftf, scale, ran,
