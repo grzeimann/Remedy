@@ -15,7 +15,6 @@ import os.path as op
 import sys
 import tarfile
 import warnings
-import multiprocessing
 
 
 from astrometry import Astrometry
@@ -34,7 +33,6 @@ from datetime import datetime, timedelta
 from extract import Extract
 from input_utils import setup_logging
 import matplotlib.pyplot as plt
-from pathos.multiprocessing import ProcessingPool as Pool
 from photutils import DAOStarFinder, aperture_photometry, CircularAperture
 from scipy.interpolate import griddata, interp1d
 import seaborn as sns
@@ -140,205 +138,6 @@ args = parser.parse_args(args=None)
 
 ###############################################################################
 # FUNCTIONS FOR THE MAIN BODY BELOW                                                       
-
-class Reduce_IFUslot(object):
-    def __init__(self, h5table, T, twinames, twitarfile,
-                 scinames, scitarfile, def_wave, mult_fac,
-                 dither_pattern):
-        self.h5table = h5table
-        self.T = T
-        self.twinames = twinames
-        self.scinames = scinames
-        self.twitarfile = twitarfile
-        self.scitarfile = scitarfile
-        self.def_wave = def_wave
-        self.mult_fac = mult_fac
-        self.dither_pattern = dither_pattern
-
-    def parallel_loop(self, ind):
-        ifuslot = '%03d' % self.h5table[ind]['ifuslot']
-        amp = self.h5table[ind]['amp'].astype('U13')
-        amppos = self.h5table[ind]['ifupos']
-        wave = self.h5table[ind]['wavelength']
-        trace = self.h5table[ind]['trace']
-        try:
-            masterbias = self.h5table[ind]['masterbias']
-        except:
-            masterbias = 0.0
-        try:
-            amp2amp = self.h5table[ind]['Amp2Amp']
-            throughput = self.h5table[ind]['Throughput']
-        except:
-            amp2amp = np.ones((112, 1036))
-            throughput = np.ones((112, 1036))
-        if np.all(amp2amp==0.):
-            amp2amp = np.ones((112, 1036))
-        if np.all(throughput==0.):
-            throughput = np.array([self.T['throughput']]*112)
-        
-        fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'twi')
-        twibase = fnmatch.filter(self.twinames, fnames_glob)
-        log.info('Making mastertwi for %s%s' % (ifuslot, amp))
-        masterflt = get_mastertwi(twibase, masterbias, self.twitarfile)
-        log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
-
-        fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
-        filenames = fnmatch.filter(self.scinames, fnames_glob)
-        for j, fn in enumerate(filenames):
-            sciimage, scierror = self.base_reduction(fn, tfile=self.scitarfile)
-            sciimage[:] = sciimage - masterbias
-            twi, spec = self.get_spectra(sciimage, masterflt, trace, wave, 
-                                         self.def_wave)
-            twi[:] = self.safe_division(twi, amp2amp*throughput)
-            spec[:] = (self.safe_division(spec, amp2amp*throughput) *
-                       self.mult_fac)
-            pos = amppos + self.dither_pattern[j]
-        return pos, twi, spec, fn
-    
-    def get_spectra(self, array_sci, array_flt, array_trace, wave, def_wave):
-        '''
-        Extract spectra by dividing the flat field and averaging the central
-        two pixels
-        
-        Parameters
-        ----------
-        array_sci : 2d numpy array
-            science image
-        array_flt : 2d numpy array
-            twilight image
-        array_trace : 2d numpy array
-            trace for each fiber
-        wave : 2d numpy array
-            wavelength for each fiber
-        def_wave : 1d numpy array [GLOBAL]
-            rectified wavelength
-        
-        Returns
-        -------
-        twi_spectrum : 2d numpy array
-            rectified twilight spectrum for each fiber
-        sci_spectrum : 2d numpy array
-            rectified science spectrum for each fiber   
-        '''
-        sci_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
-        twi_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
-        N = array_flt.shape[0]
-        x = np.arange(array_flt.shape[1])
-        for fiber in np.arange(array_trace.shape[0]):
-            dw = np.diff(wave[fiber])
-            dw = np.hstack([dw[0], dw])
-            if array_trace[fiber].min() < 1.:
-                continue
-            if np.ceil(array_trace[fiber]).max() >= (N-1):
-                continue
-            indl = np.floor(array_trace[fiber]).astype(int)
-            indh = np.ceil(array_trace[fiber]).astype(int)
-            tw = array_flt[indl, x] / 2. + array_flt[indh, x] / 2.
-            twi_spectrum[fiber] = np.interp(def_wave, wave[fiber], tw / dw,
-                                            left=0.0, right=0.0)
-            sw = (array_sci[indl, x] + array_sci[indh, x]) / 2.
-            sci_spectrum[fiber] = np.interp(def_wave, wave[fiber], sw / dw,
-                                            left=0.0, right=0.0)
-        twi_spectrum[~np.isfinite(twi_spectrum)] = 0.0
-        sci_spectrum[~np.isfinite(sci_spectrum)] = 0.0
-        return twi_spectrum, sci_spectrum
-    
-    def base_reduction(self, filename, get_header=False, tfile=None):
-        '''
-        Reduce filename from tarfile or fits file.
-        
-        Reduction steps include:
-            1) Overscan subtraction
-            2) Trim image
-            3) Orientation
-            4) Gain Multiplication
-            5) Error propagation
-        
-        Parameters
-        ----------
-        filename : str
-            Filename of the fits file
-        get_header : boolean
-            Flag to get and return the header
-        tfile : str
-            Tar filename if the fits file is in a tarred file
-        
-        Returns
-        -------
-        a : 2d numpy array
-            Reduced fits image, see steps above
-        e : 2d numpy array
-            Associated error frame
-        '''
-        # Load fits file
-        if tfile is not None:
-            t = tarfile.open(tfile,'r')
-            a = fits.open(t.extractfile(filename))
-        else:
-            a = fits.open(filename)
-    
-        image = np.array(a[0].data, dtype=float)
-        
-        # Overscan subtraction
-        overscan_length = 32 * (image.shape[1] / 1064)
-        O = biweight_location(image[:, -(overscan_length-2):])
-        image[:] = image - O
-        
-        # Trim image
-        image = image[:, :-overscan_length]
-        
-        # Gain multiplication (catch negative cases)
-        gain = a[0].header['GAIN']
-        gain = np.where(gain > 0., gain, 0.85)
-        rdnoise = a[0].header['RDNOISE']
-        rdnoise = np.where(rdnoise > 0., rdnoise, 3.)
-        amp = (a[0].header['CCDPOS'].replace(' ', '') +
-               a[0].header['CCDHALF'].replace(' ', ''))
-        try:
-            ampname = a[0].header['AMPNAME']
-        except:
-            ampname = None
-        header = a[0].header
-        
-        # Orient image
-        a = orient_image(image, amp, ampname) * gain
-        
-        # Calculate error frame
-        E = np.sqrt(rdnoise**2 + np.where(a > 0., a, 0.))
-        if get_header:
-            return a, E, header
-        return a, E
-    
-    def safe_division(self, num, denom, eps=1e-8, fillval=0.0):
-        '''
-        Do a safe division in case denominator has zeros.  This is a personal
-        favorite solution to this common problem.
-        
-        Parameters
-        ----------
-        num : numpy array
-            Numerator in the division
-        denom : numpy array
-            Denominator in the division
-        eps : float
-            low value to check for zeros
-        fillval : float
-            value to fill in if the denominator is zero
-        
-        Returns
-        -------
-        div : numpy array
-            The safe division product of num / denom
-        '''
-        good = np.isfinite(denom) * (np.abs(denom) > eps)
-        div = num * 0.
-        if num.ndim == denom.ndim:
-            div[good] = num[good] / denom[good]
-            div[~good] = fillval
-        else:
-            div[:, good] = num[:, good] / denom[good]
-            div[:, ~good] = fillval
-        return div
 
 def splitall(path):
     ''' 
@@ -763,7 +562,53 @@ def get_script_path():
     return op.dirname(op.realpath(sys.argv[0]))
 
 
-
+def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
+    '''
+    Extract spectra by dividing the flat field and averaging the central
+    two pixels
+    
+    Parameters
+    ----------
+    array_sci : 2d numpy array
+        science image
+    array_flt : 2d numpy array
+        twilight image
+    array_trace : 2d numpy array
+        trace for each fiber
+    wave : 2d numpy array
+        wavelength for each fiber
+    def_wave : 1d numpy array [GLOBAL]
+        rectified wavelength
+    
+    Returns
+    -------
+    twi_spectrum : 2d numpy array
+        rectified twilight spectrum for each fiber
+    sci_spectrum : 2d numpy array
+        rectified science spectrum for each fiber   
+    '''
+    sci_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
+    twi_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
+    N = array_flt.shape[0]
+    x = np.arange(array_flt.shape[1])
+    for fiber in np.arange(array_trace.shape[0]):
+        dw = np.diff(wave[fiber])
+        dw = np.hstack([dw[0], dw])
+        if array_trace[fiber].min() < 1.:
+            continue
+        if np.ceil(array_trace[fiber]).max() >= (N-1):
+            continue
+        indl = np.floor(array_trace[fiber]).astype(int)
+        indh = np.ceil(array_trace[fiber]).astype(int)
+        tw = array_flt[indl, x] / 2. + array_flt[indh, x] / 2.
+        twi_spectrum[fiber] = np.interp(def_wave, wave[fiber], tw / dw,
+                                        left=0.0, right=0.0)
+        sw = (array_sci[indl, x] + array_sci[indh, x]) / 2.
+        sci_spectrum[fiber] = np.interp(def_wave, wave[fiber], sw / dw,
+                                        left=0.0, right=0.0)
+    twi_spectrum[~np.isfinite(twi_spectrum)] = 0.0
+    sci_spectrum[~np.isfinite(sci_spectrum)] = 0.0
+    return twi_spectrum, sci_spectrum
 
 def get_sci_twi_files():
     '''
@@ -842,27 +687,54 @@ def reduce_ifuslot(ifuloop, h5table):
     mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.25
     mult_fac *= 1e29 * def_wave**2 / 3e18
     # Check if tarred
-    T = Table.read(op.join(DIRNAME, 'CALS/throughput.txt'),
-                           format='ascii.fixed_width_two_line')
+
     scinames, twinames, scitarfile, twitarfile = get_sci_twi_files()
-    R = Reduce_IFUslot(h5table, T, twinames, twitarfile,
-                       scinames, scitarfile, def_wave, mult_fac,
-                       dither_pattern)
-    if args.parallelize:
-        big_list = pool.map(R.parallel_loop, ifuloop)
-        for itm in big_list:
-            pos, twi, spec, fn = itm
-            for x, i in zip([p, t, s], [pos, twi, spec]):
-                x.append(i * 1.)
-    else:
-        for ind in ifuloop:
-            pos, twi, spec, fn = R.parallel_loop(ind)
+
+    for ind in ifuloop:
+        ifuslot = '%03d' % h5table[ind]['ifuslot']
+        amp = h5table[ind]['amp'].astype('U13')
+        amppos = h5table[ind]['ifupos']
+        wave = h5table[ind]['wavelength']
+        trace = h5table[ind]['trace']
+        try:
+            masterbias = h5table[ind]['masterbias']
+        except:
+            masterbias = 0.0
+        try:
+            amp2amp = h5table[ind]['Amp2Amp']
+            throughput = h5table[ind]['Throughput']
+        except:
+            amp2amp = np.ones((112, 1036))
+            throughput = np.ones((112, 1036))
+        if np.all(amp2amp==0.):
+            amp2amp = np.ones((112, 1036))
+        if np.all(throughput==0.):
+            T = Table.read(op.join(DIRNAME, 'CALS/throughput.txt'),
+                           format='ascii.fixed_width_two_line')
+            throughput = np.array([T['throughput']]*112)
+        
+        fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'twi')
+        twibase = fnmatch.filter(twinames, fnames_glob)
+        log.info('Making mastertwi for %s%s' % (ifuslot, amp))
+        masterflt = get_mastertwi(twibase, masterbias, twitarfile)
+        log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
+
+        fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
+        filenames = fnmatch.filter(scinames, fnames_glob)
+        for j, fn in enumerate(filenames):
+            sciimage, scierror = base_reduction(fn, tfile=scitarfile)
+            sciimage[:] = sciimage - masterbias
+            twi, spec = get_spectra(sciimage, masterflt, trace, wave, def_wave)
+            twi[:] = safe_division(twi, amp2amp*throughput)
+            spec[:] = safe_division(spec, amp2amp*throughput) * mult_fac
+            
+            pos = amppos + dither_pattern[j]
             for x, i in zip([p, t, s], [pos, twi, spec]):
                 x.append(i * 1.)        
     
     p, t, s = [np.vstack(j) for j in [p, t, s]]
     
-    return p, t, s, fn, scitarfile
+    return p, t, s, fn , scitarfile
 
 
 def make_cube(xloc, yloc, data, Dx, Dy, ftf, scale, ran,
@@ -1317,11 +1189,6 @@ DIRNAME = get_script_path()
 
 # Instrument for reductions
 instrument = 'virus'
-
-# Multiprocessing 
-if args.parallelize:
-    NCPU = np.array(np.max([multiprocessing.cpu_count()-2, 1]), dtype=int)
-    pool = Pool(NCPU)
 
 # Setup logging
 log = setup_logging()
