@@ -732,7 +732,7 @@ def reduce_ifuslot(ifuloop, h5table):
         return pos, twi, spec
     
     if args.parallelize:
-        big_list = pool.map(ifuloop)
+        big_list = pool.map(parallel_loop, ifuloop)
         for itm in big_list:
             for x, i in zip([p, t, s], itm):
                 x.append(i * 1.)
