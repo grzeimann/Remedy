@@ -1170,7 +1170,7 @@ def fit_astrometry(f, A1, thresh=7.):
     Dec0 += np.median(DD)
     dR = np.cos(np.deg2rad(Dec0)) * 3600. * (ra0 - RA0)
     dD = 3600. * (dec0 - Dec0)
-    log.info('%s_%07d Rotation offset and error:' %(args.date,
+    log.info('%s_%07d Rotation offset and error: %0.2f, %0.2f' %(args.date,
                                                       args.observation,
                                                       A.rot-rot_i,
                                                       rot_error))
