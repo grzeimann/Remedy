@@ -1155,7 +1155,8 @@ def fit_astrometry(f, A1, thresh=7.):
     sel1 = np.abs(da) > np.pi
     da[sel1] -= np.sign(da[sel1]) * 2. * np.pi
     rot_i = A.rot * 1.
-    rot = np.median(np.rad2deg(np.median(da)))
+    rot = np.rad2deg(np.median(da))
+    rot_error = mad_std(np.rad2deg(da))
     for i in [rot, 360. - rot, -rot]:
         if np.abs(A.rot - i) < 1.5:
             rot = i
@@ -1169,6 +1170,10 @@ def fit_astrometry(f, A1, thresh=7.):
     Dec0 += np.median(DD)
     dR = np.cos(np.deg2rad(Dec0)) * 3600. * (ra0 - RA0)
     dD = 3600. * (dec0 - Dec0)
+    log.info('%s_%07d Rotation offset and error:' %(args.date,
+                                                      args.observation,
+                                                      A.rot-rot_i,
+                                                      rot_error))
     log.info('%s_%07d offsets: %0.2f, %0.2f, %0.2f' %(args.date,
                                                       args.observation,
                                                       dR, dD,
@@ -1464,15 +1469,6 @@ else:
     cubename = ('%s_%07d_%03d_cube.fits' %
                 (args.date, args.observation, args.ifuslot))
 
-
-
-# Making data cube
-log.info('Making Cube')
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore")
-    zgrid, xgrid, ygrid = make_cube(pos[:, 0], pos[:, 1], scispectra, 
-                                     ADRx, 0. * def_wave, ftf)
-
 if tfile is not None:
     t = tarfile.open(tfile, 'r')
     a = fits.open(t.extractfile(fn))
@@ -1482,7 +1478,14 @@ else:
 
 he = a[0].header
 
-write_cube(def_wave, xgrid, ygrid, zgrid, cubename, he)
+# Making data cube
+log.info('Making Cube')
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    zgrid, xgrid, ygrid = make_cube(pos[:, 0], pos[:, 1], scispectra, 
+                                     ADRx, 0. * def_wave, ftf)
+
+    write_cube(def_wave, xgrid, ygrid, zgrid, cubename, he)
 
 
 h5file.close()
