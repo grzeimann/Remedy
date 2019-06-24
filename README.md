@@ -57,6 +57,7 @@ A new fplane file will be created in the current directory in the format, fplane
 To begin on TACC, point to the common python environment. In your home "~/.bashrc" file, add the following line at the bottom:
 ```
 export PATH=/home/00115/gebhardt/anaconda2/bin:/work/03946/hetdex/maverick/bin:$PATH
+```
 
 ### Running the code
 An example call to reduce ifuslot 043 on 20190204 and obseravtion 17 using the ifuslot 047 for sky is shown below:
