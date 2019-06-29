@@ -8,10 +8,14 @@ Created on Tue Jan 22 15:11:39 2019
 import matplotlib
 matplotlib.use('agg')
 import argparse as ap
+import astropy.units as units
 import fnmatch
 import glob
+import matplotlib.pyplot as plt
+import multiprocessing
 import numpy as np
 import os.path as op
+import seaborn as sns
 import sys
 import tarfile
 import warnings
@@ -27,16 +31,14 @@ from astropy.modeling.fitting import LevMarLSQFitter
 from astropy.stats import biweight_location, sigma_clip
 from astropy.stats import sigma_clipped_stats, mad_std
 from astropy.table import Table
-import astropy.units as units
 from catalog_search import query_panstarrs, MakeRegionFile
 from datetime import datetime, timedelta
 from extract import Extract
 from input_utils import setup_logging
-import matplotlib.pyplot as plt
+from multiprocessing import Pool
 from photutils import DAOStarFinder, aperture_photometry, CircularAperture
 from scipy.interpolate import griddata, interp1d
-import seaborn as sns
-from tables import open_file
+from tables import open_file, IsDescription, Float32Col
 
 
 # Plot Style
@@ -562,7 +564,7 @@ def get_script_path():
     return op.dirname(op.realpath(sys.argv[0]))
 
 
-def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
+def get_spectra(array_sci, array_err, array_flt, array_trace, wave, def_wave):
     '''
     Extract spectra by dividing the flat field and averaging the central
     two pixels
@@ -571,6 +573,8 @@ def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
     ----------
     array_sci : 2d numpy array
         science image
+    array_err : 2d numpy array
+        error image
     array_flt : 2d numpy array
         twilight image
     array_trace : 2d numpy array
@@ -585,9 +589,12 @@ def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
     twi_spectrum : 2d numpy array
         rectified twilight spectrum for each fiber
     sci_spectrum : 2d numpy array
-        rectified science spectrum for each fiber   
+        rectified science spectrum for each fiber
+    err_spectrum : 2d numpy array
+        rectified error spectrum for each fiber   
     '''
     sci_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
+    err_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
     twi_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
     N = array_flt.shape[0]
     x = np.arange(array_flt.shape[1])
@@ -604,11 +611,16 @@ def get_spectra(array_sci, array_flt, array_trace, wave, def_wave):
         twi_spectrum[fiber] = np.interp(def_wave, wave[fiber], tw / dw,
                                         left=0.0, right=0.0)
         sw = (array_sci[indl, x] + array_sci[indh, x]) / 2.
+        ew = np.sqrt((array_err[indl, x]**2 + array_err[indh, x]**2) / 2.)
         sci_spectrum[fiber] = np.interp(def_wave, wave[fiber], sw / dw,
                                         left=0.0, right=0.0)
+        # Not real propagation of error, but skipping math for now
+        err_spectrum[fiber] = np.interp(def_wave, wave[fiber], ew / dw,
+                                        left=0.0, right=0.0)
     twi_spectrum[~np.isfinite(twi_spectrum)] = 0.0
+    err_spectrum[~np.isfinite(err_spectrum)] = 0.0
     sci_spectrum[~np.isfinite(sci_spectrum)] = 0.0
-    return twi_spectrum, sci_spectrum
+    return twi_spectrum, sci_spectrum, err_spectrum
 
 def get_sci_twi_files():
     '''
@@ -681,7 +693,7 @@ def reduce_ifuslot(ifuloop, h5table):
     scitarfile : str or None
         name of the tar file for the science frames if there is one
     '''
-    p, t, s = ([], [], [])
+    p, t, s, e = ([], [], [], [])
     
     # Calibration factors to convert electrons to uJy
     mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.25
@@ -724,17 +736,18 @@ def reduce_ifuslot(ifuloop, h5table):
         for j, fn in enumerate(filenames):
             sciimage, scierror = base_reduction(fn, tfile=scitarfile)
             sciimage[:] = sciimage - masterbias
-            twi, spec = get_spectra(sciimage, masterflt, trace, wave, def_wave)
+            twi, spec, espec = get_spectra(sciimage, scierror, masterflt,
+                                           trace, wave, def_wave)
             twi[:] = safe_division(twi, amp2amp*throughput)
             spec[:] = safe_division(spec, amp2amp*throughput) * mult_fac
-            
+            espec[:] = safe_division(espec, amp2amp*throughput) * mult_fac
             pos = amppos + dither_pattern[j]
-            for x, i in zip([p, t, s], [pos, twi, spec]):
+            for x, i in zip([p, t, s, e], [pos, twi, spec, espec]):
                 x.append(i * 1.)        
     
-    p, t, s = [np.vstack(j) for j in [p, t, s]]
+    p, t, s, e = [np.vstack(j) for j in [p, t, s, e]]
     
-    return p, t, s, fn , scitarfile
+    return p, t, s, e, fn , scitarfile
 
 
 def make_cube(xloc, yloc, data, Dx, Dy, ftf, scale, ran,
@@ -1236,7 +1249,8 @@ allifus = np.hstack(allifus)
 
 # Reducing IFUSLOT
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
-pos, twispectra, scispectra, fn, tfile = reduce_ifuslot(ifuloop, h5table)
+pos, twispectra, scispectra, errspectra, fn, tfile = reduce_ifuslot(ifuloop,
+                                                                    h5table)
 
 # Normalize twi spectra to correct fiber to fiber
 t = twispectra * 1.
@@ -1262,6 +1276,8 @@ for i, ai in enumerate(a):
 
 # Correct fiber to fiber
 scispectra = safe_division(scispectra, ftf)
+errspectra = safe_division(errspectra, ftf)
+
 
 ###################
 # Subtracting Sky #
@@ -1317,6 +1333,7 @@ for j in np.arange(4*nslots):
         scispectra[cnt:(cnt+112)] = reorg[i, l:u]*1.
         cnt += 112
 
+errspectra[~np.isfinite(scispectra)] = np.nan
 
 # Get RA, Dec from header
 ra, dec, pa = get_ra_dec_from_header(tfile, fn)
@@ -1394,6 +1411,58 @@ for j in np.arange(1):
                                       'ddec'])
     f.write('sources.dat', format='ascii.fixed_width_two_line', overwrite=True)
 
+# Extract
+RAFibers, DecFibers = ([], [])
+for i, _info in enumerate(info):
+    image, fn, name, ui, tfile, sources = _info
+    N = 448 * nexp
+    data = scispectra[N*i:(i+1)*N]
+    P = pos[N*i:(i+1)*N]
+    ra, dec = A.get_ifupos_ra_dec('%03d' % ui, P[:, 0], P[:, 1])
+    RAFibers.append(ra)
+    DecFibers.append(dec)
+mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
+E = Extract()
+E.psf = E.tophat_psf(4, 10.5, 0.25)
+E.coords = SkyCoord(mRA*u.deg, mDec*u.deg, frame='fk5')
+E.ra, E.dec = [np.hstack(x) for x in [RAFibers, DecFibers]]
+E.data = scispectra
+E.error = errspectra
+E.mask = ~np.isfinite(scispectra)
+log.info('Beginning Extraction')
+if args.parallelize:
+    N = np.array(np.max([multiprocessing.cpu_count()-2, 1]), dtype=int)
+    pool = Pool(N)
+    spec_list = pool.map(E.get_spectrum_by_coord_index,
+                         np.arange(len(E.coords)))
+else:
+    spec_list = []
+    for i in np.arange(len(E.coords)):
+        spec_list.append(E.get_spectrum_by_coord_index(i))
+log.info('Finished Extraction')
+name = ('%s_%07d.h5' %
+                (args.date, args.observation))
+h5spec = open_file(name, mode="w", title="%s Spectra" % name[:-3])
+
+class Spectra(IsDescription):
+     ra  = Float32Col()    # float  (single-precision)
+     dec  = Float32Col()    # float  (single-precision)
+     spectrum  = Float32Col((1036,))    # float  (single-precision)
+     error  = Float32Col((1036,))    # float  (single-precision)
+
+table = h5spec.create_table(h5spec.root, 'Spectra', Spectra, 
+                            "Extracted Spectra")
+specrow = table.row
+for ra, dec, specinfo in zip(mRA, mDec, spec_list):
+    specrow['ra'] = ra
+    specrow['dec'] = dec
+    if len(specinfo[0]) > 0:
+        specrow['spectrum'] = specinfo[0]
+        specrow['error'] = specinfo[1]
+    specrow.append()
+table.flush()
+h5spec.close()
+# Making g-band images
 for i in info:
     image, fn, name, ui, tfile, sources = i
     crx = np.abs(ran[0]) / scale + 1.
