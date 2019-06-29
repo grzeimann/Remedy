@@ -252,7 +252,7 @@ class Extract:
             An array with length 3 for the first axis: PSF image, xgrid, ygrid
         '''
         a, b = data.shape
-        N = int(boxsize/scale)
+        N = int(boxsize/scale) + 1
         xl, xh = (xc - boxsize / 2., xc + boxsize / 2.)
         yl, yh = (yc - boxsize / 2., yc + boxsize / 2.)
         x, y = (np.linspace(xl, xh, N), np.linspace(yl, yh, N))
@@ -274,7 +274,7 @@ class Extract:
             interp_kind='linear'
         
         for chunk, mchunk in zip(np.array_split(data[:, sel], nchunks, axis=1),
-                                np.array_split(mask[:, sel], nchunks, axis=1)):
+                                 np.array_split(mask[:,sel], nchunks, axis=1)):
             marray = np.ma.array(chunk, mask=mchunk<1e-8)
             image = np.ma.median(marray, axis=1)
             image = image / np.ma.sum(image)
@@ -286,8 +286,8 @@ class Extract:
                       scale**2 / area)
             if convolve_image:
                 grid_z = convolve(grid_z, G)
-            image_list.append(grid_z)
-        image = np.median(image_list, axis=0)
+            image_list.append(grid_z / np.nansum(grid_z))
+        image = np.nanmedian(image_list, axis=0)
         image[np.isnan(image)] = 0.0
         zarray = np.array([image, xgrid-xc, ygrid-yc])
         return zarray
@@ -469,5 +469,10 @@ class Extract:
         weights = self.build_weights(0., 0., rafibers, decfibers, self.psf)
         result = self.get_spectrum(data, error, mask, weights)
         spectrum, spectrum_error = [res for res in result]
-        return spectrum, spectrum_error
+        image_array = self.make_collapsed_image(0., 0., rafibers, decfibers,
+                                                data, mask, seeing=1.5,
+                                                scale=0.5, boxsize=10.,
+                                                convolve_image=True)
+        image, xgrid, ygrid = image_array
+        return spectrum, spectrum_error, image, xgrid, ygrid
             
