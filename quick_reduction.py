@@ -1421,7 +1421,8 @@ for i, _info in enumerate(info):
     ra, dec = A.get_ifupos_ra_dec('%03d' % ui, P[:, 0], P[:, 1])
     RAFibers.append(ra)
     DecFibers.append(dec)
-mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
+
+mRA, mDec = A.tp.wcs_pix2world(f['fx'], f['fy'], 1)
 E = Extract()
 E.psf = E.tophat_psf(4, 10.5, 0.25)
 E.coords = SkyCoord(mRA*u.deg, mDec*u.deg, frame='fk5')
@@ -1449,6 +1450,10 @@ class Spectra(IsDescription):
      dec  = Float32Col()    # float  (single-precision)
      spectrum  = Float32Col((1036,))    # float  (single-precision)
      error  = Float32Col((1036,))    # float  (single-precision)
+     image = Float32Col((21, 21))
+     xgrid = Float32Col((21, 21))
+     ygrid = Float32Col((21, 21))
+
 
 table = h5spec.create_table(h5spec.root, 'Spectra', Spectra, 
                             "Extracted Spectra")
@@ -1459,6 +1464,9 @@ for ra, dec, specinfo in zip(mRA, mDec, spec_list):
     if len(specinfo[0]) > 0:
         specrow['spectrum'] = specinfo[0]
         specrow['error'] = specinfo[1]
+        specrow['image'] = specinfo[2]
+        specrow['xgrid'] = specinfo[3]
+        specrow['ygrid'] = specinfo[4]
     specrow.append()
 table.flush()
 h5spec.close()
