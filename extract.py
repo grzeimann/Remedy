@@ -375,14 +375,99 @@ class Extract:
         spectrum_error: numpy 1d array
             Error for the flux calibrated extracted spectrum
         '''
-        spectrum = (np.sum(data * mask * weights, axis=0) /
-                    np.sum(mask * weights**2, axis=0))
-        spectrum_error = (np.sqrt(np.sum(error**2 * mask * weights, axis=0)) /
-                          np.sum(mask * weights**2, axis=0))
+        var = error**2
+        spectrum = (np.nansum(data * mask * weights / var, axis=0) /
+                    np.nansum(mask * weights**2 / var, axis=0))
+        spectrum_error = np.sqrt(np.nansum(mask * weights, axis=0) /
+                                 np.nansum(mask * weights**2 / var, axis=0))
         # Only use wavelengths with enough weight to avoid large noise spikes
-        w = np.sum(mask * weights**2, axis=0)
-        sel = w < np.median(w)*0.1
+        w = np.nansum(mask * weights**2 / var, axis=0)
+        sel = w < np.nanmedian(w)*0.1
         spectrum[sel] = np.nan
         spectrum_error[sel] = np.nan
         
         return spectrum, spectrum_error
+    
+    def get_info_within_radius(self, ra, dec, data, error, mask, rac, decc,
+                               thresh=7.):
+        '''
+        Convert RA/Dec to delta_RA and delta_Dec for grid (in arcseconds)
+        
+        Parameters
+        ----------
+        ra : numpy 1d array
+            Right Ascension of the fibers
+        dec : numpy 1d array
+            Declination of the fibers
+        data: numpy 2d array (number of fibers by wavelength dimension)
+            Flux calibrated spectra for fibers in shot
+        error: numpy 2d array
+            Error of the flux calibrated spectra 
+        mask: numpy 2d array (bool)
+            Mask of good wavelength regions for each fiber
+        rac : float
+            Right Ascension for centroid
+        decc : float
+            Declination for centroid
+        thresh : float
+            Distance threshold in arcseconds for finding fibers near rac, decc
+        
+        Returns
+        -------
+        delta_ra : 1d numpy array
+            Offset in Right Ascension (") from rac, decc for each fiber
+        delta_dec : 1d numpy array
+            Offset in Declination (") from rac, decc for each fiber
+        data : numpy 2d array
+            spectra of fibers within thresh radius
+        error : numpy 2d array
+            error spectra of fibers within thresh radius
+        mask : numpy 2d array
+            mask for spectra of fibers within thresh radius
+        '''
+        delta_ra = np.cos(np.deg2rad(decc)) * (ra - rac) * 3600.
+        delta_dec = (dec - decc) * 3600.
+        distsel = np.where(np.sqrt(delta_ra**2 + delta_dec**2) < thresh)[0]
+        if len(distsel) == 0.:
+            return None
+        return (delta_ra[distsel], delta_dec[distsel], data[distsel],
+                error[distsel], mask[distsel])
+        
+    
+    def get_spectrum_by_coord_index(self, ind):
+        '''
+        Weighted spectral extraction
+        
+        Parameters
+        ----------
+        ind: int
+            index of the self.coords array (need to define self.coords first)
+        
+        Returns
+        -------
+        spectrum: numpy 1d array
+            Flux calibrated extracted spectrum
+        spectrum_error: numpy 1d array
+            Error for the flux calibrated extracted spectrum
+        '''
+        if not hasattr(self, 'coords'):
+            self.log.warning('No "coords" attribute found."')
+            return None
+        if not hasattr(self, 'psf'):
+            # default PSF for extraction is a 4" aperture
+            self.psf = self.tophat_psf(4, 10.5, 0.25)
+        ra_cen, dec_cen = (self.coords[ind].ra.deg, self.coords[ind].dec.deg)
+        info_result = self.get_info_within_radius(self.ra, self.dec,
+                                                  self.data, self.error,
+                                                  self.mask, ra_cen, dec_cen,
+                                                  thresh=7.)
+        if info_result is None:
+            return [], []
+        
+        self.log.info('Extracting %i' % ind)
+        rafibers, decfibers, data, error, mask = info_result
+        weights = self.build_weights(0., 0., rafibers, decfibers, self.psf)
+        result = self.get_spectrum(data, error, mask, weights)
+        spectrum, spectrum_error = [res for res in result]
+        return spectrum, spectrum_error
+            
