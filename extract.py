@@ -470,7 +470,7 @@ class Extract:
         result = self.get_spectrum(data, error, mask, weights)
         spectrum, spectrum_error = [res for res in result]
         image_array = self.make_collapsed_image(0., 0., rafibers, decfibers,
-                                                data, mask, seeing=1.5,
+                                                data, mask, seeing_fac=1.5,
                                                 scale=0.5, boxsize=10.,
                                                 convolve_image=True)
         image, xgrid, ygrid = image_array
