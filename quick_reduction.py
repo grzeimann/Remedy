@@ -622,6 +622,42 @@ def get_spectra(array_sci, array_err, array_flt, array_trace, wave, def_wave):
     sci_spectrum[~np.isfinite(sci_spectrum)] = 0.0
     return twi_spectrum, sci_spectrum, err_spectrum
 
+def get_fiber_to_fiber(twispectra, nslots):
+    '''
+    Get Fiber to Fiber from twilight spectra
+    
+    Parameters
+    ----------
+    twispectra : 2d numpy array
+        twilight spectra for each fiber
+        
+    Returns
+    -------
+    ftf : 2d numpy array
+        fiber to fiber normalization
+    '''
+    t = twispectra * 1.
+    t[t< 1e-8] = np.nan
+    g = t / np.nanmedian(t, axis=0)[np.newaxis, :]
+    
+    
+    # Fiber to fiber is an interpolation of median binned normalized twi spectra
+    nbins = 25
+    a = np.array([np.nanmedian(f, axis=1) for f in np.array_split(g, nbins, axis=1)]).swapaxes(0, 1)
+    x = np.array([np.mean(xi) for xi in np.array_split(np.arange(g.shape[1]), nbins)])
+    ftf = np.zeros(scispectra.shape)
+    for i, ai in enumerate(a):
+        sel = np.isfinite(ai)
+        if np.sum(sel)>1:
+            I = interp1d(x[sel], ai[sel], kind='quadratic',
+                         fill_value='extrapolate')
+            ftf[i] = I(np.arange(g.shape[1]))
+        else:
+            ftf[i] = 0.0
+    T = safe_division(t, ftf)
+    g = t / np.nanpercentile(T, 90, axis=0)[np.newaxis, :]
+    return g
+
 def get_sci_twi_files():
     '''
     Get the names of the fits files for the science frames of interest
@@ -1252,32 +1288,12 @@ log.info('Reducing ifuslot: %03d' % args.ifuslot)
 pos, twispectra, scispectra, errspectra, fn, tfile = reduce_ifuslot(ifuloop,
                                                                     h5table)
 
-# Normalize twi spectra to correct fiber to fiber
-t = twispectra * 1.
-t[t< 1e-8] = np.nan
-if nslots > 10:
-    g = t / np.nanpercentile(t, 90, axis=0)[np.newaxis, :]
-else:
-    g = t / np.nanmean(t, axis=0)[np.newaxis, :]
-
-
-# Fiber to fiber is an interpolation of median binned normalized twi spectra
-nbins = 25
-a = np.array([np.nanmedian(f, axis=1) for f in np.array_split(g, nbins, axis=1)]).swapaxes(0, 1)
-x = np.array([np.mean(xi) for xi in np.array_split(np.arange(g.shape[1]), nbins)])
-ftf = np.zeros(scispectra.shape)
-for i, ai in enumerate(a):
-    sel = np.isfinite(ai)
-    if np.sum(sel)>1:
-        I = interp1d(x[sel], ai[sel], kind='quadratic',
-                     fill_value='extrapolate')
-        ftf[i] = I(np.arange(g.shape[1]))
-    else:
-        ftf[i] = 0.0
+# Get fiber to fiber from twilight spectra
+ftf = get_fiber_to_fiber(twispectra)
 
 # Correct fiber to fiber
-scispectra = safe_division(scispectra, g)
-errspectra = safe_division(errspectra, g)
+scispectra = safe_division(scispectra, ftf)
+errspectra = safe_division(errspectra, ftf)
 
 
 ###################
