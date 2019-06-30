@@ -55,7 +55,7 @@ warnings.filterwarnings("ignore")
 amps = ['LL', 'LU', 'RL', 'RU']
 
 # Ignore these ifuslots because they are subpar or look poor
-badifuslots = np.array([67, 46, 84, 83, 96, 104, 86, 42, 91, 88, 86, 95, 75])
+badifuslots = np.array([67, 84, 83, 96, 104, 86, 42, 91, 88, 86, 95, 75])
 
 # Default dither pattern for 3 exposures
 dither_pattern = np.array([[0., 0.], [1.27, -0.73], [1.27, 0.73]])
