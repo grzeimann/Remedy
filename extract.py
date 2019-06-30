@@ -68,6 +68,20 @@ class Extract:
         self.ADRx = np.cos(np.deg2rad(angle)) * ADR
         self.ADRy = np.sin(np.deg2rad(angle)) * ADR
 
+    def get_ADR_RAdec(self, astrometry_object):
+        '''
+        Use an astrometry object to convert delta_x and delta_y into
+        delta_ra and delta_dec
+        
+        Parameters
+        ----------
+        astrometry_object : Astrometry Class
+            Contains the astrometry to convert x and y to RA and Dec
+        '''
+        tRA, tDec = astrometry_object.tp.wcs_pix2world(self.ADRx, self.ADRy)
+        self.ADRra = ((tRA - astrometry_object.ra0) * 3600. *
+                      np.cos(np.deg2rad(astrometry_object.dec0)))
+        self.ADRdec = (tDec - astrometry_object.dec0) * 3600.
 
     def intersection_area(self, d, R, r):
         """
@@ -278,8 +292,8 @@ class Extract:
             marray = np.ma.array(chunk, mask=mchunk<1e-8)
             image = np.ma.median(marray, axis=1)
             image = image / np.ma.sum(image)
-            S[:, 0] = xloc - self.ADRx[ichunk[cnt]]
-            S[:, 1] = yloc - self.ADRy[ichunk[cnt]]
+            S[:, 0] = xloc - self.ADRra[ichunk[cnt]]
+            S[:, 1] = yloc - self.ADRdec[ichunk[cnt]]
             cnt += 1
             grid_z = (griddata(S[~image.mask], image.data[~image.mask],
                                (xgrid, ygrid), method=interp_kind) *
@@ -346,8 +360,8 @@ class Extract:
         scale = np.abs(psf[1][0, 1] - psf[1][0, 0])
         area = 0.75**2 * np.pi
         for i in np.arange(len(self.wave)):
-            S[:, 0] = ifux - self.ADRx[i] - xc
-            S[:, 1] = ifuy - self.ADRy[i] - yc
+            S[:, 0] = ifux - self.ADRra[i] - xc
+            S[:, 1] = ifuy - self.ADRdec[i] - yc
             weights[:, i] = I(S[:, 0], S[:, 1]) * area / scale**2
 
         return weights
