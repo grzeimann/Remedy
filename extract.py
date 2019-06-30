@@ -300,8 +300,8 @@ class Extract:
                       scale**2 / area)
             if convolve_image:
                 grid_z = convolve(grid_z, G)
-            image_list.append(grid_z / np.nansum(grid_z))
-        image = np.nanmedian(image_list, axis=0)
+            image_list.append(grid_z)
+        image = np.nanmean(image_list, axis=0)
         image[np.isnan(image)] = 0.0
         zarray = np.array([image, xgrid-xc, ygrid-yc])
         return zarray
