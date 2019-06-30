@@ -78,7 +78,7 @@ class Extract:
         astrometry_object : Astrometry Class
             Contains the astrometry to convert x and y to RA and Dec
         '''
-        tRA, tDec = astrometry_object.tp.wcs_pix2world(self.ADRx, self.ADRy)
+        tRA, tDec = astrometry_object.tp.wcs_pix2world(self.ADRx, self.ADRy, 1)
         self.ADRra = ((tRA - astrometry_object.ra0) * 3600. *
                       np.cos(np.deg2rad(astrometry_object.dec0)))
         self.ADRdec = (tDec - astrometry_object.dec0) * 3600.
