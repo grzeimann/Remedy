@@ -1262,8 +1262,9 @@ else:
 
 
 # Fiber to fiber is an interpolation of median binned normalized twi spectra
-a = np.array([np.nanmedian(f, axis=1) for f in np.array_split(g, 25, axis=1)]).swapaxes(0, 1)
-x = np.array([np.mean(xi) for xi in np.array_split(np.arange(g.shape[1]), 25)])
+nbins = 25
+a = np.array([np.nanmedian(f, axis=1) for f in np.array_split(g, nbins, axis=1)]).swapaxes(0, 1)
+x = np.array([np.mean(xi) for xi in np.array_split(np.arange(g.shape[1]), nbins)])
 ftf = np.zeros(scispectra.shape)
 for i, ai in enumerate(a):
     sel = np.isfinite(ai)
@@ -1275,8 +1276,8 @@ for i, ai in enumerate(a):
         ftf[i] = 0.0
 
 # Correct fiber to fiber
-scispectra = safe_division(scispectra, ftf)
-errspectra = safe_division(errspectra, ftf)
+scispectra = safe_division(scispectra, g)
+errspectra = safe_division(errspectra, g)
 
 
 ###################
