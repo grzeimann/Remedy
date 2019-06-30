@@ -622,7 +622,7 @@ def get_spectra(array_sci, array_err, array_flt, array_trace, wave, def_wave):
     sci_spectrum[~np.isfinite(sci_spectrum)] = 0.0
     return twi_spectrum, sci_spectrum, err_spectrum
 
-def get_fiber_to_fiber(twispectra, nslots):
+def get_fiber_to_fiber(twispectra):
     '''
     Get Fiber to Fiber from twilight spectra
     
