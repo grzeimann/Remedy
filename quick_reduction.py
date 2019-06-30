@@ -1430,6 +1430,7 @@ E.ra, E.dec = [np.hstack(x) for x in [RAFibers, DecFibers]]
 E.data = scispectra
 E.error = errspectra
 E.mask = np.isfinite(scispectra)
+E.get_ADR_RAdec(A)
 log.info('Beginning Extraction')
 if args.parallelize:
     N = np.array(np.max([multiprocessing.cpu_count()-2, 1]), dtype=int)
