@@ -1508,6 +1508,9 @@ for i in np.arange(len(E.ra)):
     specrow['spectrum'] = scispectra[i]
     specrow['error'] = errspectra[i]
     specrow['fiber_to_fiber'] = ftf[i]
+    specrow.append()
+table.flush()
+
 h5spec.close()
 # Making g-band images
 for i in info:
