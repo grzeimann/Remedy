@@ -638,25 +638,28 @@ def get_fiber_to_fiber(twispectra):
     '''
     t = twispectra * 1.
     t[t< 1e-8] = np.nan
-    g = t / np.nanmedian(t, axis=0)[np.newaxis, :]
-    
-    
-    # Fiber to fiber is an interpolation of median binned normalized twi spectra
-    nbins = 51
-    a = np.array([np.nanmedian(f, axis=1) for f in np.array_split(g, nbins, axis=1)]).swapaxes(0, 1)
-    x = np.array([np.mean(xi) for xi in np.array_split(np.arange(g.shape[1]), nbins)])
-    ftf = np.zeros(scispectra.shape)
+    nbins = 25
+    a = np.array([np.nanmedian(f, axis=1) 
+                  for f in np.array_split(t, nbins, axis=1)]).swapaxes(0, 1)
+    x = np.array([np.mean(xi) 
+                  for xi in np.array_split(np.arange(t.shape[1]), nbins)])
+    ftf_init = np.zeros(scispectra.shape)
+    X = np.arange(t.shape[1])
     for i, ai in enumerate(a):
         sel = np.isfinite(ai)
         if np.sum(sel)>1:
             I = interp1d(x[sel], ai[sel], kind='quadratic',
                          fill_value='extrapolate')
-            ftf[i] = I(np.arange(g.shape[1]))
+            ftf_init[i] = I(X)
         else:
-            ftf[i] = 0.0
-    T = safe_division(t, ftf)
-    g = t / np.nanpercentile(T, 50, axis=0)[np.newaxis, :]
-    return g
+            ftf_init[i] = 0.0
+    norm = np.nanmean(ftf_init, axis=1)
+    big_Norm = np.nanmedian(norm)
+    smooth_avg = np.nanmedian(ftf_init / norm[:, np.newaxis], axis=0)
+    finer_avg = np.nanmedian(safe_division(t, ftf_init), axis=0)
+    avg_spec = finer_avg * smooth_avg * big_Norm
+    ftf = safe_division(t, avg_spec)
+    return ftf
 
 def get_sci_twi_files():
     '''
@@ -1463,6 +1466,14 @@ name = ('%s_%07d.h5' %
                 (args.date, args.observation))
 h5spec = open_file(name, mode="w", title="%s Spectra" % name[:-3])
 
+class Fibers(IsDescription):
+     ra  = Float32Col()    # float  (single-precision)
+     dec  = Float32Col()    # float  (single-precision)
+     spectrum  = Float32Col((1036,))    # float  (single-precision)
+     error  = Float32Col((1036,))    # float  (single-precision)
+     fiber_to_fiber  = Float32Col((1036,))    # float  (single-precision)
+
+
 class Spectra(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
      dec  = Float32Col()    # float  (single-precision)
@@ -1487,6 +1498,16 @@ for ra, dec, specinfo in zip(mRA, mDec, spec_list):
         specrow['ygrid'] = specinfo[4]
     specrow.append()
 table.flush()
+
+table = h5spec.create_table(h5spec.root, 'Fibers', Fibers, 
+                            "Fiber Information")
+specrow = table.row
+for i in np.arange(len(E.ra)):
+    specrow['ra'] = E.ra[i]
+    specrow['dec'] = E.dec[i]
+    specrow['spectrum'] = scispectra[i]
+    specrow['error'] = errspectra[i]
+    specrow['fiber_to_fiber'] = ftf[i]
 h5spec.close()
 # Making g-band images
 for i in info:
