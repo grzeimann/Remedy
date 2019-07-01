@@ -642,7 +642,7 @@ def get_fiber_to_fiber(twispectra):
     
     
     # Fiber to fiber is an interpolation of median binned normalized twi spectra
-    nbins = 25
+    nbins = 51
     a = np.array([np.nanmedian(f, axis=1) for f in np.array_split(g, nbins, axis=1)]).swapaxes(0, 1)
     x = np.array([np.mean(xi) for xi in np.array_split(np.arange(g.shape[1]), nbins)])
     ftf = np.zeros(scispectra.shape)
@@ -655,7 +655,7 @@ def get_fiber_to_fiber(twispectra):
         else:
             ftf[i] = 0.0
     T = safe_division(t, ftf)
-    g = t / np.nanpercentile(T, 90, axis=0)[np.newaxis, :]
+    g = t / np.nanpercentile(T, 50, axis=0)[np.newaxis, :]
     return g
 
 def get_sci_twi_files():
