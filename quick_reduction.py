@@ -37,7 +37,7 @@ from extract import Extract
 from input_utils import setup_logging
 from multiprocessing import Pool
 from photutils import DAOStarFinder, aperture_photometry, CircularAperture
-from scipy.interpolate import griddata, interp1d
+from scipy.interpolate import griddata, interp1d, interp2d
 from scipy.signal import savgol_filter
 from tables import open_file, IsDescription, Float32Col
 
@@ -564,6 +564,45 @@ def get_script_path():
     '''
     return op.dirname(op.realpath(sys.argv[0]))
 
+def get_twi_spectra(array_flt, array_trace, wave, def_wave):
+    '''
+    Extract spectra by dividing the flat field and averaging the central
+    two pixels
+    
+    Parameters
+    ----------
+    array_flt : 2d numpy array
+        twilight image
+    array_trace : 2d numpy array
+        trace for each fiber
+    wave : 2d numpy array
+        wavelength for each fiber
+    def_wave : 1d numpy array [GLOBAL]
+        rectified wavelength
+    
+    Returns
+    -------
+    twi_spectrum : 2d numpy array
+        rectified twilight spectrum for each fiber  
+    '''
+    twi_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
+    N = array_flt.shape[0]
+    x = np.arange(array_flt.shape[1])
+    for fiber in np.arange(array_trace.shape[0]):
+        dw = np.diff(wave[fiber])
+        dw = np.hstack([dw[0], dw])
+        if array_trace[fiber].min() < 1.:
+            continue
+        if np.ceil(array_trace[fiber]).max() >= (N-1):
+            continue
+        indl = np.floor(array_trace[fiber]).astype(int)
+        indh = np.ceil(array_trace[fiber]).astype(int)
+        tw = array_flt[indl, x] / 2. + array_flt[indh, x] / 2.
+        twi_spectrum[fiber] = np.interp(def_wave, wave[fiber], tw / dw,
+                                        left=0.0, right=0.0)
+    twi_spectrum[~np.isfinite(twi_spectrum)] = 0.0
+    return twi_spectrum
+
 
 def get_spectra(array_sci, array_err, array_flt, array_trace, wave, def_wave):
     '''
@@ -680,8 +719,36 @@ def power_law(x, c1, c2=.5, c3=.15, c4=1., sig=2.5):
     '''
     return c1 / (c2 + c3 * np.power(abs(x / sig), c4))
 
+def get_powerlaw_ydir(trace, spec, amp, col):
+    '''
+    Get powerlaw in ydir for a given column
+    
+    Parameters
+    ----------
+    trace : 2d numpy array
+        y position as function of x for each fiber
+    spec : 2d numpy array
+        fiber spectra
+    amp : str
+        amplifier
+    col : int
+        Column
+    '''
+    if amp in ['LL', 'RU']:
+        ntrace = np.vstack([trace, 2064 - trace])
+    else: 
+        ntrace = np.vstack([-trace, trace])
+    nspec = np.vstack([spec, spec])
+    YM, XM = np.indices(ntrace.shape)
+    yz = np.linspace(0, 1031, 25)
+    plaw = []
+    for yi in yz:
+        d = np.sqrt((yi - ntrace[:, ::43])**2 + (col - XM[:, ::43])**2)
+        plaw.append(np.nansum(nspec[:, ::43] *
+                              power_law(d, 1.4e-5, c3=2., c4=1.0,  sig=1.5)))
+    return yz, np.array(plaw)   
 
-def get_powerlaw(image, trace):
+def get_powerlaw(image, trace, spec, amp):
     '''
     Solve for scatter light from powerlaw
     
@@ -692,7 +759,9 @@ def get_powerlaw(image, trace):
     trace : 2d numpy array
         y position as function of x for each fiber
     spec : 2d numpy array
-        spectrum for each fiber
+        fiber spectra
+    amp : str
+        amplifier
 
     Returns
     -------
@@ -700,54 +769,59 @@ def get_powerlaw(image, trace):
         scatter light image from powerlaw
     '''
     fibgap = np.where(np.diff(trace[:, 400]) > 10.)[0]
-    x, y = ([], [])
-    images = [np.nan * image for i in np.arange(2+len(fibgap))]
-    xv = [np.nan*np.zeros((trace.shape[1],)) for i in np.arange(2+len(fibgap))]
-    C = np.arange(image.shape[0])
-    for j in np.arange(trace.shape[1]):
-        cnt = 0
-        d = np.array(np.arange(0, np.ceil(trace[0, j] - 7)), dtype=int)
-        if len(d):
-            y.append(d)
-            x.append([j] * len(d))
-            xv[cnt][j] = np.mean(d)
-            images[cnt][d, j] = image[d, j]
-        cnt +=1
-        for fib in fibgap:
-            d = np.array(np.arange(np.ceil(trace[fib, j]+7),
-                                   np.ceil(trace[fib+1, j]-7)), dtype=int)
+    X = np.arange(image.shape[1])
+    Y = np.arange(image.shape[0])
+    yind, xind = np.indices(image.shape)
+    XV = np.array_split(X, 25)
+    T = np.array_split(trace, 25, axis=1)
+    XM, YM, ZM = ([], [], [])
+    for xchunk, tchunk in zip(XV, T):
+        avgy, avgz = ([], [])
+        avgx = int(np.mean(xchunk))
+        x, y = ([], [])
+        dy = np.array(np.ceil(tchunk[0, xchunk])-7, dtype=int)
+        for j, xc in enumerate(xchunk):
+            d = np.arange(0, dy[j])
             if len(d):
                 y.append(d)
-                x.append([j] * len(d))
-                xv[cnt][j] = np.mean(d)
-                images[cnt][d, j] = image[d, j]
-            cnt +=1
-        
-        d = np.array(np.arange(np.ceil(trace[-1, j] + 7),
-                               image.shape[0]), dtype=int)
-        if len(d):
-            y.append(d)
-            x.append([j] * len(d))
-            xv[cnt][j] = np.mean(d)
-            images[cnt][d, j] = image[d, j]
-    spec = []
-    X = np.arange(image.shape[1])
-    for im in images:
-        Y = np.nanmedian(im, axis=0)
-        sel = np.isfinite(Y) 
-        smooth = savgol_filter(Y[sel], 25, 3)
-        I = interp1d(X[sel], smooth, kind='quadratic',
-                     fill_value='extrapolate')
-        spec.append(I(X))
-    xv, spec = [np.array(i) for i in [xv, spec]]
-    for i in np.arange(len(xv)):
-        sel = np.isfinite(xv[i])
-        xv[i] = np.polyval(np.polyfit(X[sel], xv[i][sel], 3), X)
-    plaw = image * 0.
-    for j in np.arange(trace.shape[1]):
-        plaw[:, j] = np.polyval(np.polyfit(xv[:, j], spec[:, j], 3), C)
-    y, x = [np.array(np.hstack(i), dtype=int) for i in [y, x]]
-    return y, x, plaw
+                x.append([xc] * len(d))
+        if len(y):
+            y, x = [np.array(np.hstack(i), dtype=int) for i in [y, x]]
+            avgy.append(np.mean(y))
+            avgz.append(np.median(image[y, x]))
+        for fib in fibgap:
+            x, y = ([], [])
+            dy = np.array(np.ceil(tchunk[fib, xchunk])+7, dtype=int)
+            dy2 = np.array(np.ceil(tchunk[fib+1, xchunk])-7, dtype=int)
+            for j, xc in enumerate(xchunk):
+                d = np.arange(dy[j], dy2[j])
+                if len(d):
+                    y.append(d)
+                    x.append([xc] * len(d))
+            if len(y):
+                y, x = [np.array(np.hstack(i), dtype=int) for i in [y, x]]
+                avgy.append(np.mean(y))
+                avgz.append(np.median(image[y, x]))
+        x, y = ([], [])
+        dy = np.array(np.ceil(tchunk[-1, xchunk])+7, dtype=int)
+        for j, xc in enumerate(xchunk):
+            d = np.arange(dy[j], image.shape[1])
+            if len(d):
+                y.append(d)
+                x.append([xc] * len(d))
+        if len(y):
+            y, x = [np.array(np.hstack(i), dtype=int) for i in [y, x]]
+            avgy.append(np.mean(y))
+            avgz.append(np.median(image[y, x]))
+        yz, plaw_col = get_powerlaw_ydir(trace, spec, amp, avgx)
+        norm = np.nanmedian(np.array(avgz) / np.interp(avgy, yz, plaw_col))
+        XM.append([avgx] * len(yz))
+        YM.append(yz)
+        ZM.append(plaw_col * norm)
+    I = interp2d(np.hstack(XM), np.hstack(YM), np.hstack(ZM), kind='cubic',
+                 fill_value='extraploate')
+    plaw = I(xind, yind)
+    return plaw
 
 def get_sci_twi_files(kind='twi'):
     '''
@@ -857,8 +931,9 @@ def reduce_ifuslot(ifuloop, h5table):
         log.info('Making mastertwi for %s%s' % (ifuslot, amp))
         masterflt = get_mastertwi(twibase, masterbias, twitarfile)
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
-        yind, xind, plaw = get_powerlaw(masterflt, trace)
-        
+        twi = get_twi_spectra(masterflt, trace, wave, def_wave)
+        plaw = get_powerlaw(masterflt, trace, twi, amp)
+        masterflt[:] = masterflt - plaw
         
         fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
         filenames = fnmatch.filter(scinames, fnames_glob)
@@ -868,6 +943,7 @@ def reduce_ifuslot(ifuloop, h5table):
             ratio = savgol_filter(np.median(sciimage / masterflt, axis=0), 351,
                                   3)
             sci_plaw = plaw * ratio[np.newaxis, :]
+            sciimage[:] = sciimage - sci_plaw
             twi, spec, espec = get_spectra(sciimage, scierror, masterflt,
                                            trace, wave, def_wave)
             twi[:] = safe_division(twi, amp2amp*throughput)
