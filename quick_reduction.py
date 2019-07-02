@@ -702,7 +702,7 @@ def get_powerlaw(image, trace):
     fibgap = np.where(np.diff(trace[:, 400]) > 10.)[0]
     x, y = ([], [])
     images = [np.nan * image for i in np.arange(2+len(fibgap))]
-    xv = [[] for i in np.arange(2+len(fibgap))]
+    xv = [np.nan*np.zeros((trace.shape[1],)) for i in np.arange(2+len(fibgap))]
     C = np.arange(image.shape[0])
     for j in np.arange(trace.shape[1]):
         cnt = 0
@@ -710,7 +710,7 @@ def get_powerlaw(image, trace):
         if len(d):
             y.append(d)
             x.append([j] * len(d))
-            xv[cnt].append(np.mean(d))
+            xv[cnt][j] = np.mean(d)
             images[cnt][d, j] = image[d, j]
         cnt +=1
         for fib in fibgap:
@@ -719,7 +719,7 @@ def get_powerlaw(image, trace):
             if len(d):
                 y.append(d)
                 x.append([j] * len(d))
-                xv[cnt].append(np.mean(d))
+                xv[cnt][j] = np.mean(d)
                 images[cnt][d, j] = image[d, j]
             cnt +=1
         
@@ -728,7 +728,7 @@ def get_powerlaw(image, trace):
         if len(d):
             y.append(d)
             x.append([j] * len(d))
-            xv[cnt].append(np.mean(d))
+            xv[cnt][j] = np.mean(d)
             images[cnt][d, j] = image[d, j]
     spec = []
     X = np.arange(image.shape[1])
@@ -739,9 +739,10 @@ def get_powerlaw(image, trace):
         I = interp1d(X[sel], smooth, kind='quadratic',
                      fill_value='extrapolate')
         spec.append(I(X))
-    print(len(xv[0]))
     xv, spec = [np.array(i) for i in [xv, spec]]
-    print(xv.shape, spec.shape, trace.shape)
+    for i in np.arange(len(xv)):
+        sel = np.isfinite(xv[i])
+        xv[i] = np.polyval(np.polyfit(X[sel], xv[i][sel], 3), X)
     plaw = image * 0.
     for j in np.arange(trace.shape[1]):
         plaw[:, j] = np.polyval(np.polyfit(xv[:, j], spec[:, j], 3), C)
