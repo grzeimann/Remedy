@@ -816,7 +816,7 @@ def get_powerlaw(image, trace, spec, amp):
         YM.append(yz)
         ZM.append(plaw_col * norm)
     I = interp2d(np.hstack(XM), np.hstack(YM), np.hstack(ZM), kind='cubic',
-                 fill_value='extrapolate')
+                 bounds_error=False)
     plaw = I(xind[0, :], yind[:, 0]).reshape(image.shape)
     return plaw
 
