@@ -817,8 +817,12 @@ def get_powerlaw(image, trace, spec, amp):
         ZM.append(plaw_col * norm)
     XM, YM = (np.hstack(XM), np.hstack(YM))
     xi, yi = (np.unique(XM), np.unique(YM))
-    I = interp2d(xi, yi, np.hstack(ZM).reshape(len(yi), len(xi)), kind='cubic',
-                 bounds_error=False)
+    try:
+        I = interp2d(xi, yi, np.hstack(ZM).reshape(len(yi), len(xi)), kind='cubic',
+                     bounds_error=False)
+    except:
+        fits.PrimaryHDU(np.vstack([XM, YM, np.hstack(ZM)])).writeto('trouble.fits', overwrite=True)
+        sys.exit(1)
     plaw = I(xind[0, :], yind[:, 0]).swapaxes(0, 1)
     return plaw
 
