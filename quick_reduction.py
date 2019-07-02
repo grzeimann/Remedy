@@ -38,6 +38,7 @@ from input_utils import setup_logging
 from multiprocessing import Pool
 from photutils import DAOStarFinder, aperture_photometry, CircularAperture
 from scipy.interpolate import griddata, interp1d
+from scipy.signal import savgol_filter
 from tables import open_file, IsDescription, Float32Col
 
 
@@ -478,7 +479,7 @@ def get_mastertwi(files, masterbias, twitarfile):
     norm = np.median(twi_array, axis=(1, 2))[:, np.newaxis, np.newaxis]
     return np.median(twi_array / norm, axis=0) * np.median(norm)
 
-def get_twi_tarfile(pathname, date):
+def get_twi_tarfile(pathname, date, kind='twi'):
     '''
     Go through many dates if necessary and find the tar file that contains
     twilight exposures.
@@ -517,7 +518,7 @@ def get_twi_tarfile(pathname, date):
                 except:
                     flag = False
                 if name[-5:] == '.fits':
-                    if name[-8:-5] == 'twi':
+                    if name[-8:-5] == kind:
                         twitarfile = tarfolder
                     flag = False
             if twitarfile is not None:
@@ -661,7 +662,85 @@ def get_fiber_to_fiber(twispectra):
     ftf = safe_division(t, avg_spec)
     return ftf
 
-def get_sci_twi_files():
+def power_law(x, c1, c2=.5, c3=.15, c4=1., sig=2.5):
+    '''
+    Power law for scattered light from mirror imperfections
+    
+    Parameters
+    ----------
+    x : float or 1d numpy array
+        Distance from fiber in pixels
+    c1 : float
+        Normalization of powerlaw
+    
+    Returns
+    -------
+    plaw : float or 1d numpy array
+        see function form below
+    '''
+    return c1 / (c2 + c3 * np.power(abs(x / sig), c4))
+
+
+def get_powerlaw(image, trace):
+    '''
+    Solve for scatter light from powerlaw
+    
+    Parameters
+    ----------
+    image : 2d numpy array
+        fits image
+    trace : 2d numpy array
+        y position as function of x for each fiber
+    spec : 2d numpy array
+        spectrum for each fiber
+
+    Returns
+    -------
+    plaw : 2d numpy array
+        scatter light image from powerlaw
+    '''
+    fibgap = np.where(np.diff(trace[:, 400]) > 10.)[0]
+    x, y = ([], [])
+    images = [np.nan * image for i in np.arange(2+len(fibgap))]
+    xv = [[] for i in np.arange(2+len(fibgap))]
+    C = np.arange(image.shape[0])
+    for j in np.arange(trace.shape[1]):
+        cnt = 0
+        d = np.array(np.arange(0, np.ceil(trace[0, j] - 7)), dtype=int)
+        if len(d):
+            y.append(d)
+            x.append([j] * len(d))
+            xv[cnt].append(np.mean(d))
+            images[cnt][d, j] = image[d, j]
+        cnt +=1
+        for fib in fibgap:
+            d = np.array(np.arange(np.ceil(trace[fib, j]+7),
+                                   np.ceil(trace[fib+1, j]-7)), dtype=int)
+            if len(d):
+                y.append(d)
+                x.append([j] * len(d))
+                xv[cnt].append(np.mean(d))
+                images[cnt][d, j] = image[d, j]
+            cnt +=1
+        
+        d = np.array(np.arange(np.ceil(trace[-1, j] + 7),
+                               image.shape[0]), dtype=int)
+        if len(d):
+            y.append(d)
+            x.append([j] * len(d))
+            xv[cnt].append(np.mean(d))
+            images[cnt][d, j] = image[d, j]
+    spec = []
+    for im in images:
+        spec.append(savgol_filter(np.nanmedian(im, axis=0), 25, 3))
+    xv, spec = [np.array(i) for i in [xv, spec]]
+    plaw = image * 0.
+    for j in np.arange(trace.shape[1]):
+        plaw[:, j] = np.polyval(np.polyfit(xv[:, j], spec[:, j], 3), C)
+    y, x = [np.array(np.hstack(i), dtype=int) for i in [y, x]]
+    return y, x, plaw
+
+def get_sci_twi_files(kind='twi'):
     '''
     Get the names of the fits files for the science frames of interest
     and the twilight frames of interest.  If the files are tarred,
@@ -697,7 +776,7 @@ def get_sci_twi_files():
         scitarfile = None
     if scitarfile is None:
         pathname = build_path(args.rootdir, args.date, '*', '*', '*',
-                             base='twi')
+                             base=kind)
         twinames = sorted(roll_through_dates(pathname, args.date))
         twitarfile = None
     else:
@@ -705,7 +784,7 @@ def get_sci_twi_files():
                            '047', 'LL')
         path = splitall(file_glob)
         tarname = op.join(*path[:-3]) + ".tar"
-        twitarfile = get_twi_tarfile(tarname, args.date)
+        twitarfile = get_twi_tarfile(tarname, args.date, kind=kind)
         with tarfile.open(twitarfile) as tf:
             twinames = sorted(tf.getnames())
     return scinames, twinames, scitarfile, twitarfile
@@ -769,12 +848,17 @@ def reduce_ifuslot(ifuloop, h5table):
         log.info('Making mastertwi for %s%s' % (ifuslot, amp))
         masterflt = get_mastertwi(twibase, masterbias, twitarfile)
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
-
+        yind, xind, plaw = get_powerlaw(masterflt, trace)
+        
+        
         fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
         filenames = fnmatch.filter(scinames, fnames_glob)
         for j, fn in enumerate(filenames):
             sciimage, scierror = base_reduction(fn, tfile=scitarfile)
             sciimage[:] = sciimage - masterbias
+            ratio = savgol_filter(np.median(sciimage / masterflt, axis=0), 351,
+                                  3)
+            sci_plaw = plaw * ratio[np.newaxis, :]
             twi, spec, espec = get_spectra(sciimage, scierror, masterflt,
                                            trace, wave, def_wave)
             twi[:] = safe_division(twi, amp2amp*throughput)
