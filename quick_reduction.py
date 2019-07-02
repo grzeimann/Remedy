@@ -930,7 +930,7 @@ def reduce_ifuslot(ifuloop, h5table):
         twi = get_twi_spectra(masterflt, trace, wave, def_wave)
         plaw, x, y, z = get_powerlaw(masterflt, trace, twi, amp)
         
-        fits.PrimaryHDU(np.vstack(x, y, z)).writeto('test.fits', overwrite=True)
+        fits.PrimaryHDU(np.vstack(px, y, z])).writeto('test.fits', overwrite=True)
         sys.exit(1)
         masterflt[:] = masterflt - plaw
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
