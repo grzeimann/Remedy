@@ -585,7 +585,7 @@ def get_twi_spectra(array_flt, array_trace, wave, def_wave):
     twi_spectrum : 2d numpy array
         rectified twilight spectrum for each fiber  
     '''
-    twi_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
+    twi_spectrum = np.zeros((array_trace.shape[0], array_trace.shape[1]))
     N = array_flt.shape[0]
     x = np.arange(array_flt.shape[1])
     for fiber in np.arange(array_trace.shape[0]):
