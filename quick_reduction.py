@@ -817,12 +817,8 @@ def get_powerlaw(image, trace, spec, amp):
         ZM.append(plaw_col * norm)
     XM, YM = (np.hstack(XM), np.hstack(YM))
     xi, yi = (np.unique(XM), np.unique(YM))
-    try:
-        I = interp2d(xi, yi, np.hstack(ZM).reshape(len(yi), len(xi)), kind='cubic',
-                     bounds_error=False)
-    except:
-        fits.PrimaryHDU(np.vstack([XM, YM, np.hstack(ZM)])).writeto('trouble.fits', overwrite=True)
-        sys.exit(1)
+    I = interp2d(xi, yi, np.hstack(ZM).reshape(len(yi), len(xi)), kind='cubic',
+                 bounds_error=False)
     plaw = I(xind[0, :], yind[:, 0]).swapaxes(0, 1)
     return plaw
 
@@ -947,8 +943,8 @@ def reduce_ifuslot(ifuloop, h5table):
         for j, fn in enumerate(filenames):
             sciimage, scierror = base_reduction(fn, tfile=scitarfile)
             sciimage[:] = sciimage - masterbias
-            ratio = savgol_filter(np.median(sciimage / masterflt, axis=0), 351,
-                                  3)
+            div = safe_division(sciimage, masterflt)
+            ratio = savgol_filter(np.median(div, axis=0), 351, 3)
             sci_plaw = plaw * ratio[np.newaxis, :]
             sciimage[:] = sciimage - sci_plaw
             twi, spec, espec = get_spectra(sciimage, scierror, masterflt,
