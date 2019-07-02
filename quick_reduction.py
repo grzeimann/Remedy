@@ -768,7 +768,6 @@ def get_powerlaw(image, trace, spec, amp):
     '''
     fibgap = np.where(np.diff(trace[:, 400]) > 10.)[0]
     X = np.arange(image.shape[1])
-    Y = np.arange(image.shape[0])
     yind, xind = np.indices(image.shape)
     XV = np.array_split(X, 25)
     T = np.array_split(trace, 25, axis=1)
@@ -777,7 +776,7 @@ def get_powerlaw(image, trace, spec, amp):
         avgy, avgz = ([], [])
         avgx = int(np.mean(xchunk))
         x, y = ([], [])
-        dy = np.array(np.ceil(tchunk[0, xchunk])-7, dtype=int)
+        dy = np.array(np.ceil(trace[0, xchunk])-7, dtype=int)
         for j, xc in enumerate(xchunk):
             d = np.arange(0, dy[j])
             if len(d):
@@ -789,8 +788,8 @@ def get_powerlaw(image, trace, spec, amp):
             avgz.append(np.median(image[y, x]))
         for fib in fibgap:
             x, y = ([], [])
-            dy = np.array(np.ceil(tchunk[fib, xchunk])+7, dtype=int)
-            dy2 = np.array(np.ceil(tchunk[fib+1, xchunk])-7, dtype=int)
+            dy = np.array(np.ceil(trace[fib, xchunk])+7, dtype=int)
+            dy2 = np.array(np.ceil(trace[fib+1, xchunk])-7, dtype=int)
             for j, xc in enumerate(xchunk):
                 d = np.arange(dy[j], dy2[j])
                 if len(d):
@@ -801,7 +800,7 @@ def get_powerlaw(image, trace, spec, amp):
                 avgy.append(np.mean(y))
                 avgz.append(np.median(image[y, x]))
         x, y = ([], [])
-        dy = np.array(np.ceil(tchunk[-1, xchunk])+7, dtype=int)
+        dy = np.array(np.ceil(trace[-1, xchunk])+7, dtype=int)
         for j, xc in enumerate(xchunk):
             d = np.arange(dy[j], image.shape[1])
             if len(d):
