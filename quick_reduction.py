@@ -700,11 +700,11 @@ def get_powerlaw(image, trace):
         scatter light image from powerlaw
     '''
     fibgap = np.where(np.diff(trace[:, 400]) > 10.)[0]
+    print(fibgap)
     x, y = ([], [])
     images = [np.nan * image for i in np.arange(2+len(fibgap))]
     xv = [[] for i in np.arange(2+len(fibgap))]
     C = np.arange(image.shape[0])
-    print(trace)
     for j in np.arange(trace.shape[1]):
         cnt = 0
         d = np.array(np.arange(0, np.ceil(trace[0, j] - 7)), dtype=int)
