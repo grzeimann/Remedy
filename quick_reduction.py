@@ -818,7 +818,7 @@ def get_powerlaw(image, trace, spec, amp):
     I = interp2d(np.hstack(XM), np.hstack(YM), np.hstack(ZM), kind='cubic',
                  bounds_error=False)
     plaw = I(xind[0, :], yind[:, 0]).reshape(image.shape)
-    return plaw
+    return plaw, np.hstack(XM), np.hstack(YM), np.hstack(ZM)
 
 def get_sci_twi_files(kind='twi'):
     '''
@@ -928,8 +928,9 @@ def reduce_ifuslot(ifuloop, h5table):
         log.info('Making mastertwi for %s%s' % (ifuslot, amp))
         masterflt = get_mastertwi(twibase, masterbias, twitarfile)
         twi = get_twi_spectra(masterflt, trace, wave, def_wave)
-        plaw = get_powerlaw(masterflt, trace, twi, amp)
-        fits.PrimaryHDU(plaw).writeto('test.fits', overwrite=True)
+        plaw, x, y, z = get_powerlaw(masterflt, trace, twi, amp)
+        
+        fits.PrimaryHDU(np.vstack(x, y, z)).writeto('test.fits', overwrite=True)
         sys.exit(1)
         masterflt[:] = masterflt - plaw
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
