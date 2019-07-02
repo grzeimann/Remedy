@@ -817,7 +817,7 @@ def get_powerlaw(image, trace, spec, amp):
         ZM.append(plaw_col * norm)
     I = interp2d(np.hstack(XM), np.hstack(YM), np.hstack(ZM), kind='cubic',
                  fill_value='extraploate')
-    plaw = I(xind.ravel(), yind.ravel()).reshape(image.shape)
+    plaw = I(xind[0, :], yind[:, 0]).reshape(image.shape)
     return plaw
 
 def get_sci_twi_files(kind='twi'):
@@ -927,10 +927,11 @@ def reduce_ifuslot(ifuloop, h5table):
         twibase = fnmatch.filter(twinames, fnames_glob)
         log.info('Making mastertwi for %s%s' % (ifuslot, amp))
         masterflt = get_mastertwi(twibase, masterbias, twitarfile)
-        log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
         twi = get_twi_spectra(masterflt, trace, wave, def_wave)
         plaw = get_powerlaw(masterflt, trace, twi, amp)
         masterflt[:] = masterflt - plaw
+        log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
+
         
         fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
         filenames = fnmatch.filter(scinames, fnames_glob)
