@@ -597,9 +597,7 @@ def get_twi_spectra(array_flt, array_trace, wave, def_wave):
             continue
         indl = np.floor(array_trace[fiber]).astype(int)
         indh = np.ceil(array_trace[fiber]).astype(int)
-        tw = array_flt[indl, x] / 2. + array_flt[indh, x] / 2.
-        twi_spectrum[fiber] = np.interp(def_wave, wave[fiber], tw / dw,
-                                        left=0.0, right=0.0)
+        twi_spectrum[fiber] = array_flt[indl, x] / 2. + array_flt[indh, x] / 2.
     twi_spectrum[~np.isfinite(twi_spectrum)] = 0.0
     return twi_spectrum
 
