@@ -740,6 +740,7 @@ def get_powerlaw(image, trace):
                      fill_value='extrapolate')
         spec.append(I(X))
     xv, spec = [np.array(i) for i in [xv, spec]]
+    print(xv.shape, spec.shape, trace.shape)
     plaw = image * 0.
     for j in np.arange(trace.shape[1]):
         plaw[:, j] = np.polyval(np.polyfit(xv[:, j], spec[:, j], 3), C)
