@@ -929,6 +929,8 @@ def reduce_ifuslot(ifuloop, h5table):
         masterflt = get_mastertwi(twibase, masterbias, twitarfile)
         twi = get_twi_spectra(masterflt, trace, wave, def_wave)
         plaw = get_powerlaw(masterflt, trace, twi, amp)
+        fits.PrimaryHDU(plaw).writeto('test.fits', overwrite=True)
+        sys.exit(1)
         masterflt[:] = masterflt - plaw
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
 
