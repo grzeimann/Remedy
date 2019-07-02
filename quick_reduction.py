@@ -700,7 +700,6 @@ def get_powerlaw(image, trace):
         scatter light image from powerlaw
     '''
     fibgap = np.where(np.diff(trace[:, 400]) > 10.)[0]
-    print(fibgap)
     x, y = ([], [])
     images = [np.nan * image for i in np.arange(2+len(fibgap))]
     xv = [[] for i in np.arange(2+len(fibgap))]
@@ -740,6 +739,7 @@ def get_powerlaw(image, trace):
         I = interp1d(X[sel], smooth, kind='quadratic',
                      fill_value='extrapolate')
         spec.append(I(X))
+    print(len(xv[0]))
     xv, spec = [np.array(i) for i in [xv, spec]]
     print(xv.shape, spec.shape, trace.shape)
     plaw = image * 0.
