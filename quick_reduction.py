@@ -731,8 +731,14 @@ def get_powerlaw(image, trace):
             xv[cnt].append(np.mean(d))
             images[cnt][d, j] = image[d, j]
     spec = []
+    X = np.arange(image.shape[1])
     for im in images:
-        spec.append(savgol_filter(np.nanmedian(im, axis=0), 25, 3))
+        Y = np.nanmedian(im, axis=0)
+        sel = np.isfinite(Y) 
+        smooth = savgol_filter(Y[sel], 25, 3)
+        I = interp1d(X[sel], smooth, kind='quadratic',
+                     fill_value='extrapolate')
+        spec.append(I(X))
     xv, spec = [np.array(i) for i in [xv, spec]]
     plaw = image * 0.
     for j in np.arange(trace.shape[1]):
