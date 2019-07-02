@@ -817,7 +817,7 @@ def get_powerlaw(image, trace, spec, amp):
         ZM.append(plaw_col * norm)
     I = interp2d(np.hstack(XM), np.hstack(YM), np.hstack(ZM), kind='cubic',
                  fill_value='extraploate')
-    plaw = I(xind, yind)
+    plaw = I(xind.ravel(), yind.ravel()).reshape(image.shape)
     return plaw
 
 def get_sci_twi_files(kind='twi'):
