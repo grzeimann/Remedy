@@ -301,7 +301,8 @@ class Extract:
             if convolve_image:
                 grid_z = convolve(grid_z, G)
             image_list.append(grid_z)
-        image = np.nanmean(image_list, axis=0)
+        #image = np.nanmean(image_list, axis=0)
+        image = np.array(image_list)
         image[np.isnan(image)] = 0.0
         zarray = np.array([image, xgrid-xc, ygrid-yc])
         return zarray
