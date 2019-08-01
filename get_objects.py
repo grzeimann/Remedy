@@ -28,6 +28,6 @@ for tarfolder in tarfolders:
             flag = False
         if name[-5:] == '.fits':
             T.extractfile(name)
-            a = fits.open(T.extractfile(a))
-            Target = a[0].header['OBJECT']
+            b = fits.open(T.extractfile(a))
+            Target = b[0].header['OBJECT']
             print('%s: %s' % (tarfolder, Target))
