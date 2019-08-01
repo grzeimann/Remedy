@@ -6,15 +6,16 @@ Created on Thu Aug  1 14:47:05 2019
 @author: gregz
 """
 
-import tarfile
 import glob
 import os.path as op
+import sys
+import tarfile
 
 from astropy.io import fits
 
 rootdir = '/work/03946/hetdex/maverick'
 
-date = '20190401'
+date = sys.argv[1]
 
 tarfolders = sorted(glob.glob(op.join(rootdir, date, 'virus', '*')))
 for tarfolder in tarfolders:
