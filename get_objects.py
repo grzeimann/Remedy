@@ -30,5 +30,5 @@ for tarfolder in tarfolders:
         if name[-5:] == '.fits':
             b = fits.open(T.extractfile(a))
             Target = b[0].header['OBJECT']
-            print('%s: %s' % (tarfolder, Target))
+            print('%s: %s --- %s' % (tarfolder, name[-9:-5], Target))
             flag = False
