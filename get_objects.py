@@ -17,7 +17,7 @@ rootdir = '/work/03946/hetdex/maverick'
 
 date = sys.argv[1]
 
-tarfolders = sorted(glob.glob(op.join(rootdir, date, 'virus', '*')))
+tarfolders = sorted(glob.glob(op.join(rootdir, date, 'virus', '*.tar')))
 for tarfolder in tarfolders:
     T = tarfile.open(tarfolder, 'r')
     flag = True
@@ -33,3 +33,4 @@ for tarfolder in tarfolders:
             exptime = b[0].header['EXPTIME']
             print('%s: %s  %s  %0.1f' % (tarfolder, name[-8:-5], Target, exptime))
             flag = False
+    T.close()
