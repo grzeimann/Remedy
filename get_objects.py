@@ -16,17 +16,18 @@ rootdir = '/work/03946/hetdex/maverick'
 
 date = '20190401'
 
-tarfolders = glob.glob(op.join(rootdir, date, 'virus', '*'))
+tarfolders = sorted(glob.glob(op.join(rootdir, date, 'virus', '*')))
 for tarfolder in tarfolders:
     T = tarfile.open(tarfolder, 'r')
     flag = True
     while flag:
         a = T.next()
-        name = a.name
         try:
-            if name[-5:] == '.fits':
-                b = fits.open(T.extractfile(a))
-                Target = b[0].header['OBJECT']
-                print('%s: %s' % (tarfolder, Target))
+            name = a.name
         except:
-            print('Fuck')
+            flag = False
+        if name[-5:] == '.fits':
+            b = fits.open(T.extractfile(a))
+            Target = b[0].header['OBJECT']
+            print('%s: %s' % (tarfolder, Target))
+            flag = False
