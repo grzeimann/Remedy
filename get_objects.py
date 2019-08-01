@@ -22,12 +22,11 @@ for tarfolder in tarfolders:
     flag = True
     while flag:
         a = T.next()
+        name = a.name
         try:
-            name = a.name
+            if name[-5:] == '.fits':
+                b = fits.open(T.extractfile(a))
+                Target = b[0].header['OBJECT']
+                print('%s: %s' % (tarfolder, Target))
         except:
-            flag = False
-        if name[-5:] == '.fits':
-            T.extractfile(name)
-            b = fits.open(T.extractfile(a))
-            Target = b[0].header['OBJECT']
-            print('%s: %s' % (tarfolder, Target))
+            print('Fuck')
