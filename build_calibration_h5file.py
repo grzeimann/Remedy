@@ -188,7 +188,7 @@ parser.add_argument("-f", "--folder", help='''Output folder''', type=str,
                     default='masterbias')
 
 parser.add_argument("-i", "--ifuslot",  help='''IFUSLOT''', type=str,
-                    default='056')
+                    default='047')
 
 
 args = parser.parse_args(args=None)
