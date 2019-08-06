@@ -460,7 +460,6 @@ def get_wave(spec, trace, T_array, res_lim=1., order=3):
         r[j] = res
     w = np.array(w)
     sel = (np.array(r) < res_lim) * (np.array(r) > 0.)
-    print(np.array(r)[np.array(r)>0.])
     wave = w * 0.
     xi = np.hstack([np.arange(0, trace.shape[1], 24), trace.shape[1]-1])
     for i in xi:
