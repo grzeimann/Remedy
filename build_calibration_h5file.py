@@ -14,6 +14,7 @@ import warnings
 import tables as tb
 
 
+from astropy.table import Table
 from datetime import datetime, timedelta
 from distutils.dir_util import mkpath
 from fiber_utils import base_reduction, get_trace, get_spectra
@@ -217,6 +218,10 @@ fileh = tb.open_file(op.join(args.folder, args.outfilename), 'w')
 imagetable = fileh.create_table(fileh.root, 'Cals', VIRUSImage,
                                 'Cal Info')
 
+T = Table(op.join(dirname, 'Lines_list/virus_lines.dat'),
+          format='ascii.no_header')
+T_array = np.array(T['col1'])
+
 for ifuslot in ifuslots:
     for amp in ['LL', 'LU', 'RL', 'RU']:
         row = imagetable.row
@@ -247,7 +252,7 @@ for ifuslot in ifuslots:
                 args.log.info('Getting wavelength for %03d %s' %
                               (int(ifuslot), amp))
                 cmp = get_spectra(_info[0], trace)
-                wave = get_wave(_info[0], trace)
+                wave = get_wave(_info[0], trace, T_array)
                 
         success = append_fibers_to_table(row, wave, trace, ifupos, ifuslot,
                                          ifuid, specid, amp, readnoise,
