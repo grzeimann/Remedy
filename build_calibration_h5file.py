@@ -213,7 +213,7 @@ for kind in kinds:
 
 args.log.info('Number of unique ifuslots: %i' % len(ifuslots))
 
-fileh = tb.open_file(args.outfilename, 'w')
+fileh = tb.open_file(op.join(args.folder, args.outfilename), 'w')
 imagetable = fileh.create_table(fileh.root, 'Cals', VIRUSImage,
                                 'Cal Info')
 
