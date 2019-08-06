@@ -13,7 +13,7 @@ import tarfile
 import warnings
 import tables as tb
 
-
+from astropy.io import fits
 from astropy.table import Table
 from datetime import datetime, timedelta
 from distutils.dir_util import mkpath
@@ -252,8 +252,11 @@ for ifuslot in ifuslots:
                 args.log.info('Getting wavelength for %03d %s' %
                               (int(ifuslot), amp))
                 cmp = get_spectra(_info[0], trace)
-                print(cmp)
-                wave = get_wave(cmp, trace, T_array)
+                try:
+                    wave = get_wave(cmp, trace, T_array)
+                except:
+                    fits.PrimaryHDU(cmp).writeto('testwave.fits', overwrite=True)
+                    fits.PrimaryHDU(trace).writeto('testtrace.fits', overwrite=True)
                 
         success = append_fibers_to_table(row, wave, trace, ifupos, ifuslot,
                                          ifuid, specid, amp, readnoise,
