@@ -218,8 +218,8 @@ fileh = tb.open_file(op.join(args.folder, args.outfilename), 'w')
 imagetable = fileh.create_table(fileh.root, 'Cals', VIRUSImage,
                                 'Cal Info')
 
-T = Table(op.join(dirname, 'Lines_list/virus_lines.dat'),
-          format='ascii.no_header')
+T = Table.read(op.join(dirname, 'Lines_list/virus_lines.dat'),
+               format='ascii.no_header')
 T_array = np.array(T['col1'])
 
 for ifuslot in ifuslots:
