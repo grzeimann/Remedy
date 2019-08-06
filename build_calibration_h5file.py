@@ -185,7 +185,7 @@ parser = setup_parser()
 parser.add_argument('outfilename', type=str,
                     help='''name of the output file''')
 parser.add_argument("-f", "--folder", help='''Output folder''', type=str,
-                    default='masterbias')
+                    default='output')
 
 parser.add_argument("-i", "--ifuslot",  help='''IFUSLOT''', type=str,
                     default='047')
@@ -195,7 +195,7 @@ args = parser.parse_args(args=None)
 args.log = setup_logging(logname='build_master_bias')
 args = set_daterange(args)
 kinds = ['drk', 'twi', 'cmp']
-
+mkpath(args.folder)
 dirname = get_script_path()
 
 filename_dict = {}
