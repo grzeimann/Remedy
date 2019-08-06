@@ -126,9 +126,9 @@ def get_unique_ifuslots(tarfolders):
     return ifuslots
 
 def expand_date_range(daterange, days):
-    l1 = [daterange[0] - datetime.timedelta(days=x)
+    l1 = [daterange[0] - timedelta(days=x)
           for x in np.arange(1, days+1)]
-    l2 = [daterange[-1] + datetime.timedelta(days=x)
+    l2 = [daterange[-1] + timedelta(days=x)
           for x in np.arange(1, days+1)]
     return l1 + daterange + l2
 
