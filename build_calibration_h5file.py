@@ -257,6 +257,7 @@ for ifuslot in ifuslots:
                 except:
                     fits.PrimaryHDU(cmp).writeto('testwave.fits', overwrite=True)
                     fits.PrimaryHDU(trace).writeto('testtrace.fits', overwrite=True)
+                    sys.exit(1)
                 
         success = append_fibers_to_table(row, wave, trace, ifupos, ifuslot,
                                          ifuid, specid, amp, readnoise,
