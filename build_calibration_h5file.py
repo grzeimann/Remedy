@@ -231,21 +231,21 @@ for ifuslot in ifuslots:
                 masterdark = _info[0] * 1.
                 readnoise = biweight(_info[1])
                 args.log.info('Getting pixel mask %03d %s' %
-                          (kind, int(ifuslot), amp))
+                              (int(ifuslot), amp))
                 pixelmask = get_pixelmask(masterdark)
             if kind == 'twi':
                 args.log.info('Getting trace for %03d %s' %
-                          (kind, int(ifuslot), amp))
+                              (int(ifuslot), amp))
                 trace, ref = get_trace(_info[0], specid, ifuSlot, ifuid,
                                        amp, _info[2][:8], dirname)
                 twi = get_spectra(_info[0], trace)
                 args.log.info('Getting powerlaw for %03d %s' %
-                          (kind, int(ifuslot), amp))
+                              (int(ifuslot), amp))
                 plaw = get_powerlaw(_info[0], trace, twi, amp)
                 ifupos = get_ifucenfile(dirname, ifuid, amp)
             if kind == 'cmp':
                 args.log.info('Getting wavelength for %03d %s' %
-                          (kind, int(ifuslot), amp))
+                              (int(ifuslot), amp))
                 cmp = get_spectra(_info[0], trace)
                 wave = get_wave(_info[0], trace)
                 
