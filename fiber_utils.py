@@ -452,14 +452,15 @@ def get_wave_single(y, T_array, order):
 
 def get_wave(spec, trace, T_array, res_lim=1., order=3):
     w = trace * 0.
-    r = res_lim * np.ones((trace.shape[0],))
+    r = np.zeros((trace.shape[0],))
     xi = np.hstack([np.arange(0, trace.shape[0], 8), trace.shape[0]-1])
     for j in xi:
         wave, res = get_wave_single(spec[j], T_array, order=order)
         w[j] = wave
         r[j] = res
     w = np.array(w)
-    sel = np.array(r) < res_lim
+    sel = (np.array(r) < res_lim) * (np.array(r) > 0.)
+    print(np.array(r)[np.array(r)>0.])
     wave = w * 0.
     xi = np.hstack([np.arange(0, trace.shape[1], 24), trace.shape[1]-1])
     for i in xi:
