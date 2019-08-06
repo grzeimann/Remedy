@@ -229,7 +229,7 @@ for ifuslot in ifuslots:
                                       for z in [_info[3], ifuslot, _info[4]]]
             if kind == 'drk':
                 masterdark = _info[0] * 1.
-                readnoise, bm = biweight(_info[1])
+                readnoise = biweight(_info[1])
                 args.log.info('Getting pixel mask %03d %s' %
                           (kind, int(ifuslot), amp))
                 pixelmask = get_pixelmask(masterdark)
