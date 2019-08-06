@@ -252,6 +252,7 @@ for ifuslot in ifuslots:
                 args.log.info('Getting wavelength for %03d %s' %
                               (int(ifuslot), amp))
                 cmp = get_spectra(_info[0], trace)
+                print(cmp)
                 wave = get_wave(cmp, trace, T_array)
                 
         success = append_fibers_to_table(row, wave, trace, ifupos, ifuslot,
