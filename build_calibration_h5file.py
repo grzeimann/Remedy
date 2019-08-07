@@ -255,6 +255,7 @@ for ifuslot in ifuslots:
                 try:
                     wave = get_wave(cmp, trace, T_array)
                 except:
+                    args.log.error('Wavelength Failed.')
                     fits.PrimaryHDU(cmp).writeto('testwave.fits', overwrite=True)
                     fits.PrimaryHDU(trace).writeto('testtrace.fits', overwrite=True)
                     sys.exit(1)
