@@ -248,6 +248,7 @@ for ifuslot in ifuslots:
                     trace = np.zeros((112, 1032))
                     wave = np.zeros((112, 1032))
                     break
+                print(specid, ifuSlot, ifuid)
                 trace, ref = get_trace(_info[0], specid, ifuSlot, ifuid,
                                        amp, _info[2][:8], dirname)
                 twi = get_spectra(_info[0], trace)
