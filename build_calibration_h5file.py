@@ -239,15 +239,22 @@ for ifuslot in ifuslots:
                               (int(ifuslot), amp))
                 pixelmask = get_pixelmask(masterdark)
             if kind == 'twi':
+                ifupos = get_ifucenfile(dirname, ifuid, amp)
                 args.log.info('Getting trace for %03d %s' %
                               (int(ifuslot), amp))
+                if np.mean(_info[0]) < 1000.:
+                    args.log.warning('Twi for %03d %s below 1000 cnts on average.' %
+                                     (int(ifuslot), amp))
+                    trace = np.zeros((112, 1032))
+                    wave = np.zeros((112, 1032))
+                    break
                 trace, ref = get_trace(_info[0], specid, ifuSlot, ifuid,
                                        amp, _info[2][:8], dirname)
                 twi = get_spectra(_info[0], trace)
                 args.log.info('Getting powerlaw for %03d %s' %
                               (int(ifuslot), amp))
                 plaw = get_powerlaw(_info[0], trace, twi, amp)
-                ifupos = get_ifucenfile(dirname, ifuid, amp)
+                
             if kind == 'cmp':
                 args.log.info('Getting wavelength for %03d %s' %
                               (int(ifuslot), amp))
