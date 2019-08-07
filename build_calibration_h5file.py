@@ -249,8 +249,13 @@ for ifuslot in ifuslots:
                     wave = np.zeros((112, 1032))
                     break
                 print(specid, ifuSlot, ifuid)
-                trace, ref = get_trace(_info[0], specid, ifuSlot, ifuid,
-                                       amp, _info[2][:8], dirname)
+                try:
+                    trace, ref = get_trace(_info[0], specid, ifuSlot, ifuid,
+                                           amp, _info[2][:8], dirname)
+                except:
+                    args.log.error('Trace Failed.')
+                    fits.PrimaryHDU(_info[0]).writeto('testtwi.fits', overwrite=True)
+                    sys.exit(1)
                 twi = get_spectra(_info[0], trace)
                 args.log.info('Getting powerlaw for %03d %s' %
                               (int(ifuslot), amp))
