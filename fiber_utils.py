@@ -288,6 +288,7 @@ def get_trace(twilight, specid, ifuslot, ifuid, amp, obsdate, tr_folder):
     for flat, x in zip(flats, xchunks):
         diff_array = flat[1:] - flat[:-1]
         loc = np.where((diff_array[:-1] > 0.) * (diff_array[1:] < 0.))[0]
+        
         peaks = flat[loc+1]
         loc = loc[peaks > 0.1 * np.median(peaks)]+1
         trace = get_trace_chunk(flat, loc)
@@ -298,6 +299,8 @@ def get_trace(twilight, specid, ifuslot, ifuid, amp, obsdate, tr_folder):
                 gind = np.argmin(np.abs(missing - good))
                 T[missing] = (T[good[gind]] + ref[missing, 0] -
                               ref[good[gind], 0])
+        if len(trace) == len(ref):
+            T = trace
         Trace[:, k] = T
         k += 1
     x = np.arange(twilight.shape[1])
