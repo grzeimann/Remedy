@@ -254,6 +254,8 @@ for ifuslot in ifuslots:
                 cmp = get_spectra(_info[0], trace)
                 try:
                     wave = get_wave(cmp, trace, T_array)
+                    if wave is None:
+                        wave = trace * 0.
                 except:
                     args.log.error('Wavelength Failed.')
                     fits.PrimaryHDU(cmp).writeto('testwave.fits', overwrite=True)
