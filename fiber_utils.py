@@ -415,7 +415,7 @@ def identify_sky_pixels(sky, kernel=10.0):
         mask = safe_sigma_clip(sky - cont)
     return mask.mask, cont
 
-def find_peaks(y, thresh=50.):
+def find_peaks(y, thresh=10.):
     def get_peaks(flat, XN):
         YM = np.arange(flat.shape[0])
         inds = np.zeros((3, len(XN)))
@@ -434,9 +434,9 @@ def find_peaks(y, thresh=50.):
     peaks = y[np.round(peak_loc).astype(int)]
     return peak_loc, peaks
 
-def get_wave_single(y, T_array, order):
+def get_wave_single(y, T_array, order=3, thresh=10.):
     mask, cont = identify_sky_pixels(y)
-    loc, peaks = find_peaks(y - cont)
+    loc, peaks = find_peaks(y - cont, thresh=thresh)
     x = np.arange(len(y))
     dw = T_array[-1] - T_array[0]
     dx = loc[-1] - loc[0]
@@ -454,12 +454,22 @@ def get_wave(spec, trace, T_array, res_lim=1., order=3):
     w = trace * 0.
     r = np.zeros((trace.shape[0],))
     xi = np.hstack([np.arange(0, trace.shape[0], 8), trace.shape[0]-1])
-    for j in xi:
-        wave, res = get_wave_single(spec[j], T_array, order=order)
-        w[j] = wave
-        r[j] = res
-    w = np.array(w)
-    sel = (np.array(r) < res_lim) * (np.array(r) > 0.)
+    failed = True
+    thresh=20.
+    while failed:
+        for j in xi:
+            wave, res = get_wave_single(spec[j], T_array, order=order,
+                                        thresh=thresh)
+            w[j] = wave
+            r[j] = res
+            w = np.array(w)
+        sel = (np.array(r) < res_lim) * (np.array(r) > 0.)
+        if sel.sum() < 7:
+            thresh -= 5.
+        else:
+            failed = False
+        if thresh < 5.:
+            return None
     wave = w * 0.
     xi = np.hstack([np.arange(0, trace.shape[1], 24), trace.shape[1]-1])
     for i in xi:
