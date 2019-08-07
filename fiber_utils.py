@@ -458,11 +458,13 @@ def get_wave(spec, trace, T_array, res_lim=1., order=3):
     thresh=20.
     while failed:
         for j in xi:
-            wave, res = get_wave_single(spec[j], T_array, order=order,
-                                        thresh=thresh)
-            w[j] = wave
-            r[j] = res
-            w = np.array(w)
+            try:
+                wave, res = get_wave_single(spec[j], T_array, order=order,
+                                            thresh=thresh)
+                w[j] = wave
+                r[j] = res
+            except:
+                pass
         sel = (np.array(r) < res_lim) * (np.array(r) > 0.)
         if sel.sum() < 7:
             thresh -= 5.
