@@ -934,6 +934,7 @@ def reduce_ifuslot(ifuloop, h5table):
         
         fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
         filenames = fnmatch.filter(scinames, fnames_glob)
+        print(filenames)
         for j, fn in enumerate(filenames):
             sciimage, scierror = base_reduction(fn, tfile=scitarfile,
                                                 rdnoise=readnoise)
