@@ -929,8 +929,8 @@ def reduce_ifuslot(ifuloop, h5table):
         plaw = get_powerlaw(masterflt, trace, twi, amp)
         masterflt[:] = masterflt - plaw
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
-        print(amp)
         fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
+        print(fnames_glob)
         filenames = fnmatch.filter(scinames, fnames_glob)
         for j, fn in enumerate(filenames):
             sciimage, scierror = base_reduction(fn, tfile=scitarfile,
