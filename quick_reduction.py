@@ -906,7 +906,7 @@ def reduce_ifuslot(ifuloop, h5table):
     scinames, twinames, scitarfile, twitarfile = get_sci_twi_files()
     for ind in ifuloop:
         ifuslot = '%03d' % h5table[ind]['ifuslot']
-        amp = h5table[ind]['amp'].astype('U13')
+        amp = h5table[ind]['amp']
         amppos = h5table[ind]['ifupos']
         wave = h5table[ind]['wavelength']
         trace = h5table[ind]['trace']
@@ -930,7 +930,6 @@ def reduce_ifuslot(ifuloop, h5table):
         masterflt[:] = masterflt - plaw
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
 
-        print(ifuslot, amp)
         fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
         filenames = fnmatch.filter(scinames, fnames_glob)
         for j, fn in enumerate(filenames):
