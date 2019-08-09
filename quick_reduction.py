@@ -385,7 +385,7 @@ def orient_image(image, amp, ampname):
     return image
 
 
-def base_reduction(filename, get_header=False, tfile=None):
+def base_reduction(filename, get_header=False, tfile=None, rdnoise=None):
     '''
     Reduce filename from tarfile or fits file.
     
@@ -432,8 +432,9 @@ def base_reduction(filename, get_header=False, tfile=None):
     # Gain multiplication (catch negative cases)
     gain = a[0].header['GAIN']
     gain = np.where(gain > 0., gain, 0.85)
-    rdnoise = a[0].header['RDNOISE']
-    rdnoise = np.where(rdnoise > 0., rdnoise, 3.)
+    if rdnoise is None:
+        rdnoise = a[0].header['RDNOISE']
+        rdnoise = np.where(rdnoise > 0., rdnoise, 3.)
     amp = (a[0].header['CCDPOS'].replace(' ', '') +
            a[0].header['CCDHALF'].replace(' ', ''))
     try:
@@ -639,17 +640,19 @@ def get_spectra(array_sci, array_err, array_flt, array_trace, wave, def_wave):
     for fiber in np.arange(array_trace.shape[0]):
         dw = np.diff(wave[fiber])
         dw = np.hstack([dw[0], dw])
-        if array_trace[fiber].min() < 1.:
+        if np.round(array_trace[fiber]).min() < 2:
             continue
-        if np.ceil(array_trace[fiber]).max() >= (N-1):
+        if np.round(array_trace[fiber]).max() >= (N-2):
             continue
-        indl = np.floor(array_trace[fiber]).astype(int)
-        indh = np.ceil(array_trace[fiber]).astype(int)
-        tw = array_flt[indl, x] / 2. + array_flt[indh, x] / 2.
+        indv = np.round(array_trace[fiber]).astype(int)
+        tw, sw, ew = (0., 0., 0.)
+        for j in np.arange(-2, 3):
+            tw += array_flt[indv+j, x]
+            sw += array_sci[indv+j, x]
+            ew += array_err[indv+j, x] **2
+        ew = np.sqrt(ew)
         twi_spectrum[fiber] = np.interp(def_wave, wave[fiber], tw / dw,
                                         left=0.0, right=0.0)
-        sw = (array_sci[indl, x] + array_sci[indh, x]) / 2.
-        ew = np.sqrt((array_err[indl, x]**2 + array_err[indh, x]**2) / 2.)
         sci_spectrum[fiber] = np.interp(def_wave, wave[fiber], sw / dw,
                                         left=0.0, right=0.0)
         # Not real propagation of error, but skipping math for now
@@ -908,22 +911,16 @@ def reduce_ifuslot(ifuloop, h5table):
         amppos = h5table[ind]['ifupos']
         wave = h5table[ind]['wavelength']
         trace = h5table[ind]['trace']
+        readnoise = h5table[ind]['readnoise']
         try:
-            masterbias = h5table[ind]['masterbias']
+            masterbias = h5table[ind]['masterdark']
         except:
             masterbias = 0.0
-        try:
-            amp2amp = h5table[ind]['Amp2Amp']
-            throughput = h5table[ind]['Throughput']
-        except:
-            amp2amp = np.ones((112, 1036))
-            throughput = np.ones((112, 1036))
-        if np.all(amp2amp==0.):
-            amp2amp = np.ones((112, 1036))
-        if np.all(throughput==0.):
-            T = Table.read(op.join(DIRNAME, 'CALS/throughput.txt'),
-                           format='ascii.fixed_width_two_line')
-            throughput = np.array([T['throughput']]*112)
+        
+        
+        T = Table.read(op.join(DIRNAME, 'CALS/throughput.txt'),
+                       format='ascii.fixed_width_two_line')
+        throughput = np.array([T['throughput']]*112)
         
         fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'twi')
         twibase = fnmatch.filter(twinames, fnames_glob)
@@ -931,9 +928,6 @@ def reduce_ifuslot(ifuloop, h5table):
         masterflt = get_mastertwi(twibase, masterbias, twitarfile)
         twi = get_twi_spectra(masterflt, trace, wave, def_wave)
         plaw = get_powerlaw(masterflt, trace, twi, amp)
-        name = '%s_%07d_%s_%s_plaw.fits' % (args.date, args.observation,
-                                            ifuslot, amp)
-        fits.PrimaryHDU(plaw).writeto(name, overwrite=True)
         masterflt[:] = masterflt - plaw
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
 
@@ -941,7 +935,8 @@ def reduce_ifuslot(ifuloop, h5table):
         fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
         filenames = fnmatch.filter(scinames, fnames_glob)
         for j, fn in enumerate(filenames):
-            sciimage, scierror = base_reduction(fn, tfile=scitarfile)
+            sciimage, scierror = base_reduction(fn, tfile=scitarfile,
+                                                rdnoise=readnoise)
             sciimage[:] = sciimage - masterbias
             div = safe_division(sciimage, masterflt)
             ratio = savgol_filter(np.median(div, axis=0), 351, 3)
@@ -949,9 +944,9 @@ def reduce_ifuslot(ifuloop, h5table):
             sciimage[:] = sciimage - sci_plaw
             twi, spec, espec = get_spectra(sciimage, scierror, masterflt,
                                            trace, wave, def_wave)
-            twi[:] = safe_division(twi, amp2amp*throughput)
-            spec[:] = safe_division(spec, amp2amp*throughput) * mult_fac
-            espec[:] = safe_division(espec, amp2amp*throughput) * mult_fac
+            twi[:] = safe_division(twi, throughput)
+            spec[:] = safe_division(spec, throughput) * mult_fac
+            espec[:] = safe_division(espec, throughput) * mult_fac
             pos = amppos + dither_pattern[j]
             for x, i in zip([p, t, s, e], [pos, twi, spec, espec]):
                 x.append(i * 1.)        
