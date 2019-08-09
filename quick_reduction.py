@@ -904,7 +904,7 @@ def reduce_ifuslot(ifuloop, h5table):
     # Check if tarred
 
     scinames, twinames, scitarfile, twitarfile = get_sci_twi_files()
-
+    print(scinames)
     for ind in ifuloop:
         ifuslot = '%03d' % h5table[ind]['ifuslot']
         amp = h5table[ind]['amp'].astype('U13')
@@ -934,7 +934,6 @@ def reduce_ifuslot(ifuloop, h5table):
         
         fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
         filenames = fnmatch.filter(scinames, fnames_glob)
-        print(filenames)
         for j, fn in enumerate(filenames):
             sciimage, scierror = base_reduction(fn, tfile=scitarfile,
                                                 rdnoise=readnoise)
