@@ -132,9 +132,7 @@ parser.add_argument("-ss", "--source_seeing",
                     help='''seeing conditions manually entered''',
                     type=float, default=1.5)
 
-parser.add_argument("-p", "--parallelize",
-                    help='''Parallelize some of the processing''',
-                    action="count", default=0)
+
 
 args = parser.parse_args(args=None)
 
@@ -924,7 +922,7 @@ def reduce_ifuslot(ifuloop, h5table):
         fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'twi')
         twibase = fnmatch.filter(twinames, fnames_glob)
         log.info('Making mastertwi for %s%s' % (ifuslot, amp))
-        masterflt = get_mastertwi(twibase, masterbias, twitarfile)
+        masterflt = get_mastertwi(twibase, 0.0, twitarfile)
         twi = get_twi_spectra(masterflt, trace, wave, def_wave)
         plaw = get_powerlaw(masterflt, trace, twi, amp)
         masterflt[:] = masterflt - plaw
@@ -1489,8 +1487,8 @@ reorg[reorg < 1e-42] = np.nan
 # Not yet sure why this is needed physically
 # But it is needed mathematically  
 # The corrections are ~few percent.
-reorg = np.array([r / correct_amplifier_offsets(r)[:, np.newaxis]
-                  for r in reorg])
+#reorg = np.array([r / correct_amplifier_offsets(r)[:, np.newaxis]
+#                  for r in reorg])
 
 # Estimate sky with sigma clipping to find "sky" fibers    
 skies = np.array([estimate_sky(r) for r in reorg])
@@ -1616,16 +1614,11 @@ E.error = errspectra
 E.mask = np.isfinite(scispectra)
 E.get_ADR_RAdec(A)
 log.info('Beginning Extraction')
-if args.parallelize:
-    N = np.array(np.max([multiprocessing.cpu_count()-2, 1]), dtype=int)
-    pool = Pool(N)
-    spec_list = pool.map(E.get_spectrum_by_coord_index,
-                         np.arange(len(E.coords)))
-else:
-    spec_list = []
-    for i in np.arange(len(E.coords)):
-        spec_list.append(E.get_spectrum_by_coord_index(i))
+spec_list = []
+for i in np.arange(len(E.coords)):
+    spec_list.append(E.get_spectrum_by_coord_index(i))
 log.info('Finished Extraction')
+
 name = ('%s_%07d.h5' %
                 (args.date, args.observation))
 h5spec = open_file(name, mode="w", title="%s Spectra" % name[:-3])
