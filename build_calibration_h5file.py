@@ -14,6 +14,7 @@ import warnings
 import tables as tb
 
 from astropy.io import fits
+from astropy.stats import mad_std
 from astropy.table import Table
 from datetime import datetime, timedelta
 from distutils.dir_util import mkpath
@@ -163,7 +164,10 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder):
     if kind != 'cmp':
         big_array = np.array([v[0] for v in bia_list])
         masterbias = np.median(big_array, axis=0)
-        masterstd = np.std(big_array, axis=0)
+        if kind == 'drk':
+            masterstd = mad_std(big_array, axis=0)
+        else:
+            masterstd = np.std(big_array, axis=0)
     else:
         masterbias = np.zeros(bia_list[0][0].shape)
         masterstd = np.zeros(bia_list[0][0].shape)
@@ -237,6 +241,8 @@ for ifuslot in ifuslots:
             if kind == 'drk':
                 masterdark = _info[0] * 1.
                 readnoise = biweight(_info[1])
+                args.log.info('Readnoise for %03d %s: %0.2f' %
+                              (int(ifuslot), amp, readnoise))
                 args.log.info('Getting pixel mask %03d %s' %
                               (int(ifuslot), amp))
                 pixelmask = get_pixelmask(masterdark)
