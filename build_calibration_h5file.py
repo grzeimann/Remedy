@@ -45,7 +45,7 @@ class VIRUSImage(tb.IsDescription):
 
 
 def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
-                           amp, readnoise, pixelmask):
+                           amp, readnoise, pixelmask, masterdark):
     row['wavelength'] = wave * 1.
     row['trace'] = trace * 1.
     row['ifupos'] = ifupos * 1.
@@ -54,6 +54,8 @@ def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
     row['specid'] = specid
     row['readnoise'] = readnoise
     row['pixelmask'] = pixelmask
+    row['masterdark'] = masterdark
+
     row['amp'] = amp
     row.append()
     return True
@@ -248,7 +250,6 @@ for ifuslot in ifuslots:
                     trace = np.zeros((112, 1032))
                     wave = np.zeros((112, 1032))
                     break
-                print(specid, ifuSlot, ifuid)
                 try:
                     trace, ref = get_trace(_info[0], specid, ifuSlot, ifuid,
                                            amp, _info[2][:8], dirname)
@@ -277,6 +278,6 @@ for ifuslot in ifuslots:
                 
         success = append_fibers_to_table(row, wave, trace, ifupos, ifuslot,
                                          ifuid, specid, amp, readnoise,
-                                         pixelmask)
+                                         pixelmask, masterdark)
         if success:
             imagetable.flush()
