@@ -601,7 +601,8 @@ def get_twi_spectra(array_flt, array_trace, wave, def_wave):
     return twi_spectrum
 
 
-def get_spectra(array_sci, array_err, array_flt, array_trace, wave, def_wave):
+def get_spectra(array_sci, array_err, array_flt, array_trace, wave, def_wave,
+                pixelmask):
     '''
     Extract spectra by dividing the flat field and averaging the central
     two pixels
@@ -633,6 +634,8 @@ def get_spectra(array_sci, array_err, array_flt, array_trace, wave, def_wave):
     sci_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
     err_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
     twi_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
+    mask = np.zeros((array_trace.shape[0], def_wave.shape[0]))
+
     N = array_flt.shape[0]
     x = np.arange(array_flt.shape[1])
     for fiber in np.arange(array_trace.shape[0]):
@@ -643,22 +646,26 @@ def get_spectra(array_sci, array_err, array_flt, array_trace, wave, def_wave):
         if np.round(array_trace[fiber]).max() >= (N-2):
             continue
         indv = np.round(array_trace[fiber]).astype(int)
-        tw, sw, ew = (0., 0., 0.)
+        tw, sw, ew, pm = (0., 0., 0., 0.)
         for j in np.arange(-2, 3):
             tw += array_flt[indv+j, x]
             sw += array_sci[indv+j, x]
             ew += array_err[indv+j, x] **2
+            pm += pixelmask[indv+j, x]
         ew = np.sqrt(ew)
         twi_spectrum[fiber] = np.interp(def_wave, wave[fiber], tw / dw,
                                         left=0.0, right=0.0)
         sci_spectrum[fiber] = np.interp(def_wave, wave[fiber], sw / dw,
                                         left=0.0, right=0.0)
+        mask[fiber] = np.interp(def_wave, wave[fiber], pm / dw,
+                                        left=0.0, right=0.0)
         # Not real propagation of error, but skipping math for now
         err_spectrum[fiber] = np.interp(def_wave, wave[fiber], ew / dw,
                                         left=0.0, right=0.0)
-    twi_spectrum[~np.isfinite(twi_spectrum)] = 0.0
-    err_spectrum[~np.isfinite(err_spectrum)] = 0.0
-    sci_spectrum[~np.isfinite(sci_spectrum)] = 0.0
+    total_mask = (~np.isfinite(twi_spectrum)) * (mask > 0.)
+    twi_spectrum[total_mask] = 0.0
+    err_spectrum[total_mask] = 0.0
+    sci_spectrum[total_mask] = 0.0
     return twi_spectrum, sci_spectrum, err_spectrum
 
 def get_fiber_to_fiber(twispectra):
@@ -910,10 +917,11 @@ def reduce_ifuslot(ifuloop, h5table):
         trace = h5table[ind]['trace']
         readnoise = h5table[ind]['readnoise']
         try:
-            masterbias = h5table[ind]['masterdark']
+            masterdark = h5table[ind]['masterdark']
+            pixelmask = h5table[ind]['pixelmask']
         except:
-            masterbias = 0.0
-        
+            masterdark = 0.0
+            pixelmask = np.zeros((1032, 1032), dtype=int)
         
         T = Table.read(op.join(DIRNAME, 'CALS/throughput.txt'),
                        format='ascii.fixed_width_two_line')
@@ -932,13 +940,13 @@ def reduce_ifuslot(ifuloop, h5table):
         for j, fn in enumerate(filenames):
             sciimage, scierror = base_reduction(fn, tfile=scitarfile,
                                                 rdnoise=readnoise)
-            sciimage[:] = sciimage - masterbias
+            sciimage[:] = sciimage - masterdark
             div = safe_division(sciimage, masterflt)
             ratio = savgol_filter(np.median(div, axis=0), 351, 3)
             sci_plaw = plaw * ratio[np.newaxis, :]
             sciimage[:] = sciimage - sci_plaw
             twi, spec, espec = get_spectra(sciimage, scierror, masterflt,
-                                           trace, wave, def_wave)
+                                           trace, wave, def_wave, pixelmask)
             twi[:] = safe_division(twi, throughput)
             spec[:] = safe_division(spec, throughput) * mult_fac
             espec[:] = safe_division(espec, throughput) * mult_fac
