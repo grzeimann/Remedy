@@ -240,7 +240,7 @@ def get_powerlaw(image, trace, spec, amp):
     xi, yi = (np.unique(XM), np.unique(YM))
     I = interp2d(xi, yi, np.hstack(ZM).reshape(len(yi), len(xi)), kind='cubic',
                  bounds_error=False)
-    plaw = I(xind[0, :], yind[:, 0]).swapaxes(0, 1)
+    plaw = I(xind[0, :], yind[:, 0]).swapaxes(0, 1)[:, ::-1]
     return plaw
 
 
