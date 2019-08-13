@@ -647,10 +647,16 @@ def get_spectra(array_sci, array_err, array_flt, array_trace, wave, def_wave,
             continue
         indv = np.round(array_trace[fiber]).astype(int)
         tw, sw, ew, pm = (0., 0., 0., 0.)
-        for j in np.arange(-2, 3):
-            tw += array_flt[indv+j, x]
-            sw += array_sci[indv+j, x]
-            ew += array_err[indv+j, x] **2
+        for j in np.arange(-3, 3):
+            if j == -3:
+                w = indv + j + 1 - (array_trace[fiber] - 2.5)
+            elif j == 2:
+                w = (2.5 + array_trace[fiber]) - (indv + j) 
+            else:
+                w = 1.
+            tw += array_flt[indv+j, x] * w
+            sw += array_sci[indv+j, x] * w
+            ew += array_err[indv+j, x]**2 * w
             pm += pixelmask[indv+j, x]
         ew = np.sqrt(ew)
         twi_spectrum[fiber] = np.interp(def_wave, wave[fiber], tw / dw,
@@ -904,7 +910,7 @@ def reduce_ifuslot(ifuloop, h5table):
     p, t, s, e = ([], [], [], [])
     
     # Calibration factors to convert electrons to uJy
-    mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.25
+    mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.7
     mult_fac *= 1e29 * def_wave**2 / 3e18
     # Check if tarred
 
@@ -1466,6 +1472,7 @@ ftf = get_fiber_to_fiber(twispectra)
 
 # Correct fiber to fiber
 scispectra = safe_division(scispectra, ftf)
+skyspectra = safe_division(scispectra, ftf)
 errspectra = safe_division(errspectra, ftf)
 
 
@@ -1643,6 +1650,7 @@ class Spectra(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
      dec  = Float32Col()    # float  (single-precision)
      spectrum  = Float32Col((1036,))    # float  (single-precision)
+     observed  = Float32Col((1036,))    # float  (single-precision)
      error  = Float32Col((1036,))    # float  (single-precision)
      image = Float32Col((11, 21, 21))
      xgrid = Float32Col((21, 21))
@@ -1671,6 +1679,7 @@ for i in np.arange(len(E.ra)):
     specrow['ra'] = E.ra[i]
     specrow['dec'] = E.dec[i]
     specrow['spectrum'] = scispectra[i]
+    specrow['observed'] = skyspectra[i]
     specrow['error'] = errspectra[i]
     specrow['fiber_to_fiber'] = ftf[i]
     specrow.append()
