@@ -43,10 +43,12 @@ class VIRUSImage(tb.IsDescription):
     amp = tb.StringCol(2)
     readnoise = tb.Float32Col()
     pixelmask = tb.Int32Col((1032, 1032))
+    powerlaw = tb.Float32Col((1032, 1032))
+
 
 
 def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
-                           amp, readnoise, pixelmask, masterdark):
+                           amp, readnoise, pixelmask, masterdark, plaw):
     row['wavelength'] = wave * 1.
     row['trace'] = trace * 1.
     row['ifupos'] = ifupos * 1.
@@ -56,7 +58,7 @@ def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
     row['readnoise'] = readnoise
     row['pixelmask'] = pixelmask
     row['masterdark'] = masterdark
-
+    row['powerlaw'] = plaw
     row['amp'] = amp
     row.append()
     return True
@@ -284,6 +286,6 @@ for ifuslot in ifuslots:
                 
         success = append_fibers_to_table(row, wave, trace, ifupos, ifuslot,
                                          ifuid, specid, amp, readnoise,
-                                         pixelmask, masterdark)
+                                         pixelmask, masterdark, plaw)
         if success:
             imagetable.flush()
