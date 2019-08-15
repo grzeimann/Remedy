@@ -1644,13 +1644,12 @@ class Fibers(IsDescription):
      spectrum  = Float32Col((1036,))    # float  (single-precision)
      error  = Float32Col((1036,))    # float  (single-precision)
      fiber_to_fiber  = Float32Col((1036,))    # float  (single-precision)
-
+     observed  = Float32Col((1036,))
 
 class Spectra(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
      dec  = Float32Col()    # float  (single-precision)
      spectrum  = Float32Col((1036,))    # float  (single-precision)
-     observed  = Float32Col((1036,))    # float  (single-precision)
      error  = Float32Col((1036,))    # float  (single-precision)
      image = Float32Col((11, 21, 21))
      xgrid = Float32Col((21, 21))
