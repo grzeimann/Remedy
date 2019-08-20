@@ -705,10 +705,15 @@ def get_fiber_to_fiber(twispectra):
             ftf_init[i] = I(X)
         else:
             ftf_init[i] = 0.0
+    # Normalization for each fiber of the smooth spectra
     norm = np.nanmean(ftf_init, axis=1)
+    # One single normalization value
     big_Norm = np.nanmedian(norm)
+    # Normalized smoothed spectra
     smooth_avg = np.nanmedian(ftf_init / norm[:, np.newaxis], axis=0)
+    # continuum normalized spectra
     finer_avg = np.nanmedian(safe_division(t, ftf_init), axis=0)
+    # continuum normalized spectra * average smooth spectrum * big normalization
     avg_spec = finer_avg * smooth_avg * big_Norm
     ftf = safe_division(t, avg_spec)
     return ftf
@@ -907,7 +912,7 @@ def reduce_ifuslot(ifuloop, h5table):
     scitarfile : str or None
         name of the tar file for the science frames if there is one
     '''
-    p, t, s, e, _i = ([], [], [], [], [])
+    p, t, s, e, _i, s1 = ([], [], [], [], [], [])
     
     # Calibration factors to convert electrons to uJy
     mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.7
@@ -953,20 +958,20 @@ def reduce_ifuslot(ifuloop, h5table):
             ratio = savgol_filter(np.median(div, axis=0), 351, 3)
             sci_plaw = plaw * ratio[np.newaxis, :]
             #sciimage[:] = sciimage - sci_plaw
-            twi, spec, espec = get_spectra(sciimage, scierror, masterflt,
+            twi, spec1, espec = get_spectra(sciimage, scierror, masterflt,
                                            trace, wave, def_wave, pixelmask)
             twi[:] = safe_division(twi, throughput)
-            spec[:] = safe_division(spec, throughput) * mult_fac
+            spec[:] = safe_division(spec1, throughput) * mult_fac
             espec[:] = safe_division(espec, throughput) * mult_fac
             pos = amppos + dither_pattern[j]
             N = twi.shape[0]
             _I = np.char.array(['%s_%s_%s_%s' % (specid, ifuslot, ifuid, amp)] * N)
-            for x, i in zip([p, t, s, e, _i], [pos, twi, spec, espec, _I]):
+            for x, i in zip([p, t, s, e, _i, s1], [pos, twi, spec, espec, _I, spec1]):
                 x.append(i * 1)        
     
-    p, t, s, e, _i = [np.vstack(j) for j in [p, t, s, e, _i]]
+    p, t, s, e, _i, s1 = [np.vstack(j) for j in [p, t, s, e, _i, s1]]
     
-    return p, t, s, e, fn , scitarfile, _i
+    return p, t, s, e, fn , scitarfile, _i, s1
 
 
 def make_cube(xloc, yloc, data, Dx, Dy, ftf, scale, ran,
@@ -1468,7 +1473,7 @@ allifus = np.hstack(allifus)
 
 # Reducing IFUSLOT
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
-pos, twispectra, scispectra, errspectra, fn, tfile, _I = reduce_ifuslot(ifuloop,
+pos, twispectra, scispectra, errspectra, fn, tfile, _I, s1 = reduce_ifuslot(ifuloop,
                                                                         h5table)
 
 _I = np.hstack(_I)
@@ -1691,7 +1696,7 @@ for i in np.arange(len(E.ra)):
     specrow['ra'] = E.ra[i]
     specrow['dec'] = E.dec[i]
     specrow['spectrum'] = scispectra[i]
-    specrow['observed'] = skyspectra[i]
+    specrow['observed'] = s1[i]
     specrow['error'] = errspectra[i]
     specrow['fiber_to_fiber'] = ftf[i]
     specrow.append()
