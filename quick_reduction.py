@@ -1471,6 +1471,7 @@ log.info('Reducing ifuslot: %03d' % args.ifuslot)
 pos, twispectra, scispectra, errspectra, fn, tfile, _I = reduce_ifuslot(ifuloop,
                                                                         h5table)
 
+_I = np.hstack(_I)
 # Get fiber to fiber from twilight spectra
 ftf = get_fiber_to_fiber(twispectra)
 
