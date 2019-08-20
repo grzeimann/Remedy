@@ -961,7 +961,7 @@ def reduce_ifuslot(ifuloop, h5table):
             twi, spec1, espec = get_spectra(sciimage, scierror, masterflt,
                                            trace, wave, def_wave, pixelmask)
             twi[:] = safe_division(twi, throughput)
-            spec[:] = safe_division(spec1, throughput) * mult_fac
+            spec = safe_division(spec1, throughput) * mult_fac
             espec[:] = safe_division(espec, throughput) * mult_fac
             pos = amppos + dither_pattern[j]
             N = twi.shape[0]
