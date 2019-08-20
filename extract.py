@@ -484,6 +484,8 @@ class Extract:
         
         self.log.info('Extracting %i' % ind)
         rafibers, decfibers, data, error, mask = info_result
+        too_far = np.sqrt(rafibers**2 + decfibers**2) > 3.
+        mask[too_far] = False
         weights = self.build_weights(0., 0., rafibers, decfibers, self.psf)
         result = self.get_spectrum(data, error, mask, weights)
         spectrum, spectrum_error = [res for res in result]
