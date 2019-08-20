@@ -1626,7 +1626,7 @@ for i, _info in enumerate(info):
 
 mRA, mDec = A.tp.wcs_pix2world(f['fx'], f['fy'], 1)
 E = Extract()
-E.psf = E.tophat_psf(4, 10.5, 0.25)
+E.psf = E.moffat_psf(1.8, 10.5, 0.25)
 E.coords = SkyCoord(mRA*units.deg, mDec*units.deg, frame='fk5')
 E.ra, E.dec = [np.hstack(x) for x in [RAFibers, DecFibers]]
 E.data = scispectra
