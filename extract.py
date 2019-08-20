@@ -396,10 +396,13 @@ class Extract:
         spectrum_error = np.sqrt(np.nansum(mask * weights, axis=0) /
                                  np.nansum(mask * weights**2 / var, axis=0))
         # Only use wavelengths with enough weight to avoid large noise spikes
-        w = np.nansum(mask * weights**2 / var, axis=0)
-        sel = w < np.nanmedian(w)*0.1
-        spectrum[sel] = np.nan
-        spectrum_error[sel] = np.nan
+        w = np.sum(mask * weights, axis=0)
+        bad = w < 0.05
+        for i in np.arange(1, 4):
+            bad[i:] += bad[:-i]
+            bad[:-i] += bad[i:]
+        spectrum[bad] = np.nan
+        spectrum_error[bad] = np.nan
         
         return spectrum, spectrum_error
     
