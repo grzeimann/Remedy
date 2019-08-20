@@ -1697,7 +1697,7 @@ for i in np.arange(len(E.ra)):
     specrow.append()
 table.flush()
 
-table = h5spec.create_table(h5spec.root, 'Info', Fibers, 
+table = h5spec.create_table(h5spec.root, 'Info', Info, 
                             "Fiber Information")
 specrow = table.row
 for i in np.arange(len(E.ra)):
