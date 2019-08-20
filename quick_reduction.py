@@ -39,7 +39,7 @@ from multiprocessing import Pool
 from photutils import DAOStarFinder, aperture_photometry, CircularAperture
 from scipy.interpolate import griddata, interp1d, interp2d
 from scipy.signal import savgol_filter
-from tables import open_file, IsDescription, Float32Col
+from tables import open_file, IsDescription, Float32Col, StringCol, Int32Col
 
 
 # Plot Style
@@ -907,7 +907,7 @@ def reduce_ifuslot(ifuloop, h5table):
     scitarfile : str or None
         name of the tar file for the science frames if there is one
     '''
-    p, t, s, e = ([], [], [], [])
+    p, t, s, e, _i = ([], [], [], [], [])
     
     # Calibration factors to convert electrons to uJy
     mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.7
@@ -917,6 +917,8 @@ def reduce_ifuslot(ifuloop, h5table):
     scinames, twinames, scitarfile, twitarfile = get_sci_twi_files()
     for ind in ifuloop:
         ifuslot = '%03d' % h5table[ind]['ifuslot']
+        ifuid = h5table[ind]['ifuid']
+        specid = h5table[ind]['specid']
         amp = h5table[ind]['amp']
         amppos = h5table[ind]['ifupos']
         wave = h5table[ind]['wavelength']
@@ -957,12 +959,14 @@ def reduce_ifuslot(ifuloop, h5table):
             spec[:] = safe_division(spec, throughput) * mult_fac
             espec[:] = safe_division(espec, throughput) * mult_fac
             pos = amppos + dither_pattern[j]
-            for x, i in zip([p, t, s, e], [pos, twi, spec, espec]):
+            N = twi.shape[0]
+            _I = np.array(['%s_%s_%s_%s' % (specid, ifuslot, ifuid, amp)] * N)
+            for x, i in zip([p, t, s, e, _i], [pos, twi, spec, espec, _I]):
                 x.append(i * 1.)        
     
-    p, t, s, e = [np.vstack(j) for j in [p, t, s, e]]
+    p, t, s, e, _i = [np.vstack(j) for j in [p, t, s, e, _i]]
     
-    return p, t, s, e, fn , scitarfile
+    return p, t, s, e, fn , scitarfile, _i
 
 
 def make_cube(xloc, yloc, data, Dx, Dy, ftf, scale, ran,
@@ -1464,8 +1468,8 @@ allifus = np.hstack(allifus)
 
 # Reducing IFUSLOT
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
-pos, twispectra, scispectra, errspectra, fn, tfile = reduce_ifuslot(ifuloop,
-                                                                    h5table)
+pos, twispectra, scispectra, errspectra, fn, tfile, _I = reduce_ifuslot(ifuloop,
+                                                                        h5table)
 
 # Get fiber to fiber from twilight spectra
 ftf = get_fiber_to_fiber(twispectra)
@@ -1646,6 +1650,14 @@ class Fibers(IsDescription):
      fiber_to_fiber  = Float32Col((1036,))    # float  (single-precision)
      observed  = Float32Col((1036,))
 
+class Info(IsDescription):
+     ra  = Float32Col()    # float  (single-precision)
+     dec  = Float32Col()    # float  (single-precision)
+     specid  = Int32Col()    # float  (single-precision)
+     ifuslot  = Int32Col()    # float  (single-precision)
+     ifuid  = Int32Col()   # float  (single-precision)
+     amp  = StringCol(2)
+
 class Spectra(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
      dec  = Float32Col()    # float  (single-precision)
@@ -1683,6 +1695,21 @@ for i in np.arange(len(E.ra)):
     specrow['fiber_to_fiber'] = ftf[i]
     specrow.append()
 table.flush()
+
+table = h5spec.create_table(h5spec.root, 'Info', Fibers, 
+                            "Fiber Information")
+specrow = table.row
+for i in np.arange(len(E.ra)):
+    specrow['ra'] = E.ra[i]
+    specrow['dec'] = E.dec[i]
+    sid, isl, iid, ap = _I[i].split('_')
+    specrow['specid'] = int(sid)
+    specrow['ifuid'] = int(iid)
+    specrow['ifuslot'] = int(isl)
+    specrow['amp'] = ap
+    specrow.append()
+table.flush()
+
 
 h5spec.close()
 # Making g-band images
