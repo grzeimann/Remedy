@@ -912,7 +912,7 @@ def reduce_ifuslot(ifuloop, h5table):
     scitarfile : str or None
         name of the tar file for the science frames if there is one
     '''
-    p, t, s, e, _i, s1 = ([], [], [], [], [], [])
+    p, t, s, e, _i, s1, e1 = ([], [], [], [], [], [], [])
     
     # Calibration factors to convert electrons to uJy
     mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.7
@@ -958,20 +958,20 @@ def reduce_ifuslot(ifuloop, h5table):
             ratio = savgol_filter(np.median(div, axis=0), 351, 3)
             sci_plaw = plaw * ratio[np.newaxis, :]
             #sciimage[:] = sciimage - sci_plaw
-            twi, spec1, espec = get_spectra(sciimage, scierror, masterflt,
-                                           trace, wave, def_wave, pixelmask)
+            twi, spec1, espec1 = get_spectra(sciimage, scierror, masterflt,
+                                             trace, wave, def_wave, pixelmask)
             twi[:] = safe_division(twi, throughput)
             spec = safe_division(spec1, throughput) * mult_fac
-            espec[:] = safe_division(espec, throughput) * mult_fac
+            espec = safe_division(espec1, throughput) * mult_fac
             pos = amppos + dither_pattern[j]
             N = twi.shape[0]
             _I = np.char.array(['%s_%s_%s_%s' % (specid, ifuslot, ifuid, amp)] * N)
-            for x, i in zip([p, t, s, e, _i, s1], [pos, twi, spec, espec, _I, spec1]):
+            for x, i in zip([p, t, s, e, _i, s1], [pos, twi, spec, espec, _I, spec1, espec1]):
                 x.append(i * 1)        
     
-    p, t, s, e, _i, s1 = [np.vstack(j) for j in [p, t, s, e, _i, s1]]
+    p, t, s, e, _i, s1, e1 = [np.vstack(j) for j in [p, t, s, e, _i, s1, e1]]
     
-    return p, t, s, e, fn , scitarfile, _i, s1
+    return p, t, s, e, fn , scitarfile, _i, s1, e1
 
 
 def make_cube(xloc, yloc, data, Dx, Dy, ftf, scale, ran,
@@ -1473,7 +1473,7 @@ allifus = np.hstack(allifus)
 
 # Reducing IFUSLOT
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
-pos, twispectra, scispectra, errspectra, fn, tfile, _I, s1 = reduce_ifuslot(ifuloop,
+pos, twispectra, scispectra, errspectra, fn, tfile, _I, s1, E1 = reduce_ifuslot(ifuloop,
                                                                         h5table)
 
 _I = np.hstack(_I)
@@ -1655,6 +1655,7 @@ class Fibers(IsDescription):
      error  = Float32Col((1036,))    # float  (single-precision)
      fiber_to_fiber  = Float32Col((1036,))    # float  (single-precision)
      observed  = Float32Col((1036,))
+     observed_error = Float32Col((1036,))
 
 class Info(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
@@ -1697,6 +1698,7 @@ for i in np.arange(len(E.ra)):
     specrow['dec'] = E.dec[i]
     specrow['spectrum'] = scispectra[i]
     specrow['observed'] = s1[i]
+    specrow['observed_error'] = E1[i]
     specrow['error'] = errspectra[i]
     specrow['fiber_to_fiber'] = ftf[i]
     specrow.append()
