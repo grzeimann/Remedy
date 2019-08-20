@@ -1705,7 +1705,7 @@ for i in np.arange(len(E.ra)):
     specrow['spectrum'] = scispectra[i]
     specrow['observed'] = s1[i]
     specrow['observed_error'] = E1[i]
-    specrow['plaw_spec'] = P1[i]
+    specrow['plawspec'] = P1[i]
     specrow['error'] = errspectra[i]
     specrow['fiber_to_fiber'] = ftf[i]
     specrow.append()
