@@ -960,9 +960,9 @@ def reduce_ifuslot(ifuloop, h5table):
             espec[:] = safe_division(espec, throughput) * mult_fac
             pos = amppos + dither_pattern[j]
             N = twi.shape[0]
-            _I = np.array(['%s_%s_%s_%s' % (specid, ifuslot, ifuid, amp)] * N)
+            _I = np.char.array(['%s_%s_%s_%s' % (specid, ifuslot, ifuid, amp)] * N)
             for x, i in zip([p, t, s, e, _i], [pos, twi, spec, espec, _I]):
-                x.append(i * 1.)        
+                x.append(i * 1)        
     
     p, t, s, e, _i = [np.vstack(j) for j in [p, t, s, e, _i]]
     
