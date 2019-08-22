@@ -1797,7 +1797,7 @@ try:
     plt.ylabel('VIRUS g - Pan-STARRS g (AB mag)', fontsize=20, labelpad=20)
     plt.savefig('mag_offset_%s_%07d.png'  % (args.date, args.observation), dpi=300)
 except:
-    args.log.info('Gonna skip these plots')
+    log.info('Gonna skip these plots')
 
 
 if args.simulate:
