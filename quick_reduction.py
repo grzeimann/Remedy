@@ -1761,40 +1761,43 @@ if args.simulate:
                                  args.source_seeing)
     scispectra[N*i:(i+1)*N] = simdata * 1.
 
-sel = f['dist'] < 2.5
-print('Number of sources within 2.5": %i' % sel.sum())
-mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
-plt.figure(figsize=(9, 8))
-plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
-dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - mRA)
-dd = 3600. * (f['Dec'][sel] - mDec)
-D = np.sqrt((f['fx'][sel] - f['fx'][sel][:, np.newaxis])**2 +
-            (f['fy'][sel] - f['fy'][sel][:, np.newaxis])**2)
-D[D==0.] = 999.
-noneigh = np.min(D, axis=0) > 8.
-nsel = (np.sqrt(dr**2 + dd**2) < 1.) * noneigh 
-plt.scatter(dr, dd, alpha=0.75, s=45)
-plt.axis([-1.5, 1.5, -1.5, 1.5])
-plt.xlabel(r'$\Delta$ RA (")', fontsize=20, labelpad=20)
-plt.ylabel(r'$\Delta$ Dec (")', fontsize=20, labelpad=20)
-plt.savefig('astrometry_%s_%07d.png'  % (args.date, args.observation), dpi=300)
-plt.figure(figsize=(9, 8))
-Mg = Total_sources[sel, 4][nsel]
-mg = Total_sources[sel, 2][nsel]
-ss = (Mg > 15) * (Mg < 22) * (mg < 25.)
-print((mg - Mg)[ss])
-mean, median, std = sigma_clipped_stats((mg - Mg)[ss], stdfunc=mad_std)
-print('The mean, median, and std for the mag offset is for %s_%07d: '
-      '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean, median, std))
-plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
-plt.scatter(Mg, mg - Mg - median, alpha=0.75, s=75)
-plt.plot([15, 22], [std, std], 'r--', lw=1)
-plt.plot([15, 22], [-std, -std], 'r--', lw=1)
-plt.xlim([15, 22])
-plt.ylim([-0.5, 0.5])
-plt.xlabel('Pan-STARRS g (AB mag)', fontsize=20, labelpad=20)
-plt.ylabel('VIRUS g - Pan-STARRS g (AB mag)', fontsize=20, labelpad=20)
-plt.savefig('mag_offset_%s_%07d.png'  % (args.date, args.observation), dpi=300)
+try:
+    sel = f['dist'] < 2.5
+    print('Number of sources within 2.5": %i' % sel.sum())
+    mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
+    plt.figure(figsize=(9, 8))
+    plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
+    dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - mRA)
+    dd = 3600. * (f['Dec'][sel] - mDec)
+    D = np.sqrt((f['fx'][sel] - f['fx'][sel][:, np.newaxis])**2 +
+                (f['fy'][sel] - f['fy'][sel][:, np.newaxis])**2)
+    D[D==0.] = 999.
+    noneigh = np.min(D, axis=0) > 8.
+    nsel = (np.sqrt(dr**2 + dd**2) < 1.) * noneigh 
+    plt.scatter(dr, dd, alpha=0.75, s=45)
+    plt.axis([-1.5, 1.5, -1.5, 1.5])
+    plt.xlabel(r'$\Delta$ RA (")', fontsize=20, labelpad=20)
+    plt.ylabel(r'$\Delta$ Dec (")', fontsize=20, labelpad=20)
+    plt.savefig('astrometry_%s_%07d.png'  % (args.date, args.observation), dpi=300)
+    plt.figure(figsize=(9, 8))
+    Mg = Total_sources[sel, 4][nsel]
+    mg = Total_sources[sel, 2][nsel]
+    ss = (Mg > 15) * (Mg < 22) * (mg < 25.)
+    print((mg - Mg)[ss])
+    mean, median, std = sigma_clipped_stats((mg - Mg)[ss], stdfunc=mad_std)
+    print('The mean, median, and std for the mag offset is for %s_%07d: '
+          '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean, median, std))
+    plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
+    plt.scatter(Mg, mg - Mg - median, alpha=0.75, s=75)
+    plt.plot([15, 22], [std, std], 'r--', lw=1)
+    plt.plot([15, 22], [-std, -std], 'r--', lw=1)
+    plt.xlim([15, 22])
+    plt.ylim([-0.5, 0.5])
+    plt.xlabel('Pan-STARRS g (AB mag)', fontsize=20, labelpad=20)
+    plt.ylabel('VIRUS g - Pan-STARRS g (AB mag)', fontsize=20, labelpad=20)
+    plt.savefig('mag_offset_%s_%07d.png'  % (args.date, args.observation), dpi=300)
+except:
+    args.log.info('Gonna skip these plots')
 
 
 if args.simulate:
