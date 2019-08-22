@@ -1795,7 +1795,6 @@ plt.ylim([-0.5, 0.5])
 plt.xlabel('Pan-STARRS g (AB mag)', fontsize=20, labelpad=20)
 plt.ylabel('VIRUS g - Pan-STARRS g (AB mag)', fontsize=20, labelpad=20)
 plt.savefig('mag_offset_%s_%07d.png'  % (args.date, args.observation), dpi=300)
-sys.exit(1)
 
 
 if args.simulate:
@@ -1822,7 +1821,7 @@ he = a[0].header
 log.info('Making Cube')
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
-    zgrid, xgrid, ygrid = make_cube(pos[:, 0], pos[:, 1], scispectra, 
+    zgrid, xgrid, ygrid = make_cube(pos[:448*nexp, 0], pos[:448*nexp, 1], scispectra[:448*nexp], 
                                      ADRx, 0. * def_wave, ftf)
 
     write_cube(def_wave, xgrid, ygrid, zgrid, cubename, he)
