@@ -35,6 +35,7 @@ from catalog_search import query_panstarrs, MakeRegionFile
 from datetime import datetime, timedelta
 from extract import Extract
 from input_utils import setup_logging
+from math_utils import biweight
 from multiprocessing import Pool
 from photutils import DAOStarFinder, aperture_photometry, CircularAperture
 from scipy.interpolate import griddata, interp1d, interp2d
@@ -966,7 +967,7 @@ def reduce_ifuslot(ifuloop, h5table):
             div = safe_division(sciimage, masterflt)
             ratio = savgol_filter(np.median(div, axis=0), 351, 3)
             sci_plaw = plaw * ratio[np.newaxis, :]
-            #sciimage[:] = sciimage - sci_plaw
+            sciimage[:] = sciimage - sci_plaw
             twi, spec1, espec1, plaw1, mdark1 = get_spectra(sciimage, scierror, masterflt, sci_plaw, masterdark,
                                              trace, wave, def_wave, pixelmask)
             twi[:] = safe_division(twi, throughput)
@@ -1156,7 +1157,7 @@ def simulate_source(simulated_spectrum, pos, spectra, xc, yc,
     s_spec = weights * simulated_spectrum[np.newaxis, :]
     return spectra + s_spec
 
-def correct_amplifier_offsets(data, fibers_in_amp=112, order=1):
+def correct_amplifier_offsets(data, ftf, fibers_in_amp=112, order=1):
     '''
     Correct the offsets (in multiplication) between various amplifiers.
     These offsets originate from incorrect gain values in the amplifier 
@@ -1488,7 +1489,22 @@ pos, twispectra, scispectra, errspectra, fn, tfile, _I, s1, E1, P1, MD1 = reduce
 _I = np.hstack(_I)
 # Get fiber to fiber from twilight spectra
 ftf = get_fiber_to_fiber(twispectra)
+inds = np.arange(scispectra.shape[0])
 
+# Number of exposures
+nexp = scispectra.shape[0] / 448 / nslots
+log.info('Number of exposures: %i' % nexp)
+log.info('Getting Fiber to Fiber Correction')
+f_correction = ftf * 0.0
+for k in np.arange(nexp):
+    sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
+    for i in np.arange(int(len(scispectra[sel]) / 112)):
+        dx = ftf[sel][i*112:(i+1)*112]
+        dy = scispectra[sel][i*112:(i+1)*112]
+        norm = biweight(dy / dx, axis=0)
+        f_correction[sel][i*112:(i+1)*112] = norm
+    f_correction[sel] /= biweight(f_correction[sel], axis=0)
+ftf *= f_correction
 # Correct fiber to fiber
 scispectra = safe_division(scispectra, ftf)
 skyspectra = safe_division(scispectra, ftf)
@@ -1500,9 +1516,6 @@ errspectra = safe_division(errspectra, ftf)
 ###################
 log.info('Subtracting sky for all ifuslots')
 
-# Number of exposures
-nexp = scispectra.shape[0] / 448 / nslots
-log.info('Number of exposures: %i' % nexp)
 
 # Reorganize spectra by exposure
 N, D = scispectra.shape
