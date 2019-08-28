@@ -300,7 +300,7 @@ class Extract:
                                    (xgrid, ygrid), method=interp_kind) *
                           scale**2 / area)
             except:
-                grid_z = 0.0
+                grid_z = 0.0 * xgrid
             if convolve_image:
                 grid_z = convolve(grid_z, G)
             image_list.append(grid_z)
