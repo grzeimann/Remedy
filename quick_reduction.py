@@ -1492,10 +1492,15 @@ ftf = get_fiber_to_fiber(twispectra)
 inds = np.arange(scispectra.shape[0])
 scispectra[scispectra<1e-42] = np.nan
 
+
 # Number of exposures
 nexp = scispectra.shape[0] / 448 / nslots
 log.info('Number of exposures: %i' % nexp)
 log.info('Getting Fiber to Fiber Correction')
+###################
+# Subtracting Sky #
+###################
+log.info('Subtracting sky for all ifuslots')
 Sky = ftf * 0.0
 skies = []
 for k in np.arange(nexp):
@@ -1510,12 +1515,9 @@ for k in np.arange(nexp):
 scispectra = safe_division(scispectra, ftf)
 skyspectra = safe_division(scispectra, ftf)
 errspectra = safe_division(errspectra, ftf)
+fits.PrimaryHDU(scispectra).writeto('test.fits')
 
 
-###################
-# Subtracting Sky #
-###################
-log.info('Subtracting sky for all ifuslots')
 
 
 # Take the ratio of the 2nd and 3rd sky to the first
