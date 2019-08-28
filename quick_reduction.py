@@ -1503,8 +1503,8 @@ for k in np.arange(nexp):
         dy = scispectra[sel][i*112:(i+1)*112]
         norm = biweight(dy / dx, axis=0)
         f_correction[sel][i*112:(i+1)*112] = norm
+    fits.PrimaryHDU(biweight(f_correction[sel], axis=0)).writeto('test.fits', overwrite=True)
     f_correction[sel] /= biweight(f_correction[sel], axis=0)
-    print(np.nanmedian(f_correction[sel], axis=0))
     sys.exit(1)
 ftf *= f_correction
 # Correct fiber to fiber
