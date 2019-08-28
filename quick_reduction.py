@@ -1495,18 +1495,16 @@ inds = np.arange(scispectra.shape[0])
 nexp = scispectra.shape[0] / 448 / nslots
 log.info('Number of exposures: %i' % nexp)
 log.info('Getting Fiber to Fiber Correction')
-f_correction = ftf * 0.0
+Sky = ftf * 0.0
+skies = []
 for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
-    for i in np.arange(int(len(scispectra[sel]) / 112)):
-        dx = ftf[sel][i*112:(i+1)*112]
-        dy = scispectra[sel][i*112:(i+1)*112]
-        norm = biweight(dy / dx, axis=0)
-        for s in sel[i*112:(i+1)*112]:
-            f_correction[s] = norm
-    fits.PrimaryHDU(biweight(f_correction[sel], axis=0)).writeto('test.fits', overwrite=True)
-    f_correction[sel] /= biweight(f_correction[sel], axis=0)
-ftf *= f_correction
+    ftf_chunks = np.array_split(ftf[sel], int(len(sel) / 112), axis=0)
+    obs_chunks = np.array_split(scispectra[sel], int(len(sel) / 112), axis=0)
+    F = np.vstack([fc * biweight(oc / fc, axis=0) for oc, fc in zip(obs_chunks, ftf_chunks)])
+    Sky[sel] = F
+    scispectra[sel] -= Sky[sel]
+    skies.append(biweight(Sky[sel], axis=0))
 # Correct fiber to fiber
 scispectra = safe_division(scispectra, ftf)
 skyspectra = safe_division(scispectra, ftf)
@@ -1519,29 +1517,6 @@ errspectra = safe_division(errspectra, ftf)
 log.info('Subtracting sky for all ifuslots')
 
 
-# Reorganize spectra by exposure
-N, D = scispectra.shape
-reorg = np.zeros((nexp, N/nexp, D))
-for i in np.arange(nexp):
-    x = np.arange(112)
-    X = []
-    for j in np.arange(4*nslots):
-        X.append(x + j * 336 + i * 112)
-    X = np.array(np.hstack(X), dtype=int)
-    reorg[i] = scispectra[X]*1.
-# Mask 0.0 values by setting to nan
-reorg[reorg < 1e-42] = np.nan
-
-# Correct offsets in the "gain" of each amplifier
-# Not yet sure why this is needed physically
-# But it is needed mathematically  
-# The corrections are ~few percent.
-#reorg = np.array([r / correct_amplifier_offsets(r)[:, np.newaxis]
-#                  for r in reorg])
-
-# Estimate sky with sigma clipping to find "sky" fibers    
-skies = np.array([estimate_sky(r) for r in reorg])
-
 # Take the ratio of the 2nd and 3rd sky to the first
 # Assume the ratio is due to illumination differences
 # Correct multiplicatively to the first exposure's illumination (scalar corrections)
@@ -1552,17 +1527,7 @@ for i in np.arange(1, nexp):
              (i+1, exp_ratio[i]))
 
 # Subtract sky and correct normalization
-reorg[:] -= skies[:, np.newaxis, :]
-reorg[:] *= exp_ratio[:, np.newaxis, np.newaxis]
 
-# Reformat spectra back to 2d array [all exposures, amps, ifus]
-cnt = 0
-for j in np.arange(4*nslots): 
-    for i in np.arange(nexp):
-        l = j*112
-        u = (j+1)*112
-        scispectra[cnt:(cnt+112)] = reorg[i, l:u]*1.
-        cnt += 112
 
 errspectra[~np.isfinite(scispectra)] = np.nan
 
