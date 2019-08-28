@@ -1515,7 +1515,6 @@ for k in np.arange(nexp):
 scispectra = safe_division(scispectra, ftf)
 skyspectra = safe_division(scispectra, ftf)
 errspectra = safe_division(errspectra, ftf)
-fits.PrimaryHDU(scispectra).writeto('test.fits')
 
 
 
