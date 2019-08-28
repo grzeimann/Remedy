@@ -295,9 +295,12 @@ class Extract:
             S[:, 0] = xloc - self.ADRra[ichunk[cnt]]
             S[:, 1] = yloc - self.ADRdec[ichunk[cnt]]
             cnt += 1
-            grid_z = (griddata(S[~image.mask], image.data[~image.mask],
-                               (xgrid, ygrid), method=interp_kind) *
-                      scale**2 / area)
+            try:
+                grid_z = (griddata(S[~image.mask], image.data[~image.mask],
+                                   (xgrid, ygrid), method=interp_kind) *
+                          scale**2 / area)
+            except:
+                grid_z = 0.0
             if convolve_image:
                 grid_z = convolve(grid_z, G)
             image_list.append(grid_z)
