@@ -1502,6 +1502,8 @@ for k in np.arange(nexp):
         dx = ftf[sel][i*112:(i+1)*112]
         dy = scispectra[sel][i*112:(i+1)*112]
         norm = biweight(dy / dx, axis=0)
+        print(np.nanmedian(norm, axis=0))
+        sys.exit(1)
         f_correction[sel][i*112:(i+1)*112] = norm
     f_correction[sel] /= biweight(f_correction[sel], axis=0)
 ftf *= f_correction
