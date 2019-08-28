@@ -1490,6 +1490,7 @@ _I = np.hstack(_I)
 # Get fiber to fiber from twilight spectra
 ftf = get_fiber_to_fiber(twispectra)
 inds = np.arange(scispectra.shape[0])
+scispectra[scispectra<1e-42] = np.nan
 
 # Number of exposures
 nexp = scispectra.shape[0] / 448 / nslots
@@ -1501,8 +1502,8 @@ for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
     ftf_chunks = np.array_split(ftf[sel], int(len(sel) / 112), axis=0)
     obs_chunks = np.array_split(scispectra[sel], int(len(sel) / 112), axis=0)
-    F = np.vstack([fc * biweight(oc / fc, axis=0) for oc, fc in zip(obs_chunks, ftf_chunks)])
-    Sky[sel] = F
+    Sky[sel] = np.vstack([fc * biweight(oc / fc, axis=0)
+                          for oc, fc in zip(obs_chunks, ftf_chunks)])
     scispectra[sel] -= Sky[sel]
     skies.append(biweight(Sky[sel], axis=0))
 # Correct fiber to fiber
@@ -1527,7 +1528,6 @@ for i in np.arange(1, nexp):
              (i+1, exp_ratio[i]))
 
 # Subtract sky and correct normalization
-
 
 errspectra[~np.isfinite(scispectra)] = np.nan
 
