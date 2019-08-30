@@ -40,6 +40,7 @@ class VIRUSImage(tb.IsDescription):
     ifuslot = tb.Int32Col()
     ifuid = tb.StringCol(3)
     specid = tb.StringCol(3)
+    contid = tb.StringCol(8)
     amp = tb.StringCol(2)
     readnoise = tb.Float32Col()
     pixelmask = tb.Int32Col((1032, 1032))
@@ -48,13 +49,14 @@ class VIRUSImage(tb.IsDescription):
 
 
 def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
-                           amp, readnoise, pixelmask, masterdark, plaw):
+                           amp, readnoise, pixelmask, masterdark, plaw, contid):
     row['wavelength'] = wave * 1.
     row['trace'] = trace * 1.
     row['ifupos'] = ifupos * 1.
     row['ifuslot'] = ifuslot
     row['ifuid'] = ifuid
     row['specid'] = specid
+    row['contid'] = contid
     row['readnoise'] = readnoise
     row['pixelmask'] = pixelmask
     row['masterdark'] = masterdark
@@ -110,11 +112,15 @@ def get_ifuslots(tarfolder):
         except:
             flag = False
         if name[-5:] == '.fits':
+            F = fits.open(T.extractfile(a))
+            quad = ''
+            for keyname in ['IFUSLOT', 'SPECID', 'IFUID']:
+                quad += '%03d_' % F[0].header[keyname]
+            quad += F[0].header['CONTID']
             namelist = name.split('/')
             expn = namelist[-3]
-            ifuslot = namelist[-1].split('_')[1][:3]
-            if ifuslot not in ifuslots:
-                ifuslots.append(ifuslot)
+            if quad not in ifuslots:
+                ifuslots.append(quad)
             if expn not in expnames:
                 expnames.append(expn)
             if len(expnames) > 1:
@@ -154,7 +160,7 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder):
                          int(timelist[0]), int(timelist[1]),
                          int(timelist[2].split('.')[0]))
             bia_list.append([I, header['SPECID'], header['OBJECT'], d,
-                             header['IFUID']])
+                             header['IFUID'], header['CONTID']])
         except:
             log.warning('Could not load %s' % fn)
 
@@ -188,7 +194,7 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder):
           timedelta(days=(d2-d1).days / 2.))
     avgdate = '%04d%02d%02dT%02d%02d%02d' % (d4.year, d4.month, d4.day,
                                              d4.hour, d4.minute, d4.second)
-    return masterbias, masterstd, avgdate, bia_list[0][1], bia_list[0][4]
+    return masterbias, masterstd, avgdate, bia_list[0][1], bia_list[0][4], bia_list[0][5]
 
 parser = setup_parser()
 parser.add_argument('outfilename', type=str,
@@ -230,12 +236,13 @@ T = Table.read(op.join(dirname, 'Lines_list/virus_lines.dat'),
                format='ascii.no_header')
 T_array = np.array(T['col1'])
 
-for ifuslot in ifuslots:
+for ifuslot_key in ifuslots:
+    ifuslot, specid, ifuid, contid = ifuslot_key.split('_')
     for amp in ['LL', 'LU', 'RL', 'RU']:
         row = imagetable.row
         for kind in kinds:
-            args.log.info('Making %s master frame for %03d %s' %
-                          (kind, int(ifuslot), amp))
+            args.log.info('Making %s master frame for %s %s' %
+                          (kind, ifuslot_key, amp))
             _info = build_master_frame(filename_dict[kind], ifuslot, amp, kind,
                                        args.log, args.folder)
             specid, ifuSlot, ifuid = ['%03d' % int(z)
@@ -243,18 +250,18 @@ for ifuslot in ifuslots:
             if kind == 'drk':
                 masterdark = _info[0] * 1.
                 readnoise = biweight(_info[1])
-                args.log.info('Readnoise for %03d %s: %0.2f' %
-                              (int(ifuslot), amp, readnoise))
+                args.log.info('Readnoise for %s %s: %0.2f' %
+                              (ifuslot_key, amp, readnoise))
                 args.log.info('Getting pixel mask %03d %s' %
                               (int(ifuslot), amp))
                 pixelmask = get_pixelmask(masterdark)
             if kind == 'twi':
                 ifupos = get_ifucenfile(dirname, ifuid, amp)
-                args.log.info('Getting trace for %03d %s' %
-                              (int(ifuslot), amp))
+                args.log.info('Getting trace for %s %s' %
+                              (ifuslot_key, amp))
                 if np.mean(_info[0]) < 1000.:
-                    args.log.warning('Twi for %03d %s below 1000 cnts on average.' %
-                                     (int(ifuslot), amp))
+                    args.log.warning('Twi for %s %s below 1000 cnts on average.' %
+                                     (ifuslot_key, amp))
                     trace = np.zeros((112, 1032))
                     wave = np.zeros((112, 1032))
                     break
@@ -286,6 +293,6 @@ for ifuslot in ifuslots:
                 
         success = append_fibers_to_table(row, wave, trace, ifupos, ifuslot,
                                          ifuid, specid, amp, readnoise,
-                                         pixelmask, masterdark, plaw)
+                                         pixelmask, masterdark, plaw, _info[5])
         if success:
             imagetable.flush()
