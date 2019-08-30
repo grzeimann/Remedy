@@ -115,7 +115,7 @@ def get_ifuslots(tarfolder):
             F = fits.open(T.extractfile(a))
             quad = ''
             for keyname in ['IFUSLOT', 'SPECID', 'IFUID']:
-                quad += '%03d_' % F[0].header[keyname]
+                quad += '%03d_' % int(F[0].header[keyname])
             quad += F[0].header['CONTID']
             namelist = name.split('/')
             expn = namelist[-3]
