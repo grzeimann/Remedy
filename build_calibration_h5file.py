@@ -112,8 +112,10 @@ def get_ifuslots(tarfolder):
         except:
             flag = False
         if name[-5:] == '.fits':
-            print(name)
-            F = fits.open(T.extractfile(a))
+            try:
+                F = fits.open(T.extractfile(a))
+            except:
+                continue
             quad = ''
             for keyname in ['IFUSLOT', 'SPECID', 'IFUID']:
                 quad += '%03d_' % int(F[0].header[keyname])
