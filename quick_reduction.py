@@ -12,7 +12,6 @@ import astropy.units as units
 import fnmatch
 import glob
 import matplotlib.pyplot as plt
-import multiprocessing
 import numpy as np
 import os.path as op
 import seaborn as sns
@@ -1518,7 +1517,6 @@ errspectra = safe_division(errspectra, ftf)
 
 
 
-
 # Take the ratio of the 2nd and 3rd sky to the first
 # Assume the ratio is due to illumination differences
 # Correct multiplicatively to the first exposure's illumination (scalar corrections)
@@ -1544,7 +1542,13 @@ pname = 'Panstarrs_%0.6f_%0.5f_%0.4f.dat' % (ra, dec, 11. / 60.)
 if op.exists(pname):
     Pan = Table.read(pname, format='ascii.fixed_width_two_line')
 else:
-    Pan = query_panstarrs(ra, dec, 11. / 60.)
+    try:
+        Pan = query_panstarrs(ra, dec, 11. / 60.)
+    except:
+        log.info('Panstarrs initial query failed, '
+                 'trying with small coord adjustment')
+        Pan = query_panstarrs(ra+np.random.randn()*0.001,
+                              dec+np.random.randn()*0.001, 11. / 60.)
     Pan.write(pname, format='ascii.fixed_width_two_line')
 
 raC, decC, gC = (np.array(Pan['raMean']), np.array(Pan['decMean']),
