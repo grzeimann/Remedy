@@ -289,6 +289,10 @@ for ifuslot_key in ifuslots:
                     if wave is None:
                         args.log.error('Wavelength Failed for %s %s.' %
                                        (ifuslot_key, amp))
+                        h = fits.PrimaryHDU(cmp)
+                        h1 = fits.ImageHDU(_info[0])
+                        fits.HDUList([h, h1]).writeto('testwave_%s_%s.fits' %
+                                     (ifuslot_key, amp), overwrite=True)
                         wave = trace * 0.
                 except:
                     args.log.error('Wavelength Failed.')
