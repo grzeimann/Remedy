@@ -437,8 +437,8 @@ def find_peaks(y, thresh=10.):
     peaks = y[np.round(peak_loc).astype(int)]
     return peak_loc, peaks
 
-def get_wave_single(y, T_array, order=3, thresh=10.):
-    mask, cont = identify_sky_pixels(y)
+def get_wave_single(y, T_array, order=3, thresh=5., dthresh=25.):
+    mask, cont = identify_sky_pixels(y, kernel=1.5)
     bl, bm = biweight(y - cont, calc_std=True)
     thr = bm * thresh
     loc, peaks = find_peaks(y - cont, thresh=thr)
@@ -448,7 +448,10 @@ def get_wave_single(y, T_array, order=3, thresh=10.):
     wave = (x-loc[0]) * dw / dx + T_array[0]
     guess_wave = np.interp(loc, x, wave)
     diff = guess_wave[:, np.newaxis] - T_array
-    ind = np.argmin(np.abs(diff), axis=0)
+    ind = np.zeros(T_array.shape, dtype=int)
+    for j in np.arange(len(T_array)):
+        sel = np.abs(diff[:, j]) < 50.
+        ind[j] = np.where(peaks == np.max(peaks[sel]))[0][0]
     P = np.polyfit(loc[ind], T_array, order)
     yv = np.polyval(P, loc[ind])
     res = np.std(T_array-yv)
