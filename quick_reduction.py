@@ -636,6 +636,7 @@ def get_spectra(array_sci, array_err, array_flt, plaw, mdark, array_trace, wave,
     twi_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
     plaw_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
     mdark_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
+    chi2_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
 
     mask = np.zeros((array_trace.shape[0], def_wave.shape[0]))
 
@@ -650,6 +651,7 @@ def get_spectra(array_sci, array_err, array_flt, plaw, mdark, array_trace, wave,
             continue
         indv = np.round(array_trace[fiber]).astype(int)
         tw, sw, ew, pm, pl, md = (0., 0., 0., 0., 0., 0.)
+        chi2 = np.zeros((len(indv), 5, 3))
         for j in np.arange(-3, 3):
             if j == -3:
                 w = indv + j + 1 - (array_trace[fiber] - 2.5)
@@ -663,6 +665,12 @@ def get_spectra(array_sci, array_err, array_flt, plaw, mdark, array_trace, wave,
             md += mdark[indv+j, x] * w
             ew += array_err[indv+j, x]**2 * w
             pm += pixelmask[indv+j, x]
+            chi2[:, j+3, 0] = array_sci[indv+j, x] * w
+            chi2[:, j+3, 1] = array_flt[indv+j, x] * w
+            chi2[:, j+3, 2] = array_err[indv+j, x] * w
+        chi2a = ((chi2[:, :, 0] - chi2[:, :, 1] * (sw / tw)[:, np.newaxis]) /
+                 chi2[:, :, 2])
+        chi2a = np.sum(chi2a**2, axis=1) * 1. / (5.)
         ew = np.sqrt(ew)
         twi_spectrum[fiber] = np.interp(def_wave, wave[fiber], tw / dw,
                                         left=0.0, right=0.0)
@@ -674,6 +682,8 @@ def get_spectra(array_sci, array_err, array_flt, plaw, mdark, array_trace, wave,
                                         left=0.0, right=0.0)
         mask[fiber] = np.interp(def_wave, wave[fiber], pm / dw,
                                         left=0.0, right=0.0)
+        chi2_spectrum[fiber] = np.interp(def_wave, wave[fiber], chi2a,
+                                        left=0.0, right=0.0)
         # Not real propagation of error, but skipping math for now
         err_spectrum[fiber] = np.interp(def_wave, wave[fiber], ew / dw,
                                         left=0.0, right=0.0)
@@ -681,7 +691,7 @@ def get_spectra(array_sci, array_err, array_flt, plaw, mdark, array_trace, wave,
     twi_spectrum[total_mask] = 0.0
     err_spectrum[total_mask] = 0.0
     sci_spectrum[total_mask] = 0.0
-    return twi_spectrum, sci_spectrum, err_spectrum, plaw_spectrum, mdark_spectrum
+    return twi_spectrum, sci_spectrum, err_spectrum, plaw_spectrum, mdark_spectrum, chi2_spectrum
 
 def get_fiber_to_fiber(twispectra):
     '''
@@ -921,7 +931,7 @@ def reduce_ifuslot(ifuloop, h5table):
     scitarfile : str or None
         name of the tar file for the science frames if there is one
     '''
-    p, t, s, e, _i, s1, e1, p1, m1 = ([], [], [], [], [], [], [], [], [])
+    p, t, s, e, _i, s1, e1, p1, m1, c1 = ([], [], [], [], [], [], [], [], [], [])
     
     # Calibration factors to convert electrons to uJy
     mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.7
@@ -967,7 +977,7 @@ def reduce_ifuslot(ifuloop, h5table):
             ratio = savgol_filter(np.median(div, axis=0), 351, 3)
             sci_plaw = plaw * ratio[np.newaxis, :]
             sciimage[:] = sciimage - sci_plaw
-            twi, spec1, espec1, plaw1, mdark1 = get_spectra(sciimage, scierror, masterflt, sci_plaw, masterdark,
+            twi, spec1, espec1, plaw1, mdark1, chi21 = get_spectra(sciimage, scierror, masterflt, sci_plaw, masterdark,
                                              trace, wave, def_wave, pixelmask)
             twi[:] = safe_division(twi, throughput)
             spec = safe_division(spec1, throughput) * mult_fac
@@ -975,12 +985,12 @@ def reduce_ifuslot(ifuloop, h5table):
             pos = amppos + dither_pattern[j]
             N = twi.shape[0]
             _I = np.char.array(['%s_%s_%s_%s' % (specid, ifuslot, ifuid, amp)] * N)
-            for x, i in zip([p, t, s, e, _i, s1, e1, p1, m1], [pos, twi, spec, espec, _I, spec1, espec1, plaw1, mdark1]):
+            for x, i in zip([p, t, s, e, _i, s1, e1, p1, m1, c1], [pos, twi, spec, espec, _I, spec1, espec1, plaw1, mdark1, chi21]):
                 x.append(i * 1)        
     
-    p, t, s, e, _i, s1, e1, p1, m1 = [np.vstack(j) for j in [p, t, s, e, _i, s1, e1, p1, m1]]
+    p, t, s, e, _i, s1, e1, p1, m1, c1 = [np.vstack(j) for j in [p, t, s, e, _i, s1, e1, p1, m1, c1]]
     
-    return p, t, s, e, fn , scitarfile, _i, s1, e1, p1, m1
+    return p, t, s, e, fn , scitarfile, _i, s1, e1, p1, m1, c1
 
 
 def make_cube(xloc, yloc, data, Dx, Dy, ftf, scale, ran,
@@ -1482,7 +1492,7 @@ allifus = np.hstack(allifus)
 
 # Reducing IFUSLOT
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
-pos, twispectra, scispectra, errspectra, fn, tfile, _I, s1, E1, P1, MD1 = reduce_ifuslot(ifuloop,
+pos, twispectra, scispectra, errspectra, fn, tfile, _I, s1, E1, P1, MD1, C1 = reduce_ifuslot(ifuloop,
                                                                         h5table)
 
 _I = np.hstack(_I)
@@ -1652,6 +1662,7 @@ class Fibers(IsDescription):
      observed_error = Float32Col((1036,))
      plawspec = Float32Col((1036,))
      mdarkspec = Float32Col((1036,))
+     chi2spec = Float32Col((1036,))
 
 class Info(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
@@ -1697,6 +1708,7 @@ for i in np.arange(len(E.ra)):
     specrow['observed_error'] = E1[i]
     specrow['plawspec'] = P1[i]
     specrow['mdarkspec'] = MD1[i]
+    specrow['chi2spec'] = C1[i]
     specrow['error'] = errspectra[i]
     specrow['fiber_to_fiber'] = ftf[i]
     specrow.append()
