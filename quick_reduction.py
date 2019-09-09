@@ -964,6 +964,7 @@ def reduce_ifuslot(ifuloop, h5table):
         log.info('Making mastertwi for %s%s' % (ifuslot, amp))
         masterflt = get_mastertwi(twibase, 0.0, twitarfile)
         twi = get_twi_spectra(masterflt, trace, wave, def_wave)
+        log.info('Getting powerlaw for mastertwi for %s%s' % (ifuslot, amp))
         plaw = get_powerlaw(masterflt, trace, twi, amp)
         masterflt[:] = masterflt - plaw
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
