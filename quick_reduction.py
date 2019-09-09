@@ -651,7 +651,7 @@ def get_spectra(array_sci, array_err, array_flt, plaw, mdark, array_trace, wave,
             continue
         indv = np.round(array_trace[fiber]).astype(int)
         tw, sw, ew, pm, pl, md = (0., 0., 0., 0., 0., 0.)
-        chi2 = np.zeros((len(indv), 5, 3))
+        chi2 = np.zeros((len(indv), 6, 3))
         for j in np.arange(-3, 3):
             if j == -3:
                 w = indv + j + 1 - (array_trace[fiber] - 2.5)
@@ -670,7 +670,7 @@ def get_spectra(array_sci, array_err, array_flt, plaw, mdark, array_trace, wave,
             chi2[:, j+3, 2] = array_err[indv+j, x] * w
         chi2a = ((chi2[:, :, 0] - chi2[:, :, 1] * (sw / tw)[:, np.newaxis]) /
                  chi2[:, :, 2])
-        chi2a = np.sum(chi2a**2, axis=1) * 1. / (5.)
+        chi2a = np.sum(chi2a**2, axis=1) * 1. / (6.)
         ew = np.sqrt(ew)
         twi_spectrum[fiber] = np.interp(def_wave, wave[fiber], tw / dw,
                                         left=0.0, right=0.0)
