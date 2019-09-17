@@ -1565,10 +1565,13 @@ for i, ui in enumerate(allifus):
         image = make_photometric_image(P[:, 0], P[:, 1], data, filtg, F > 0.5,
                                        ADRx, 0.*ADRx, nchunks=11,
                                        ran=ran, scale=scale, seeing=2.5)
-        
+        name = '%s_%07d_%03d_exp%02d.fits' % (args.date, args.observation, ui,
+                                              k+1)
+        fits.PrimaryHDU(image).writeto(name, overwrite=True)
         # Make full fits file with wcs info (using default header)
         mean, median, std = sigma_clipped_stats(image, sigma=3.0, stdfunc=mad_std)
-        daofind = DAOStarFinder(fwhm=4.0, threshold=5. * std, exclude_border=True) 
+        daofind = DAOStarFinder(fwhm=4.0, threshold=5. * std,
+                                exclude_border=True) 
         sources = daofind(image)
         log.info('Found %i sources' % len(sources))
         if len(sources):
