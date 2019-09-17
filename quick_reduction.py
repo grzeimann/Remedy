@@ -33,6 +33,7 @@ from astropy.table import Table
 from catalog_search import query_panstarrs, MakeRegionFile
 from datetime import datetime, timedelta
 from extract import Extract
+from fiber_utils import identify_sky_pixels
 from input_utils import setup_logging
 from math_utils import biweight
 from multiprocessing import Pool
@@ -62,7 +63,7 @@ badifuslots = np.array([])
 dither_pattern = np.array([[0., 0.], [1.27, -0.73], [1.27, 0.73]])
 
 # Rectified wavelength
-def_wave = np.arange(3470., 5542., 2.)
+def_wave = np.linspace(3470., 5540., 1036)
 
 # ADR model
 wADR = [3500., 4000., 4500., 5000., 5500.]
@@ -931,7 +932,7 @@ def reduce_ifuslot(ifuloop, h5table):
     scitarfile : str or None
         name of the tar file for the science frames if there is one
     '''
-    p, t, s, e, _i, s1, e1, p1, m1, c1 = ([], [], [], [], [], [], [], [], [], [])
+    p, t, s, e, _i, s1, e1, p1, m1, c1, t1, w1 = ([], [], [], [], [], [], [], [], [], [], [], [])
     
     # Calibration factors to convert electrons to uJy
     mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.7
@@ -952,6 +953,7 @@ def reduce_ifuslot(ifuloop, h5table):
             masterdark = h5table[ind]['masterdark']
             pixelmask = h5table[ind]['pixelmask']
         except:
+            log.warning("Can't open masterdark, pixelmask")
             masterdark = 0.0
             pixelmask = np.zeros((1032, 1032), dtype=int)
         
@@ -979,19 +981,19 @@ def reduce_ifuslot(ifuloop, h5table):
             sci_plaw = plaw * ratio[np.newaxis, :]
             sciimage[:] = sciimage - sci_plaw
             twi, spec1, espec1, plaw1, mdark1, chi21 = get_spectra(sciimage, scierror, masterflt, sci_plaw, masterdark,
-                                             trace, wave, def_wave, pixelmask)
+                                             trace, wave, def_wave, pixelmask, readnoise)
             twi[:] = safe_division(twi, throughput)
             spec = safe_division(spec1, throughput) * mult_fac
             espec = safe_division(espec1, throughput) * mult_fac
             pos = amppos + dither_pattern[j]
             N = twi.shape[0]
             _I = np.char.array(['%s_%s_%s_%s' % (specid, ifuslot, ifuid, amp)] * N)
-            for x, i in zip([p, t, s, e, _i, s1, e1, p1, m1, c1], [pos, twi, spec, espec, _I, spec1, espec1, plaw1, mdark1, chi21]):
+            for x, i in zip([p, t, s, e, _i, s1, e1, p1, m1, c1, t1, w1], [pos, twi, spec, espec, _I, spec1, espec1, plaw1, mdark1, chi21, trace, wave]):
                 x.append(i * 1)        
     
-    p, t, s, e, _i, s1, e1, p1, m1, c1 = [np.vstack(j) for j in [p, t, s, e, _i, s1, e1, p1, m1, c1]]
+    p, t, s, e, _i, s1, e1, p1, m1, c1, t1, w1 = [np.vstack(j) for j in [p, t, s, e, _i, s1, e1, p1, m1, c1, t1, w1]]
     
-    return p, t, s, e, fn , scitarfile, _i, s1, e1, p1, m1, c1
+    return p, t, s, e, fn , scitarfile, _i, s1, e1, p1, m1, c1, t1, w1
 
 
 def make_cube(xloc, yloc, data, Dx, Dy, ftf, scale, ran,
@@ -1493,7 +1495,7 @@ allifus = np.hstack(allifus)
 
 # Reducing IFUSLOT
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
-pos, twispectra, scispectra, errspectra, fn, tfile, _I, s1, E1, P1, MD1, C1 = reduce_ifuslot(ifuloop,
+pos, twispectra, scispectra, errspectra, fn, tfile, _I, s1, E1, P1, MD1, C1, T1, W1 = reduce_ifuslot(ifuloop,
                                                                         h5table)
 
 _I = np.hstack(_I)
@@ -1512,15 +1514,32 @@ log.info('Getting Fiber to Fiber Correction')
 ###################
 log.info('Subtracting sky for all ifuslots')
 Sky = ftf * 0.0
+Adj = ftf * 0.0
 skies = []
 for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
-    ftf_chunks = np.array_split(ftf[sel], int(len(sel) / 112), axis=0)
-    obs_chunks = np.array_split(scispectra[sel], int(len(sel) / 112), axis=0)
-    Sky[sel] = np.vstack([fc * biweight(oc / fc, axis=0)
-                          for oc, fc in zip(obs_chunks, ftf_chunks)])
+    bins = 9
+    adj = np.zeros((len(sel), bins))
+    X = np.array([np.mean(xi) for xi in np.array_split(def_wave, bins)])
+    cnt = 0
+    for o, f in zip(np.array_split(scispectra[sel], bins, axis=1),
+                    np.array_split(ftf[sel], bins, axis=1)):
+        y = biweight(o / f, axis=1)
+        norm = biweight(y)
+        mask, cont = identify_sky_pixels(y, kernel=2.5)
+        adj[:, cnt] = cont / norm
+        cnt += 1
+    for j in np.arange(len(sel)):
+        good = np.isfinite(adj[j])
+        if good.sum() > bins-3:
+            Adj[sel[j]] = interp1d(X, adj[j], kind='quadratic',
+                                   fill_value='extrapolate')(def_wave)
+        else:
+            scispectra[sel(j)] = np.nan
+    sky = biweight(scispectra[sel] / ftf[sel] / Adj[sel], axis=0)
+    skies.append(sky)
+    Sky[sel] = ftf[sel] * Adj[sel] * sky[np.newaxis, :]
     scispectra[sel] -= Sky[sel]
-    skies.append(biweight(Sky[sel], axis=0))
 # Correct fiber to fiber
 scispectra = safe_division(scispectra, ftf)
 skyspectra = safe_division(scispectra, ftf)
@@ -1658,6 +1677,12 @@ class Fibers(IsDescription):
      dec  = Float32Col()    # float  (single-precision)
      spectrum  = Float32Col((1036,))    # float  (single-precision)
      error  = Float32Col((1036,))    # float  (single-precision)
+
+class Cals(IsDescription):
+     ra  = Float32Col()    # float  (single-precision)
+     dec  = Float32Col()    # float  (single-precision)
+     trace  = Float32Col((1032,))    # float  (single-precision)
+     wavelength  = Float32Col((1032,))    # float  (single-precision)
      fiber_to_fiber  = Float32Col((1036,))    # float  (single-precision)
      observed  = Float32Col((1036,))
      observed_error = Float32Col((1036,))
@@ -1672,6 +1697,7 @@ class Info(IsDescription):
      ifuslot  = Int32Col()    # float  (single-precision)
      ifuid  = Int32Col()   # float  (single-precision)
      amp  = StringCol(2)
+     exp = Int32Col()
 
 class Spectra(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
@@ -1705,13 +1731,24 @@ for i in np.arange(len(E.ra)):
     specrow['ra'] = E.ra[i]
     specrow['dec'] = E.dec[i]
     specrow['spectrum'] = scispectra[i]
+    specrow['error'] = errspectra[i]
+    specrow.append()
+table.flush()
+
+table = h5spec.create_table(h5spec.root, 'Cals', Fibers, 
+                            "Fiber Information")
+specrow = table.row
+for i in np.arange(len(E.ra)):
+    specrow['ra'] = E.ra[i]
+    specrow['dec'] = E.dec[i]
     specrow['observed'] = s1[i]
     specrow['observed_error'] = E1[i]
     specrow['plawspec'] = P1[i]
     specrow['mdarkspec'] = MD1[i]
     specrow['chi2spec'] = C1[i]
-    specrow['error'] = errspectra[i]
     specrow['fiber_to_fiber'] = ftf[i]
+    specrow['trace'] = T1[i]
+    specrow['wavelength'] = W1[i]
     specrow.append()
 table.flush()
 
