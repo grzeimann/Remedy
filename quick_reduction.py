@@ -1578,10 +1578,11 @@ for i, ui in enumerate(allifus):
             gflux = phot_table['aperture_sum']
             s_list.append([sources['xcentroid'], sources['ycentroid'],
                           gflux])
-    s1 = np.array(s_list[0])
-    s2 = np.array(s_list[1])
-    s3 = np.array(s_list[2])
+    
     try:
+        s1 = np.array(s_list[0])
+        s2 = np.array(s_list[1])
+        s3 = np.array(s_list[2])
         d12 = np.sqrt((s1[:, 0] - s2[np.newaxis, :, 0])**2 +
                       (s1[:, 1] - s2[np.newaxis, :, 1])**2)
         d13 = np.sqrt((s1[:, 0] - s3[np.newaxis, :, 0])**2 +
