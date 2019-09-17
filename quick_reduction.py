@@ -1597,7 +1597,7 @@ for i, ui in enumerate(allifus):
     except:
         continue
 ratios = np.array(ratios)
-
+fits.PrimaryHDU(ratios).writeto('test_ratio.fits', overwrite=True)
 
 # Take the ratio of the 2nd and 3rd sky to the first
 # Assume the ratio is due to illumination differences
