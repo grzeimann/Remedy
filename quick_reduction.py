@@ -981,7 +981,7 @@ def reduce_ifuslot(ifuloop, h5table):
             sci_plaw = plaw * ratio[np.newaxis, :]
             sciimage[:] = sciimage - sci_plaw
             twi, spec1, espec1, plaw1, mdark1, chi21 = get_spectra(sciimage, scierror, masterflt, sci_plaw, masterdark,
-                                             trace, wave, def_wave, pixelmask, readnoise)
+                                             trace, wave, def_wave, pixelmask)
             twi[:] = safe_division(twi, throughput)
             spec = safe_division(spec1, throughput) * mult_fac
             espec = safe_division(espec1, throughput) * mult_fac
