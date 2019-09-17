@@ -1570,13 +1570,14 @@ for i, ui in enumerate(allifus):
         mean, median, std = sigma_clipped_stats(image, sigma=3.0, stdfunc=mad_std)
         daofind = DAOStarFinder(fwhm=3.0, threshold=5. * std, exclude_border=True) 
         sources = daofind(image)
-        positions = (sources['xcentroid'], sources['ycentroid'])
-        apertures = CircularAperture(positions, r=5)
-        phot_table = aperture_photometry(image, apertures,
-                                         mask=~np.isfinite(image))
-        gflux = phot_table['aperture_sum']
-        s_list.append([sources['xcentroid'], sources['ycentroid'],
-                      gflux])
+        if len(sources):
+            positions = (sources['xcentroid'], sources['ycentroid'])
+            apertures = CircularAperture(positions, r=5)
+            phot_table = aperture_photometry(image, apertures,
+                                             mask=~np.isfinite(image))
+            gflux = phot_table['aperture_sum']
+            s_list.append([sources['xcentroid'], sources['ycentroid'],
+                          gflux])
     s1 = np.array(s_list[0])
     s2 = np.array(s_list[1])
     s3 = np.array(s_list[2])
