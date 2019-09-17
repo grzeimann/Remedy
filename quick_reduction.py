@@ -1591,8 +1591,8 @@ for i, ui in enumerate(allifus):
                       (s1[:, 1] - s2[np.newaxis, :, 1])**2)
         d13 = np.sqrt((s1[:, 0] - s3[np.newaxis, :, 0])**2 +
                       (s1[:, 1] - s3[np.newaxis, :, 1])**2)
-        mat = np.where((np.min(d12, axis=1) < 1.) *
-                       (np.min(d13, axis=1) < 1.))[0]
+        mat = np.where((np.min(d12, axis=1) < 3.) *
+                       (np.min(d13, axis=1) < 3.))[0]
         for m in mat:
             f1 = s1[m, 2]
             f2 = s2[np.argmin(d12[m, :]), 2] / f1
