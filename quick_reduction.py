@@ -1570,7 +1570,7 @@ for i, ui in enumerate(allifus):
         fits.PrimaryHDU(image).writeto(name, overwrite=True)
         # Make full fits file with wcs info (using default header)
         mean, median, std = sigma_clipped_stats(image, sigma=3.0, stdfunc=mad_std)
-        daofind = DAOStarFinder(fwhm=4.0, threshold=5. * std,
+        daofind = DAOStarFinder(fwhm=3.0, threshold=3. * std,
                                 exclude_border=True) 
         sources = daofind(image)
         log.info('Found %i sources' % len(sources))
