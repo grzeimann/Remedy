@@ -1608,7 +1608,7 @@ ratio = np.ones((nexp,))
 for i in np.arange(1, nexp):
     exp_ratio[i] = np.nanmedian(skies[i] / skies[0])
     ratio[i] = biweight(ratios[:, i])
-    log.info('Ratio for exposure %i to exposure 1: %0.2f' %
+    log.info('Ratio for exposure %i to exposure 1: %0.2f, %0.2f' %
              (i+1, exp_ratio[i], ratio[i]))
 
 # Subtract sky and correct normalization
