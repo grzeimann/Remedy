@@ -1575,8 +1575,8 @@ for i, ui in enumerate(allifus):
         phot_table = aperture_photometry(image, apertures,
                                          mask=~np.isfinite(image))
         gflux = phot_table['aperture_sum']
-        s_list.append(sources['xcentroid'], sources['ycentroid'],
-                      gflux)
+        s_list.append([sources['xcentroid'], sources['ycentroid'],
+                      gflux])
     s1 = np.array(s_list[0])
     s2 = np.array(s_list[1])
     s3 = np.array(s_list[2])
