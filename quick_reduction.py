@@ -1549,7 +1549,7 @@ errspectra = safe_division(errspectra, ftf)
 # Image scale and range
 scale = 0.75
 ran = [-23., 25., -23., 25.]
-ratios = np.ones((len(allifus), 3)) * np.nan
+ratios = [[], [], []]
 for i, ui in enumerate(allifus):
     images = []
     for k in np.arange(nexp):
@@ -1584,9 +1584,10 @@ for i, ui in enumerate(allifus):
             phot_table = aperture_photometry(image-median, apertures,
                                              mask=~np.isfinite(image))
             gflux.append(phot_table['aperture_sum'])
-        ratios[i, 0] = biweight(gflux[0] / gflux[-1])
-        ratios[i, 1] = biweight(gflux[1] / gflux[-1])
-        ratios[i, 2] = biweight(gflux[2] / gflux[-1])
+        ratios[0].append(gflux[0] / gflux[-1])
+        ratios[1].append(gflux[1] / gflux[-1])
+        ratios[2].append(gflux[2] / gflux[-1])
+ratios = np.array([np.hstack(r) for r in ratios]).swapaxes(0, 1)
 ratio1 = biweight(ratios[:, 0])
 
 fits.PrimaryHDU(ratios).writeto('test_ratio.fits', overwrite=True)
