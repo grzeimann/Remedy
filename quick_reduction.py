@@ -1572,7 +1572,7 @@ for i, ui in enumerate(allifus):
     tot = np.nansum(images,axis=0)
     mean, median, std = sigma_clipped_stats(tot, sigma=3.0, stdfunc=mad_std)
     daofind = DAOStarFinder(fwhm=3.0, threshold=2.5 * std, exclude_border=True)
-    sources = daofind(image-median)
+    sources = daofind(tot-median)
     log.info('Found %i sources' % len(sources))
     if len(sources):
         positions = (sources['xcentroid'], sources['ycentroid'])
