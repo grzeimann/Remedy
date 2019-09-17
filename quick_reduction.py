@@ -13,6 +13,7 @@ import fnmatch
 import glob
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 import os.path as op
 import seaborn as sns
 import sys
@@ -1230,8 +1231,8 @@ def estimate_sky(data):
     return init_sky
 
 def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
-                           nchunks=25,
-                           ran=[-23, 25, -23, 25], scale=0.75):
+                           nchunks=25, ran=[-23, 25, -23, 25], scale=0.75,
+                           kind='linear', seeing=1.76):
     '''
     Make collapsed frame (uJy) for g' filter.
     
@@ -1279,7 +1280,7 @@ def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
     cDy = [np.mean(dy) for dy in np.array_split(Dx, nchunks)]
     S = np.zeros((len(x), 2))
     images = []
-    G = Gaussian2DKernel(1.0)
+    G = Gaussian2DKernel(seeing/2.35/scale)
     for k in np.arange(nchunks):
         S[:, 0] = x - cDx[k]
         S[:, 1] = y - cDy[k]
@@ -1287,7 +1288,7 @@ def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
         if sel.sum():
             image = chunks[k][sel]
             grid_z0 = griddata(S[sel], image, (grid_x, grid_y),
-                               method='linear')
+                               method=kind)
             grid_z0 = convolve(grid_z0, G)
             grid_z0 *= np.nansum(chunks[k][sel]) / np.nansum(grid_z0)
         else:
@@ -1545,16 +1546,68 @@ scispectra = safe_division(scispectra, ftf)
 skyspectra = safe_division(scispectra, ftf)
 errspectra = safe_division(errspectra, ftf)
 
+# Image scale and range
+scale = 0.75
+ran = [-23., 25., -23., 25.]
+ratios = []
+for i, ui in enumerate(allifus):
+    s_list = []
+    for k in np.arange(nexp):
+        sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
+        # Get the info for the given ifuslot
+        log.info('Making collapsed frame for %03d, exp%02d' % (ui, k+1))
+        N = 448 
+        data = scispectra[sel][N*i:(i+1)*N]
+        F = np.nanmedian(ftf[sel][N*i:(i+1)*N], axis=1)
+        P = pos[sel][N*i:(i+1)*N]
+        
+        # Make g-band image
+        image = make_photometric_image(P[:, 0], P[:, 1], data, filtg, F > 0.5,
+                                       ADRx, 0.*ADRx, nchunks=11,
+                                       ran=ran,  scale=scale)
+        
+        # Make full fits file with wcs info (using default header)
+        mean, median, std = sigma_clipped_stats(image, sigma=3.0, stdfunc=mad_std)
+        daofind = DAOStarFinder(fwhm=3.0, threshold=5. * std, exclude_border=True) 
+        sources = daofind(image)
+        positions = (sources['xcentroid'], sources['ycentroid'])
+        apertures = CircularAperture(positions, r=5)
+        phot_table = aperture_photometry(image, apertures,
+                                         mask=~np.isfinite(image))
+        gflux = phot_table['aperture_sum']
+        s_list.append(sources['xcentroid'], sources['ycentroid'],
+                      gflux)
+    s1 = np.array(s_list[0])
+    s2 = np.array(s_list[1])
+    s3 = np.array(s_list[2])
+    try:
+        d12 = np.sqrt((s1[:, 0] - s2[np.newaxis, :, 0])**2 +
+                      (s1[:, 1] - s2[np.newaxis, :, 1])**2)
+        d13 = np.sqrt((s1[:, 0] - s3[np.newaxis, :, 0])**2 +
+                      (s1[:, 1] - s3[np.newaxis, :, 1])**2)
+        mat = np.where((np.min(d12, axis=1) < 1.) *
+                       (np.min(d13, axis=1) < 1.))[0]
+        for m in mat:
+            f1 = s1[m, 2]
+            f2 = s2[np.argmin(d12[m, :]), 2] / f1
+            f3 = s3[np.argmin(d13[m, :]), 2] / f1
+            ratios.append([f1, f2, f3])
+    except:
+        continue
+ratios = np.array(ratios)
 
 
 # Take the ratio of the 2nd and 3rd sky to the first
 # Assume the ratio is due to illumination differences
 # Correct multiplicatively to the first exposure's illumination (scalar corrections)
 exp_ratio = np.ones((nexp,))
+ratio = np.ones((nexp,))
+
 for i in np.arange(1, nexp):
     exp_ratio[i] = np.nanmedian(skies[i] / skies[0])
+    ratio[i] = biweight(ratios[:, i])
     log.info('Ratio for exposure %i to exposure 1: %0.2f' %
-             (i+1, exp_ratio[i]))
+             (i+1, exp_ratio[i], ratio[i]))
 
 # Subtract sky and correct normalization
 
@@ -1684,6 +1737,7 @@ class Cals(IsDescription):
      trace  = Float32Col((1032,))    # float  (single-precision)
      wavelength  = Float32Col((1032,))    # float  (single-precision)
      fiber_to_fiber  = Float32Col((1036,))    # float  (single-precision)
+     fiber_to_fiber_adj  = Float32Col((1036,))    # float  (single-precision)
      observed  = Float32Col((1036,))
      observed_error = Float32Col((1036,))
      plawspec = Float32Col((1036,))
@@ -1747,6 +1801,7 @@ for i in np.arange(len(E.ra)):
     specrow['mdarkspec'] = MD1[i]
     specrow['chi2spec'] = C1[i]
     specrow['fiber_to_fiber'] = ftf[i]
+    specrow['fiber_to_fiber_adj'] = Adj[i]
     specrow['trace'] = T1[i]
     specrow['wavelength'] = W1[i]
     specrow.append()
