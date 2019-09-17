@@ -1549,9 +1549,9 @@ errspectra = safe_division(errspectra, ftf)
 # Image scale and range
 scale = 0.75
 ran = [-23., 25., -23., 25.]
-ratios = []
+ratios = np.ones((len(allifus), 3)) * np.nan
 for i, ui in enumerate(allifus):
-    s_list = []
+    images = []
     for k in np.arange(nexp):
         sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
         # Get the info for the given ifuslot
@@ -1567,40 +1567,28 @@ for i, ui in enumerate(allifus):
                                        ran=ran, scale=scale, seeing=2.5)
         name = '%s_%07d_%03d_exp%02d.fits' % (args.date, args.observation, ui,
                                               k+1)
-        fits.PrimaryHDU(image).writeto(name, overwrite=True)
         # Make full fits file with wcs info (using default header)
-        mean, median, std = sigma_clipped_stats(image, sigma=3.0, stdfunc=mad_std)
-        daofind = DAOStarFinder(fwhm=3.0, threshold=3. * std,
-                                exclude_border=True) 
-        sources = daofind(image)
-        log.info('Found %i sources' % len(sources))
-        if len(sources):
-            positions = (sources['xcentroid'], sources['ycentroid'])
-            apertures = CircularAperture(positions, r=5)
-            phot_table = aperture_photometry(image, apertures,
+        images.append(image)
+    tot = np.nansum(images,axis=0)
+    mean, median, std = sigma_clipped_stats(tot, sigma=3.0, stdfunc=mad_std)
+    daofind = DAOStarFinder(fwhm=4.0, threshold=3. * std, exclude_border=True)
+    sources = daofind(image)
+    log.info('Found %i sources' % len(sources))
+    if len(sources):
+        positions = (sources['xcentroid'], sources['ycentroid'])
+        apertures = CircularAperture(positions, r=6.)
+        gflux = []
+        for image in (images+[tot]):
+            mean, median, std = sigma_clipped_stats(image, sigma=3.0,
+                                                    stdfunc=mad_std)
+            phot_table = aperture_photometry(image-median, apertures,
                                              mask=~np.isfinite(image))
-            gflux = phot_table['aperture_sum']
-            s_list.append([sources['xcentroid'], sources['ycentroid'],
-                          gflux])
-    
-    try:
-        s1 = np.array(s_list[0])
-        s2 = np.array(s_list[1])
-        s3 = np.array(s_list[2])
-        d12 = np.sqrt((s1[:, 0] - s2[np.newaxis, :, 0])**2 +
-                      (s1[:, 1] - s2[np.newaxis, :, 1])**2)
-        d13 = np.sqrt((s1[:, 0] - s3[np.newaxis, :, 0])**2 +
-                      (s1[:, 1] - s3[np.newaxis, :, 1])**2)
-        mat = np.where((np.min(d12, axis=1) < 3.) *
-                       (np.min(d13, axis=1) < 3.))[0]
-        for m in mat:
-            f1 = s1[m, 2]
-            f2 = s2[np.argmin(d12[m, :]), 2] / f1
-            f3 = s3[np.argmin(d13[m, :]), 2] / f1
-            ratios.append([f1, f2, f3])
-    except:
-        continue
-ratios = np.array(ratios)
+            gflux.append(phot_table['aperture_sum'])
+        ratios[i, 0] = biweight(gflux[0] / gflux[-1])
+        ratios[i, 1] = biweight(gflux[1] / gflux[-1])
+        ratios[i, 2] = biweight(gflux[2] / gflux[-1])
+ratio1 = biweight(ratios[:, 0])
+
 fits.PrimaryHDU(ratios).writeto('test_ratio.fits', overwrite=True)
 
 # Take the ratio of the 2nd and 3rd sky to the first
@@ -1611,7 +1599,7 @@ ratio = np.ones((nexp,))
 
 for i in np.arange(1, nexp):
     exp_ratio[i] = np.nanmedian(skies[i] / skies[0])
-    ratio[i] = biweight(ratios[:, i])
+    ratio[i] = biweight(ratios[:, i] / ratio1)
     log.info('Ratio for exposure %i to exposure 1: %0.2f, %0.2f' %
              (i+1, exp_ratio[i], ratio[i]))
 
