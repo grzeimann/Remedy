@@ -1550,8 +1550,9 @@ errspectra = safe_division(errspectra, ftf)
 scale = 0.75
 ran = [-23., 25., -23., 25.]
 ratios = [[], [], []]
+info_to_file = []
 for i, ui in enumerate(allifus):
-    images = []
+    images, dataspec = ([], [])
     for k in np.arange(nexp):
         sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
         # Get the info for the given ifuslot
@@ -1560,7 +1561,7 @@ for i, ui in enumerate(allifus):
         data = scispectra[sel][N*i:(i+1)*N]
         F = np.nanmedian(ftf[sel][N*i:(i+1)*N], axis=1)
         P = pos[sel][N*i:(i+1)*N]
-        
+        dataspec.append([P, biweight(data[:, 600:680], axis=1)])
         # Make g-band image
         image = make_photometric_image(P[:, 0], P[:, 1], data, filtg, F > 0.5,
                                        ADRx, 0.*ADRx, nchunks=11,
@@ -1571,22 +1572,27 @@ for i, ui in enumerate(allifus):
         images.append(image)
     tot = np.nansum(images,axis=0)
     mean, median, std = sigma_clipped_stats(tot, sigma=3.0, stdfunc=mad_std)
-    daofind = DAOStarFinder(fwhm=3.5, threshold=1.5 * std, exclude_border=True)
+    daofind = DAOStarFinder(fwhm=3.5, threshold=3.0 * std, exclude_border=True)
     sources = daofind(tot-median)
     log.info('Found %i sources' % len(sources))
     if len(sources):
         positions = (sources['xcentroid'], sources['ycentroid'])
-        apertures = CircularAperture(positions, r=6.)
-        gflux = []
-        for image in (images+[tot]):
-            mean, median, std = sigma_clipped_stats(image, sigma=3.0,
-                                                    stdfunc=mad_std)
-            phot_table = aperture_photometry(image-median, apertures,
-                                             mask=~np.isfinite(image))
-            gflux.append(phot_table['aperture_sum'])
-        ratios[0].append(gflux[0] / gflux[-1])
-        ratios[1].append(gflux[1] / gflux[-1])
-        ratios[2].append(gflux[2] / gflux[-1])
+        N1 = int((ran[1] - ran[0]) / scale) + 1
+        N2 = int((ran[3] - ran[2]) / scale) + 1
+        posx = np.interp(positions[0], np.arange(N1),
+                         np.linspace(ran[0], ran[1], N1))
+        posy = np.interp(positions[1], np.arange(N2),
+                         np.linspace(ran[2], ran[3], N2))
+        for px, py in zip(posx, posy):
+            info_to_file.append([], [], [])
+            cnt = 0
+            for dspec in dataspec:
+                dist = np.sqrt((px - dspec[0][:, 0])**2 +
+                               (py - dspec[0][:, 1])**2)
+                info_to_file[-1][cnt].append([dist, dspec[1]])
+                cnt +=1
+g = np.array(info_to_file)
+fits.PrimaryHDU(g).writeto('why.fits', overwrite=True)
 ratios = np.array([np.hstack(r) for r in ratios]).swapaxes(0, 1)
 ratio1 = biweight(ratios[:, 0])
 
