@@ -1584,7 +1584,7 @@ for i, ui in enumerate(allifus):
         posy = np.interp(positions[1], np.arange(N2),
                          np.linspace(ran[2], ran[3], N2))
         for px, py in zip(posx, posy):
-            info_to_file.append([], [], [])
+            info_to_file.append([[], [], []])
             cnt = 0
             for dspec in dataspec:
                 dist = np.sqrt((px - dspec[0][:, 0])**2 +
