@@ -1230,6 +1230,69 @@ def estimate_sky(data):
     init_sky = np.nanmedian(data[skyfibers], axis=0)
     return init_sky
 
+def get_mirror_illumination(fn=None, default=51.4e4):
+    ''' Use hetillum from illum_lib to calculate mirror illumination (cm^2) '''
+    log.info('Getting mirror illumination')
+    try:
+        F = fits.open(fn)
+        names = ['RHO_STRT', 'THE_STRT', 'PHI_STRT', 'X_STRT', 'Y_STRT']
+        r, t, p, x, y = [F[0].header[name] for name in names]
+        log.info('Rho, Theta, Phi, X, Y: %0.4f, %0.4f, %0.4f, %0.4f, %0.4f' %
+                 (r, t, p, x, y))
+        mirror_illum = float(os.popen('/work/03946/hetdex/hdr1/software/illum_lib/hetillum -p'
+                             ' -x "[%0.4f,%0.4f,%0.4f]" "[%0.4f,%0.4f]" 256' %
+                                      (x, y, p, 0.042, 0.014)).read().split('\n')[0])
+        area = mirror_illum * default
+    except:
+        log.info('Using default mirror illumination value')
+        area = default
+    log.info('Mirror illumination: %0.2f m^2' % (area/1e4))
+    return area
+
+
+def get_mirror_illumination_guider(fn, exptime, default=51.4e4,
+                                   path='/work/03946/hetdex/maverick'):
+    try:
+        M = []
+        path = op.join(path, args.date)
+        f = op.basename(fn)
+        DT = f.split('_')[0]
+        y, m, d, h, mi, s = [int(x) for x in [DT[:4], DT[4:6], DT[6:8], DT[9:11],
+                             DT[11:13], DT[13:15]]]
+        d0 = datetime(y, m, d, h, mi, s)
+        tarfolder = op.join(path, 'gc1', '*.tar')
+        tarfolder = glob.glob(tarfolder)
+        if len(tarfolder) == 0:
+            area = 51.4e4
+            log.info('Using default mirror illumination: %0.2f m^2' % (area/1e4))
+            return area
+        T = tarfile.open(tarfolder[0], 'r')
+        init_list = sorted([name for name in T.getnames()
+                            if name[-5:] == '.fits'])
+        final_list = []
+        for t in init_list:
+            DT = t.split('_')[0]
+            y, m, d, h, mi, s = [int(x) for x in [DT[:4], DT[4:6], DT[6:8],
+                                 DT[9:11], DT[11:13], DT[13:15]]]
+            d = datetime(y, m, d, h, mi, s)
+            p = (d - d0).seconds
+            if (p > -10.) * (p < exptime+10.):
+                final_list.append(t)
+        for fn in final_list:
+            fobj = T.extractfile(T.getmember(fn))
+            M.append(get_mirror_illumination(fobj))
+        M = np.array(M)
+        sel = M != 51.4e4
+        if sel.sum() > 0.:
+            area = np.mean(M[sel])
+        else:
+            area = 51.4e4
+        log.info('Final Mirror illumination: %0.2f m^2' % (area/1e4))
+        return area
+    except: 
+        log.info('Using default mirror illumination: %0.2f m^2' % (default/1e4))
+        return default
+
 def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
                            nchunks=25, ran=[-23, 25, -23, 25], scale=0.75,
                            kind='linear', seeing=1.76):
@@ -1546,69 +1609,16 @@ scispectra = safe_division(scispectra, ftf)
 skyspectra = safe_division(scispectra, ftf)
 errspectra = safe_division(errspectra, ftf)
 
-# Image scale and range
-scale = 0.75
-ran = [-23., 25., -23., 25.]
-ratios = [[], [], []]
-info_to_file = []
-for i, ui in enumerate(allifus):
-    images, dataspec = ([], [])
-    for k in np.arange(nexp):
-        sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
-        # Get the info for the given ifuslot
-        log.info('Making collapsed frame for %03d, exp%02d' % (ui, k+1))
-        N = 448 
-        data = scispectra[sel][N*i:(i+1)*N]
-        F = np.nanmedian(ftf[sel][N*i:(i+1)*N], axis=1)
-        P = pos[sel][N*i:(i+1)*N]
-        dataspec.append([P, biweight(data[:, 600:680], axis=1)])
-        # Make g-band image
-        image = make_photometric_image(P[:, 0], P[:, 1], data, filtg, F > 0.5,
-                                       ADRx, 0.*ADRx, nchunks=11,
-                                       ran=ran, scale=scale, seeing=2.5)
-        name = '%s_%07d_%03d_exp%02d.fits' % (args.date, args.observation, ui,
-                                              k+1)
-        # Make full fits file with wcs info (using default header)
-        images.append(image)
-    tot = np.nansum(images,axis=0)
-    mean, median, std = sigma_clipped_stats(tot, sigma=3.0, stdfunc=mad_std)
-    daofind = DAOStarFinder(fwhm=3.5, threshold=3.0 * std, exclude_border=True)
-    sources = daofind(tot-median)
-    log.info('Found %i sources' % len(sources))
-    if len(sources):
-        positions = (sources['xcentroid'], sources['ycentroid'])
-        N1 = int((ran[1] - ran[0]) / scale) + 1
-        N2 = int((ran[3] - ran[2]) / scale) + 1
-        posx = np.interp(positions[0], np.arange(N1),
-                         np.linspace(ran[0], ran[1], N1))
-        posy = np.interp(positions[1], np.arange(N2),
-                         np.linspace(ran[2], ran[3], N2))
-        for px, py in zip(posx, posy):
-            info_to_file.append([[], [], []])
-            cnt = 0
-            for dspec in dataspec:
-                dist = np.sqrt((px - dspec[0][:, 0])**2 +
-                               (py - dspec[0][:, 1])**2)
-                info_to_file[-1][cnt].append([dist, dspec[1]])
-                cnt +=1
-g = np.array(info_to_file)
-fits.PrimaryHDU(g).writeto('why.fits', overwrite=True)
-ratios = np.array([np.hstack(r) for r in ratios]).swapaxes(0, 1)
-ratio1 = biweight(ratios[:, 0])
-
-fits.PrimaryHDU(ratios).writeto('test_ratio.fits', overwrite=True)
 
 # Take the ratio of the 2nd and 3rd sky to the first
 # Assume the ratio is due to illumination differences
 # Correct multiplicatively to the first exposure's illumination (scalar corrections)
 exp_ratio = np.ones((nexp,))
-ratio = np.ones((nexp,))
 
 for i in np.arange(1, nexp):
     exp_ratio[i] = np.nanmedian(skies[i] / skies[0])
-    ratio[i] = biweight(ratios[:, i] / ratio1)
-    log.info('Ratio for exposure %i to exposure 1: %0.2f, %0.2f' %
-             (i+1, exp_ratio[i], ratio[i]))
+    log.info('Ratio for exposure %i to exposure 1: %0.2f' %
+             (i+1, exp_ratio[i]))
 
 # Subtract sky and correct normalization
 
