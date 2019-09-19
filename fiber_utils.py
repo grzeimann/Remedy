@@ -552,14 +552,12 @@ def measure_fiber_profile(image, spec, trace, wave, def_wave):
         ybin = np.array([np.median(chunk) for chunk in np.array_split(ally[inorder], 25)])
         peak_loc, peaks = find_peaks(ybin, thresh=0.4)
         if len(peak_loc) != 1:
-            imodel.append([])
-            smodel.append([])
+            continue
         peak_loc = np.interp(peak_loc, np.arange(len(xbin)), xbin)
         valley_loc, valley = find_peaks(1. - ybin, thresh=0.3)
         valley_loc = np.interp(valley_loc, np.arange(len(xbin)), xbin)
         if len(valley_loc) != 2:
-            imodel.append([])
-            smodel.append([])
+            continue
         valley = (1. - valley) / 2.
         ud = xbin - peak_loc[0]
         yd = ybin
