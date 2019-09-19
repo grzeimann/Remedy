@@ -34,7 +34,7 @@ from astropy.table import Table
 from catalog_search import query_panstarrs, MakeRegionFile
 from datetime import datetime, timedelta
 from extract import Extract
-from fiber_utils import identify_sky_pixels
+from fiber_utils import identify_sky_pixels, measure_fiber_profile
 from input_utils import setup_logging
 from math_utils import biweight
 from multiprocessing import Pool
@@ -983,6 +983,11 @@ def reduce_ifuslot(ifuloop, h5table):
             sciimage[:] = sciimage - sci_plaw
             twi, spec1, espec1, plaw1, mdark1, chi21 = get_spectra(sciimage, scierror, masterflt, sci_plaw, masterdark,
                                              trace, wave, def_wave, pixelmask)
+            intpm, shifts, model_image = measure_fiber_profile(sciimage, spec1, trace, wave, def_wave)
+            H = fits.HDUList([fits.PrimaryHDU(sciimage - model_image),
+                           fits.ImageHDU(model_image), fits.ImageHDU(sciimage),
+                           fits.ImageHDU(masterdark),fits.ImageHDU(sci_plaw)])
+            H.writeto('multi_%s%s_exp%03d.fits' % (ifuslot, amp, j+1), overwrite=True)
             twi[:] = safe_division(twi, throughput)
             spec = safe_division(spec1, throughput) * mult_fac
             espec = safe_division(espec1, throughput) * mult_fac
