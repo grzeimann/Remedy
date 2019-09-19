@@ -551,7 +551,6 @@ def measure_fiber_profile(image, spec, trace, wave, def_wave):
         xbin = np.array([np.median(chunk) for chunk in np.array_split(allx[inorder], 25)])
         ybin = np.array([np.median(chunk) for chunk in np.array_split(ally[inorder], 25)])
         peak_loc, peaks = find_peaks(ybin, thresh=0.4)
-        print(peak_loc, peaks)
         if len(peak_loc) != 1:
             imodel.append([])
             smodel.append([])
@@ -576,11 +575,15 @@ def measure_fiber_profile(image, spec, trace, wave, def_wave):
     x = np.linspace(-6., 6.)
     mod = []
     for model in imodel:
-        mod.append(model(x))
+        try:
+            mod.append(model(x))
+        except:
+            print('oops.')
     mod = np.median(mod, axis=0)
     init = interp1d(x, mod, kind='quadratic', fill_value=0.0,
                     bounds_error=False)
     model_image = image * 0.
+    print(biweight(smodel))
     for fibert, fiberw, fibers in zip(trace, wave, spec):
         ospec = np.interp(fiberw, def_wave, fibers, left=0.0, right=0.0)
         indl = int(np.max([0, np.min(fibert)-10.]))
