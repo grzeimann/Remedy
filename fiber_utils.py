@@ -14,7 +14,7 @@ import tarfile
 from astropy.io import fits
 from math_utils import biweight
 from datetime import datetime
-from scipy.interpolate import interp2d
+from scipy.interpolate import interp2d, interp1d
 
 from astropy.stats import sigma_clip, mad_std, sigma_clipped_stats
 from astropy.convolution import Gaussian1DKernel, convolve
@@ -89,7 +89,7 @@ def base_reduction(filename, get_header=False):
     image = np.array(a[0].data, dtype=float)
     
     # Overscan subtraction
-    overscan_length = 32 * (image.shape[1] / 1064)
+    overscan_length = int(32 * (image.shape[1] / 1064))
     O = biweight(image[:, -(overscan_length-2):])
     image[:] = image - O
     
@@ -449,14 +449,16 @@ def get_wave_single(y, T_array, order=3, thresh=5., dthresh=25.):
     guess_wave = np.interp(loc, x, wave)
     diff = guess_wave[:, np.newaxis] - T_array
     ind = np.zeros(T_array.shape, dtype=int)
+    d = np.zeros(T_array.shape, dtype=float)
     for j in np.arange(len(T_array)):
         sel = np.abs(diff[:, j]) < 50.
         ind[j] = np.where(peaks == np.max(peaks[sel]))[0][0]
+        d[j] = diff[ind[j], j]
     P = np.polyfit(loc[ind], T_array, order)
     yv = np.polyval(P, loc[ind])
     res = np.std(T_array-yv)
     wave = np.polyval(P, x)
-    return wave, res
+    return wave, res, d
 
 def get_wave(spec, trace, T_array, res_lim=1., order=3):
     w = trace * 0.
@@ -504,3 +506,92 @@ def get_pixelmask(dark):
             if mask[yi+1, xi]:
                 mask[:, xi] = True
     return np.array(mask, dtype=int)
+
+def measure_fiber_profile(image, spec, trace, wave, def_wave):
+    ''' Measure the fiber profile for an image
+    
+    Parameters
+    ----------
+    image : 2d numpy array
+        reduced image without scatter light or background counts
+    spec : 2d numpy array
+        fiber spectra from an aperture method for normalization
+    trace : 2d numpy array
+        fiber trace
+    wave : 2d numpy array
+        fiber wavelength
+    def_wave : 1d numpy array
+        standard wavelength of the spec array
+        
+    Returns
+    -------
+    init : interp1d model
+        interpolation model to build 1d fiber profile for any give fiber
+    '''
+    yind, xind = np.indices(image.shape)
+    
+    profile = []
+    for fibert, fiberw, fibers in zip(trace, wave, spec):
+        ospec = np.interp(fiberw, def_wave, fibers, left=0.0, right=0.0)
+        indl = int(np.max([0, np.min(fibert)-10.]))
+        indh = int(np.min([image.shape[0], np.max(fibert)+10.]))
+        foff = yind[indl:indh, 400:600] - fibert[np.newaxis, 400:600]
+        V = image[indl:indh, 400:600] / ospec[np.newaxis, 400:600]
+        sel = np.abs(foff) <= 6.
+        profile.append([foff[sel], V[sel]])
+    imodel = []
+    smodel = []
+    for k in np.arange(8, 112, 16):
+        allx = np.hstack([p[0] for j, p in enumerate(profile)
+                          if np.abs(j-k)<=8])
+        ally = np.hstack([p[1] for j, p in enumerate(profile)
+                          if np.abs(j-k)<=8])
+        inorder = np.argsort(allx)
+        
+        xbin = np.array([np.median(chunk) for chunk in np.array_split(allx[inorder], 25)])
+        ybin = np.array([np.median(chunk) for chunk in np.array_split(ally[inorder], 25)])
+        peak_loc, peaks = find_peaks(ybin, thresh=0.4)
+        print(peak_loc, peaks)
+        if len(peak_loc) != 1:
+            imodel.append([])
+            smodel.append([])
+        peak_loc = np.interp(peak_loc, np.arange(len(xbin)), xbin)
+        valley_loc, valley = find_peaks(1. - ybin, thresh=0.3)
+        valley_loc = np.interp(valley_loc, np.arange(len(xbin)), xbin)
+        if len(valley_loc) != 2:
+            imodel.append([])
+            smodel.append([])
+        valley = (1. - valley) / 2.
+        ud = xbin - peak_loc[0]
+        yd = ybin
+        sel = np.abs(ud) < 4.
+        x = np.hstack([ud[sel], valley_loc[0]-peak_loc[0], valley_loc[1]-peak_loc[0], -5.5, 5.5])
+        yp = np.hstack([yd[sel], valley[0], valley[1], 0., 0.])
+        yp = yp[np.argsort(x)]
+        x = np.sort(x)
+        init = interp1d(x, yp, kind='quadratic', fill_value=0.0, bounds_error=False)
+        shift = peak_loc[0]
+        imodel.append(init)
+        smodel.append(shift)
+    x = np.linspace(-6., 6.)
+    mod = []
+    for model in imodel:
+        mod.append(model(x))
+    mod = np.median(mod, axis=0)
+    init = interp1d(x, mod, kind='quadratic', fill_value=0.0,
+                    bounds_error=False)
+    model_image = image * 0.
+    for fibert, fiberw, fibers in zip(trace, wave, spec):
+        ospec = np.interp(fiberw, def_wave, fibers, left=0.0, right=0.0)
+        indl = int(np.max([0, np.min(fibert)-10.]))
+        indh = int(np.min([image.shape[0], np.max(fibert)+10.]))
+        
+        
+        
+        foff = yind[indl:indh, :] - fibert[np.newaxis, :] - biweight(smodel)
+        sel = np.abs(foff) <= 6.
+        yi = yind[indl:indh, :][sel]
+        xi = xind[indl:indh, :][sel]
+        model_image[yi, xi] += (init(foff[sel]) *
+                                (np.ones((indh-indl, 1)) * ospec[np.newaxis, :])[sel]) 
+    return imodel, smodel, model_image
