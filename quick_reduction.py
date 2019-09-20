@@ -973,14 +973,6 @@ def reduce_ifuslot(ifuloop, h5table):
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
         fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
         filenames = fnmatch.filter(scinames, fnames_glob)
-        try:
-            intpm, shifts, model_image = measure_fiber_profile(masterflt, twi, trace, wave, def_wave)
-            H = fits.HDUList([fits.PrimaryHDU(masterflt - model_image),
-                                  fits.ImageHDU(model_image), fits.ImageHDU(masterflt),
-                                  fits.ImageHDU(plaw)])
-            H.writeto('multi_%s%s.fits' % (ifuslot, amp), overwrite=True)
-        except:
-            log.warning('modeling images failed')
 
         for j, fn in enumerate(filenames):
             sciimage, scierror = base_reduction(fn, tfile=scitarfile,
@@ -992,10 +984,20 @@ def reduce_ifuslot(ifuloop, h5table):
             sciimage[:] = sciimage - sci_plaw
             twi, spec1, espec1, plaw1, mdark1, chi21 = get_spectra(sciimage, scierror, masterflt, sci_plaw, masterdark,
                                              trace, wave, def_wave, pixelmask)
+            if j==0:
+                try:
+                    intpm, shifts, model_image = measure_fiber_profile(masterflt, twi, trace, wave, def_wave)
+                    H = fits.HDUList([fits.PrimaryHDU(masterflt - model_image),
+                                          fits.ImageHDU(model_image), fits.ImageHDU(masterflt),
+                                          fits.ImageHDU(plaw)])
+                    H.writeto('multi_%s%s.fits' % (ifuslot, amp), overwrite=True)
+                except:
+                    log.warning('modeling images failed')
             try:
                 intpm, shifts, model_image = measure_fiber_profile(sciimage, spec1, trace, wave, def_wave)
             except:
                 log.warning('modeling images failed')
+
             twi[:] = safe_division(twi, throughput)
             spec = safe_division(spec1, throughput) * mult_fac
             espec = safe_division(espec1, throughput) * mult_fac
