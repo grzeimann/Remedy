@@ -34,7 +34,7 @@ from astropy.table import Table
 from catalog_search import query_panstarrs, MakeRegionFile
 from datetime import datetime, timedelta
 from extract import Extract
-from fiber_utils import identify_sky_pixels, measure_fiber_profile, get_trace
+from fiber_utils import identify_sky_pixels, measure_fiber_profile, get_trace, build_model_image
 from input_utils import setup_logging
 from math_utils import biweight
 from multiprocessing import Pool
@@ -986,7 +986,7 @@ def reduce_ifuslot(ifuloop, h5table):
             if j==0:
                 try:
                     intpm, shifts = measure_fiber_profile(masterflt, twi, trace, wave, def_wave)
-                    print(shifts)
+                    trace += biweight(shifts)
                 except:
                     log.warning('modeling images failed')
             
@@ -996,12 +996,13 @@ def reduce_ifuslot(ifuloop, h5table):
             pos = amppos + dither_pattern[j]
             N = twi.shape[0]
             _I = np.char.array(['%s_%s_%s_%s' % (specid, ifuslot, ifuid, amp)] * N)
-            for x, i in zip([p, t, s, e, _i, s1, e1, p1, m1, c1, t1, w1], [pos, twi, spec, espec, _I, spec1, espec1, plaw1, mdark1, chi21, trace, wave]):
+            _V = '%s_%s_%s_%s_exp%02d' % (specid, ifuslot, ifuid, amp, j+1)
+            for x, i in zip([p, t, s, e, _i, s1, e1, p1, m1, c1, t1, w1, intm], [pos, twi, spec, espec, _I, spec1, espec1, plaw1, mdark1, chi21, trace, wave, [intpm, sciimage, _V]]):
                 x.append(i * 1)        
     
     p, t, s, e, _i, s1, e1, p1, m1, c1, t1, w1 = [np.vstack(j) for j in [p, t, s, e, _i, s1, e1, p1, m1, c1, t1, w1]]
     
-    return p, t, s, e, fn , scitarfile, _i, s1, e1, p1, m1, c1, t1, w1
+    return p, t, s, e, fn , scitarfile, _i, s1, e1, p1, m1, c1, t1, w1, intm
 
 
 def make_cube(xloc, yloc, data, Dx, Dy, ftf, scale, ran,
@@ -1566,8 +1567,9 @@ allifus = np.hstack(allifus)
 
 # Reducing IFUSLOT
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
-pos, twispectra, scispectra, errspectra, fn, tfile, _I, s1, E1, P1, MD1, C1, T1, W1 = reduce_ifuslot(ifuloop,
+pos, twispectra, scispectra, errspectra, fn, tfile, _I, s1, E1, P1, MD1, C1, T1, W1, intm = reduce_ifuslot(ifuloop,
                                                                         h5table)
+
 
 _I = np.hstack(_I)
 # Get fiber to fiber from twilight spectra
@@ -1611,6 +1613,24 @@ for k in np.arange(nexp):
     skies.append(sky)
     Sky[sel] = ftf[sel] * Adj[sel] * sky[np.newaxis, :]
     scispectra[sel] -= Sky[sel]
+obsskies = []
+for k in np.arange(nexp):
+    sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
+    sky = biweight(s1[sel] / ftf[sel] / Adj[sel], axis=0)
+    obsskies.append(sky)
+for k, _V in enumerate(intm):
+    ind = k % 3
+    init = _V[0]
+    image = _V[1]
+    name = 'multi_' + _V[2] + '.fits'
+    N = k * 112
+    M = (k+1) * 112
+    sky = obsskies[ind] * ftf[N:M] * Adj[N:M]
+    log.info('Writing model image for %s' % name)
+    model_image = build_model_image(init, image, T1[N:M], W1[N:M], sky, def_wave)
+    H = fits.HDUList([fits.PrimaryHDU(image), fits.ImageHDU(model_image),
+                      fits.ImageHDU(image-model_image)])
+    H.writeto(name, overwrite=True)
 # Correct fiber to fiber
 scispectra = safe_division(scispectra, ftf)
 skyspectra = safe_division(scispectra, ftf)
