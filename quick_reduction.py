@@ -983,11 +983,14 @@ def reduce_ifuslot(ifuloop, h5table):
             sciimage[:] = sciimage - sci_plaw
             twi, spec1, espec1, plaw1, mdark1, chi21 = get_spectra(sciimage, scierror, masterflt, sci_plaw, masterdark,
                                              trace, wave, def_wave, pixelmask)
-            intpm, shifts, model_image = measure_fiber_profile(sciimage, spec1, trace, wave, def_wave)
-            H = fits.HDUList([fits.PrimaryHDU(sciimage - model_image),
-                           fits.ImageHDU(model_image), fits.ImageHDU(sciimage),
-                           fits.ImageHDU(masterdark),fits.ImageHDU(sci_plaw)])
-            H.writeto('multi_%s%s_exp%03d.fits' % (ifuslot, amp, j+1), overwrite=True)
+            try:
+                intpm, shifts, model_image = measure_fiber_profile(masterflt, twi, trace, wave, def_wave)
+                H = fits.HDUList([fits.PrimaryHDU(sciimage - model_image),
+                                  fits.ImageHDU(model_image), fits.ImageHDU(sciimage),
+                                  fits.ImageHDU(masterdark),fits.ImageHDU(sci_plaw)])
+                H.writeto('multi_%s%s_exp%03d.fits' % (ifuslot, amp, j+1), overwrite=True)
+            except:
+                log.warning('modeling images failed')
             twi[:] = safe_division(twi, throughput)
             spec = safe_division(spec1, throughput) * mult_fac
             espec = safe_division(espec1, throughput) * mult_fac
