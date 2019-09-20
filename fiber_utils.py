@@ -458,7 +458,7 @@ def get_wave_single(y, T_array, order=3, thresh=5., dthresh=25.):
     yv = np.polyval(P, loc[ind])
     res = np.std(T_array-yv)
     wave = np.polyval(P, x)
-    return wave, res, d
+    return wave, res
 
 def get_wave(spec, trace, T_array, res_lim=1., order=3):
     w = trace * 0.
