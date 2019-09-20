@@ -933,7 +933,7 @@ def reduce_ifuslot(ifuloop, h5table):
     scitarfile : str or None
         name of the tar file for the science frames if there is one
     '''
-    p, t, s, e, _i, s1, e1, p1, m1, c1, t1, w1 = ([], [], [], [], [], [], [], [], [], [], [], [])
+    p, t, s, e, _i, s1, e1, p1, m1, c1, t1, w1, intm = ([], [], [], [], [], [], [], [], [], [], [], [], [])
     
     # Calibration factors to convert electrons to uJy
     mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.7
@@ -973,13 +973,6 @@ def reduce_ifuslot(ifuloop, h5table):
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
         fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
         filenames = fnmatch.filter(scinames, fnames_glob)
-        try:
-            trace1, ref = get_trace(masterflt, specid, ifuslot, ifuid,
-                                    amp, args.date, DIRNAME)
-            H = fits.HDUList([fits.PrimaryHDU(trace), fits.ImageHDU(trace1)])
-            H.writeto('multi_%s%s.fits' % (ifuslot, amp), overwrite=True)
-        except:
-            log.warning('trace issues')
         for j, fn in enumerate(filenames):
             sciimage, scierror = base_reduction(fn, tfile=scitarfile,
                                                 rdnoise=readnoise)
@@ -992,18 +985,11 @@ def reduce_ifuslot(ifuloop, h5table):
                                              trace, wave, def_wave, pixelmask)
             if j==0:
                 try:
-                    intpm, shifts, model_image = measure_fiber_profile(masterflt, twi, trace, wave, def_wave)
-                    H = fits.HDUList([fits.PrimaryHDU(masterflt - model_image),
-                                          fits.ImageHDU(model_image), fits.ImageHDU(masterflt),
-                                          fits.ImageHDU(plaw)])
-                    #H.writeto('multi_%s%s.fits' % (ifuslot, amp), overwrite=True)
+                    intpm, shifts = measure_fiber_profile(masterflt, twi, trace, wave, def_wave)
+                    print(shifts)
                 except:
                     log.warning('modeling images failed')
-            try:
-                intpm, shifts, model_image = measure_fiber_profile(sciimage, spec1, trace, wave, def_wave)
-            except:
-                log.warning('modeling images failed')
-
+            
             twi[:] = safe_division(twi, throughput)
             spec = safe_division(spec1, throughput) * mult_fac
             espec = safe_division(espec1, throughput) * mult_fac
