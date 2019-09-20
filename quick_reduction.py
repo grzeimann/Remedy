@@ -973,13 +973,11 @@ def reduce_ifuslot(ifuloop, h5table):
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
         fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
         filenames = fnmatch.filter(scinames, fnames_glob)
-        try:
-            trace1, ref = get_trace(twi, specid, ifuslot, ifuid,
-                                    amp, args.date, DIRNAME)
-            H = fits.HDUList([fits.PrimaryHDU(trace), fits.ImageHDU(trace1)])
-            H.writeto('multi_%s%s.fits' % (ifuslot, amp), overwrite=True)
-        except:
-            log.warning('trace issues')
+        
+        trace1, ref = get_trace(twi, specid, ifuslot, ifuid,
+                                amp, args.date, DIRNAME)
+        H = fits.HDUList([fits.PrimaryHDU(trace), fits.ImageHDU(trace1)])
+        H.writeto('multi_%s%s.fits' % (ifuslot, amp), overwrite=True)
         for j, fn in enumerate(filenames):
             sciimage, scierror = base_reduction(fn, tfile=scitarfile,
                                                 rdnoise=readnoise)
