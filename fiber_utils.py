@@ -563,7 +563,7 @@ def measure_fiber_profile(image, spec, trace, wave, def_wave):
         ud = xbin - peak_loc[0]
         yd = ybin
         sel = np.abs(ud) < 4.
-        x = np.hstack([ud[sel], valley_loc[0]-peak_loc[0], valley_loc[1]-peak_loc[0], -5.5, 5.5])
+        x = np.hstack([ud[sel], valley_loc[0]-peak_loc[0], valley_loc[1]-peak_loc[0], -5.0, 5.0])
         yp = np.hstack([yd[sel], valley[0], valley[1], 0., 0.])
         yp = yp[np.argsort(x)]
         x = np.sort(x)
@@ -581,19 +581,21 @@ def measure_fiber_profile(image, spec, trace, wave, def_wave):
     mod = np.median(mod, axis=0)
     init = interp1d(x, mod, kind='quadratic', fill_value=0.0,
                     bounds_error=False)
+
+    return init, smodel
+
+
+def build_model_image(init, image, trace, wave, spec, def_wave):
+    yind, xind = np.indices(image.shape)
     model_image = image * 0.
-    print(biweight(smodel))
     for fibert, fiberw, fibers in zip(trace, wave, spec):
         ospec = np.interp(fiberw, def_wave, fibers, left=0.0, right=0.0)
         indl = int(np.max([0, np.min(fibert)-10.]))
         indh = int(np.min([image.shape[0], np.max(fibert)+10.]))
-        
-        
-        
-        foff = yind[indl:indh, :] - fibert[np.newaxis, :] - biweight(smodel)
+        foff = yind[indl:indh, :] - fibert[np.newaxis, :]
         sel = np.abs(foff) <= 6.
         yi = yind[indl:indh, :][sel]
         xi = xind[indl:indh, :][sel]
         model_image[yi, xi] += (init(foff[sel]) *
                                 (np.ones((indh-indl, 1)) * ospec[np.newaxis, :])[sel]) 
-    return imodel, smodel, model_image
+    return model_image
