@@ -1333,7 +1333,7 @@ def get_mirror_illumination_guider(fn, exptime, default=51.4e4,
         log.info('Using default mirror illumination: %0.2f m^2' % (default/1e4))
         return default
 
-def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
+def make_photometric_image(x, y, data, filtg, mask, Dx, Dy,
                            nchunks=25, ran=[-23, 25, -23, 25], scale=0.75,
                            kind='linear', seeing=1.76):
     '''
@@ -1380,20 +1380,20 @@ def make_photometric_image(x, y, data, filtg, good_fibers, Dx, Dy,
     for c in np.array_split(data, nchunks, axis=1):
         chunks.append(np.nanmedian(c, axis=1))
     cDx = [np.mean(dx) for dx in np.array_split(Dx, nchunks)]
-    cDy = [np.mean(dy) for dy in np.array_split(Dx, nchunks)]
+    cDy = [np.mean(dy) for dy in np.array_split(Dy, nchunks)]
     S = np.zeros((len(x), 2))
     images = []
     G = Gaussian2DKernel(seeing/2.35/scale)
     for k in np.arange(nchunks):
         S[:, 0] = x - cDx[k]
         S[:, 1] = y - cDy[k]
-        sel = good_fibers * np.isfinite(chunks[k])
-        if sel.sum():
-            image = chunks[k][sel]
-            grid_z0 = griddata(S[sel], image, (grid_x, grid_y),
+        sel = np.isfinite(chunks[k])
+        if sel.sum()>50:
+            image = chunks[k]
+            grid_z0 = griddata(S, image, (grid_x, grid_y),
                                method=kind)
-            grid_z0 = convolve(grid_z0, G)
-            grid_z0 *= np.nansum(chunks[k][sel]) / np.nansum(grid_z0)
+            grid_z0 = convolve(grid_z0, G, fill_value=np.nan,
+                               preserve_nan=True)
         else:
             grid_z0 = 0. * grid_x
         images.append(grid_z0)
@@ -1597,7 +1597,7 @@ def cofes_plots(ifunums, filename_array, outfile_name, vmin=-0.2, vmax=0.5):
                     (i==0 and j==10) or (i==9 and j==10)):
                     ax.axis('off')
                 pos1 = ax.get_position()
-                plt.text(pos1.x0+0.02, pos1.y0-0.01, name,
+                plt.text(pos1.x0+0.015, pos1.y0-0.01, name,
                          transform=fig.transFigure,
                          horizontalalignment='left',
                          verticalalignment='top',
@@ -1822,12 +1822,12 @@ for i, ui in enumerate(allifus):
     log.info('Making collapsed frame for %03d' % ui)
     N = 448 * nexp
     data = scispectra[N*i:(i+1)*N]
-    F = np.nanmedian(ftf[N*i:(i+1)*N], axis=1)
     P = pos[N*i:(i+1)*N]
     name = '%s_%07d_%03d.fits' % (args.date, args.observation, ui)
     
     # Make g-band image
-    image = make_photometric_image(P[:, 0], P[:, 1], data, filtg, F > 0.5,
+    image = make_photometric_image(P[:, 0], P[:, 1], data, filtg,
+                                   mask[N*i:(i+1)*N],
                                    ADRx, 0.*ADRx, nchunks=11,
                                    ran=ran,  scale=scale)
     
