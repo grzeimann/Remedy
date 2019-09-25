@@ -1019,6 +1019,7 @@ def reduce_ifuslot(ifuloop, h5table):
                     intpm, shifts = measure_fiber_profile(masterflt, twi, trace, wave, def_wave)
                     trace += biweight(shifts)
                 except:
+                    intpm = None
                     log.warning('modeling images failed')
             
             twi[:] = safe_division(twi, throughput)
@@ -1710,7 +1711,7 @@ for k in np.arange(nexp):
 # Masking #
 ###########
 bad = ((ftf < 0.5)  + (np.abs(Adj-1.) > 0.1) + (C1 > 5.) +
-       (~np.isinfinite(scispectra)))
+       (~np.isfinite(scispectra)))
 
 mask = np.zeros(bad.shape, dtype=bool)
 y, x = np.where(bad)
@@ -1744,8 +1745,11 @@ for k, _V in enumerate(intm):
     sky = obsskies[ind] * ftf[N:M] * Adj[N:M]
     sky[~np.isfinite(sky)] = 0.0
     log.info('Writing model image for %s' % name)
-    model_image = build_model_image(init, image, T1[N:M], W1[N:M], sky,
-                                    def_wave)
+    if init is not None:
+        model_image = build_model_image(init, image, T1[N:M], W1[N:M], sky,
+                                        def_wave)
+    else:
+        model_image = image * 0.
     skysub_images.append([image, image-model_image, _V[2]])
 
 # Correct fiber to fiber
