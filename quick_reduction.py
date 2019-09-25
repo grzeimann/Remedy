@@ -695,6 +695,37 @@ def get_spectra(array_sci, array_err, array_flt, plaw, mdark, array_trace, wave,
     sci_spectrum[total_mask] = 0.0
     return twi_spectrum, sci_spectrum, err_spectrum, plaw_spectrum, mdark_spectrum, chi2_spectrum
 
+
+def get_continuum(spectra, nbins=25):
+    '''
+    Get continuum from sky-subtracted spectra
+    
+    Parameters
+    ----------
+    spectra : 2d numpy array
+        sky-subtracted spectra for each fiber
+        
+    Returns
+    -------
+    cont : 2d numpy array
+        continuum normalization
+    '''
+    a = np.array([biweight(f, axis=1) 
+                  for f in np.array_split(spectra, nbins, axis=1)]).swapaxes(0, 1)
+    x = np.array([np.mean(xi) 
+                  for xi in np.array_split(np.arange(spectra.shape[1]), nbins)])
+    cont = np.zeros(spectra.shape)
+    X = np.arange(spectra.shape[1])
+    for i, ai in enumerate(a):
+        sel = np.isfinite(ai)
+        if np.sum(sel)>nbins/2.:
+            I = interp1d(x[sel], ai[sel], kind='quadratic',
+                         fill_value='extrapolate')
+            cont[i] = I(X)
+        else:
+            cont[i] = 0.0
+    return cont
+
 def get_fiber_to_fiber(twispectra):
     '''
     Get Fiber to Fiber from twilight spectra
@@ -1517,6 +1548,67 @@ def fit_astrometry(f, A1, thresh=7.):
     return A1
 
 
+def cofes_plots(ifunums, filename_array, outfile_name, vmin=-0.2, vmax=0.5):
+    """
+    filename_array is an array-like object that contains the filenames
+    of fits files to plot. The output plot will be the shape of the input array.
+    
+    outfile is the output file name including the extension, such as out.fits.
+    
+    vmin and vmax set the stretch for the images. They are in units of counts;
+    Pixels with vmin and below counts are black. Pixels with vmax and above counts
+    are white. 
+    """
+    rows=10
+    cols=10
+    cmap = plt.get_cmap('Greys')
+    fig = plt.figure(figsize=(8,8))
+    for i in np.arange(10):
+        for j in np.arange(1,11):
+            ifuname='%02d%01d' % (j,i)
+            index = [ind for ind, v in enumerate(ifunums) if ifuname==v]
+            if len(index):
+                f = filename_array[index[0]]
+                ax = plt.subplot(rows, cols, i*cols+j)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                try:
+                    data = f * 1.
+                    ax.imshow(data, vmin=vmin, vmax=vmax,
+                              interpolation='nearest', origin='lower',
+                              cmap=cmap)
+            
+                except IOError:
+                    ax.imshow(np.zeros((65, 65)), vmin=vmin, vmax=vmax,
+                              interpolation='nearest', origin='lower',
+                              cmap=cmap)
+
+    plt.text(-335,-11.0,"01",weight='bold')
+    plt.text(-285,-11.0,"02",weight='bold')
+    plt.text(-235,-11.0,"03",weight='bold')
+    plt.text(-185,-11.0,"04",weight='bold')
+    plt.text(-135,-11.0,"05",weight='bold')
+    plt.text(-85,-11.0,"06",weight='bold')
+    plt.text(-35,-11.0,"07",weight='bold')
+    plt.text(15,-11.0,"08",weight='bold')
+    plt.text(65,-11.0,"09",weight='bold')
+    plt.text(115,-11.0,"10",weight='bold')
+
+    plt.text(-366,470,"0",weight='bold')
+    plt.text(-366,420,"1",weight='bold')
+    plt.text(-366,370,"2",weight='bold')
+    plt.text(-366,320,"3",weight='bold')
+    plt.text(-366,270,"4",weight='bold')
+    plt.text(-366,220,"5",weight='bold')
+    plt.text(-366,170,"6",weight='bold')
+    plt.text(-366,120,"7",weight='bold')
+    plt.text(-366,70,"8",weight='bold')
+    plt.text(-366,20,"9",weight='bold')
+
+    plt.subplots_adjust(wspace=0.025, hspace=0.025)    
+    fig.savefig(outfile_name)
+
+
 ###############################################################################
 # MAIN SCRIPT
 
@@ -1613,11 +1705,35 @@ for k in np.arange(nexp):
     skies.append(sky)
     Sky[sel] = ftf[sel] * Adj[sel] * sky[np.newaxis, :]
     scispectra[sel] -= Sky[sel]
+
+###########
+# Masking #
+###########
+bad = ((ftf < 0.5)  + (np.abs(Adj-1.) > 0.1) + (C1 > 5.) +
+       (~np.isinfinite(scispectra)))
+
+mask = np.zeros(bad.shape, dtype=bool)
+y, x = np.where(bad)
+for i in np.arange(-2, 3):
+    x1 = x + i
+    n = (x1 > -1) * (x1 < mask.shape[1])
+    mask[y[n], x1[n]] = True
+mask[mask.sum(axis=1) > 200] = True
+for k in np.arange(0, len(inds), 112*nexp):
+    npix = 112*nexp*1036.
+    if mask[k*112*nexp:(k+1)*112*nexp].sum() / npix > 0.2:
+        mask[k*112*nexp:(k+1)*112*nexp] = True
+scispectra[mask] = np.nan
+
+#########################
+# Make 2d sky-sub image #
+#########################
 obsskies = []
 for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
     sky = biweight(s1[sel] / ftf[sel] / Adj[sel], axis=0)
     obsskies.append(sky)
+skysub_images = []
 for k, _V in enumerate(intm):
     ind = k % 3
     init = _V[0]
@@ -1626,11 +1742,12 @@ for k, _V in enumerate(intm):
     N = k * 112
     M = (k+1) * 112
     sky = obsskies[ind] * ftf[N:M] * Adj[N:M]
+    sky[~np.isfinite(sky)] = 0.0
     log.info('Writing model image for %s' % name)
-    model_image = build_model_image(init, image, T1[N:M], W1[N:M], sky, def_wave)
-    H = fits.HDUList([fits.PrimaryHDU(image), fits.ImageHDU(model_image),
-                      fits.ImageHDU(image-model_image)])
-    H.writeto(name, overwrite=True)
+    model_image = build_model_image(init, image, T1[N:M], W1[N:M], sky,
+                                    def_wave)
+    skysub_images.append([image, image-model_image, _V[2]])
+
 # Correct fiber to fiber
 scispectra = safe_division(scispectra, ftf)
 skyspectra = safe_division(scispectra, ftf)
@@ -1781,10 +1898,18 @@ class Cals(IsDescription):
      plawspec = Float32Col((1036,))
      mdarkspec = Float32Col((1036,))
      chi2spec = Float32Col((1036,))
+     
+class Images(IsDescription):
+     zipcode  = StringCol(21)
+     skysub  = Float32Col((1032,1032))    # float  (single-precision)
+     image  = Float32Col((1032,1032))    # float  (single-precision)
+
 
 class Info(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
      dec  = Float32Col()    # float  (single-precision)
+     ifux  = Float32Col()    # float  (single-precision)
+     ifuy  = Float32Col()    # float  (single-precision)
      specid  = Int32Col()    # float  (single-precision)
      ifuslot  = Int32Col()    # float  (single-precision)
      ifuid  = Int32Col()   # float  (single-precision)
@@ -1851,6 +1976,8 @@ specrow = table.row
 for i in np.arange(len(E.ra)):
     specrow['ra'] = E.ra[i]
     specrow['dec'] = E.dec[i]
+    specrow['ifux'] = pos[i, 0]
+    specrow['ifuy'] = pos[i, 1]
     sid, isl, iid, ap = _I[i].split('_')
     specrow['specid'] = int(sid)
     specrow['ifuid'] = int(iid)
@@ -1859,22 +1986,38 @@ for i in np.arange(len(E.ra)):
     specrow.append()
 table.flush()
 
+table = h5spec.create_table(h5spec.root, 'Images', Images, 
+                            "Images")
+specrow = table.row
+for i in np.arange(len(skysub_images)):
+    specrow['zipcode'] = skysub_images[i][2]
+    specrow['image'] = skysub_images[i][0]
+    specrow['skysub'] = skysub_images[i][1]
+    specrow.append()
+table.flush()
+
 
 h5spec.close()
 # Making g-band images
+filename_array = []
+ifunums = []
 for i in info:
     image, fn, name, ui, tfile, sources = i
     crx = np.abs(ran[0]) / scale + 1.
     cry = np.abs(ran[2]) / scale + 1.
     ifuslot = '%03d' % ui
-    A.get_ifuslot_projection(ifuslot, scale, crx, cry)
-    header = A.tp_ifuslot.to_header()
-    F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
-    F.writeto(name, overwrite=True)
+    ifunums.append(ifuslot)
+    filename_array = image
+    #A.get_ifuslot_projection(ifuslot, scale, crx, cry)
+    #header = A.tp_ifuslot.to_header()
+    #F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
+    #F.writeto(name, overwrite=True)
+outfile_name = '%s_%07d_recon.pnag' % (args.date, args.observation)
+cofes_plots(ifunums, filename_array, outfile_name)
 
-with open('ds9_%s_%07d.reg' % (args.date, args.observation), 'w') as k:
-    MakeRegionFile.writeHeader(k)
-    MakeRegionFile.writeSource(k, coords.ra.deg, coords.dec.deg)
+#with open('ds9_%s_%07d.reg' % (args.date, args.observation), 'w') as k:
+#    MakeRegionFile.writeHeader(k)
+#    MakeRegionFile.writeSource(k, coords.ra.deg, coords.dec.deg)
 
 if args.simulate:
     i = 0
