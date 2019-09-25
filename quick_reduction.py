@@ -1563,7 +1563,7 @@ def cofes_plots(ifunums, filename_array, outfile_name, vmin=-0.2, vmax=0.5):
     rows=10
     cols=10
     cmap = plt.get_cmap('Greys')
-    fig = plt.figure(figsize=(8,8))
+    fig = plt.figure(figsize=(8, 8))
     for i in np.arange(10):
         for j in np.arange(1,11):
             ifuname='%02d%01d' % (j,i)
@@ -1583,28 +1583,28 @@ def cofes_plots(ifunums, filename_array, outfile_name, vmin=-0.2, vmax=0.5):
                     ax.imshow(np.zeros((65, 65)), vmin=vmin, vmax=vmax,
                               interpolation='nearest', origin='lower',
                               cmap=cmap)
-
-    plt.text(-335,-11.0,"01",weight='bold')
-    plt.text(-285,-11.0,"02",weight='bold')
-    plt.text(-235,-11.0,"03",weight='bold')
-    plt.text(-185,-11.0,"04",weight='bold')
-    plt.text(-135,-11.0,"05",weight='bold')
-    plt.text(-85,-11.0,"06",weight='bold')
-    plt.text(-35,-11.0,"07",weight='bold')
-    plt.text(15,-11.0,"08",weight='bold')
-    plt.text(65,-11.0,"09",weight='bold')
-    plt.text(115,-11.0,"10",weight='bold')
-
-    plt.text(-366,470,"0",weight='bold')
-    plt.text(-366,420,"1",weight='bold')
-    plt.text(-366,370,"2",weight='bold')
-    plt.text(-366,320,"3",weight='bold')
-    plt.text(-366,270,"4",weight='bold')
-    plt.text(-366,220,"5",weight='bold')
-    plt.text(-366,170,"6",weight='bold')
-    plt.text(-366,120,"7",weight='bold')
-    plt.text(-366,70,"8",weight='bold')
-    plt.text(-366,20,"9",weight='bold')
+    for i in np.arange(10):
+        for j in np.arange(1, 11):
+            if i == 9:
+                name = '%02d' % j
+                ax = plt.subplot(rows, cols, i*cols+j)
+                pos1 = ax.get_position()
+                plt.text(pos1[0]+0.03, pos1[1]-0.01, name,
+                         transform=fig.transFigure,
+                         horizontalalignment='center',
+                         verticalalignment='top',
+                         weight='bold')
+            if j == 1:
+                name = '%01d' % i
+                ax = plt.subplot(rows, cols, i*cols+j)
+                pos1 = ax.get_position()
+                plt.text(pos1[0]-0.01, pos1[1]+0.03, name,
+                         transform=fig.transFigure,
+                         horizontalalignment='right',
+                         verticalalignment='center',
+                         weight='bold')
+                
+       
 
     plt.subplots_adjust(wspace=0.025, hspace=0.025)    
     fig.savefig(outfile_name, dpi=300)
