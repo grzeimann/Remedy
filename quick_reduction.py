@@ -1607,7 +1607,7 @@ def cofes_plots(ifunums, filename_array, outfile_name, vmin=-0.2, vmax=0.5):
     plt.text(-366,20,"9",weight='bold')
 
     plt.subplots_adjust(wspace=0.025, hspace=0.025)    
-    fig.savefig(outfile_name)
+    fig.savefig(outfile_name, dpi=300)
 
 
 ###############################################################################
@@ -2016,7 +2016,7 @@ for i in info:
     #header = A.tp_ifuslot.to_header()
     #F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
     #F.writeto(name, overwrite=True)
-outfile_name = '%s_%07d_recon.pnag' % (args.date, args.observation)
+outfile_name = '%s_%07d_recon.png' % (args.date, args.observation)
 cofes_plots(ifunums, filename_array, outfile_name)
 
 #with open('ds9_%s_%07d.reg' % (args.date, args.observation), 'w') as k:
