@@ -1724,7 +1724,7 @@ for k in np.arange(nexp):
 # Masking #
 ###########
 bad = ((ftf < 0.5)  + (np.abs(Adj-1.) > 0.1) + (C1 > 5.) +
-       (~np.isfinite(scispectra)))
+       (~np.isfinite(scispectra)) * (scispectra==0.))
 
 mask = np.zeros(bad.shape, dtype=bool)
 y, x = np.where(bad)
