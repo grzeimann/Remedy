@@ -1589,7 +1589,7 @@ def cofes_plots(ifunums, filename_array, outfile_name, vmin=-0.2, vmax=0.5):
                 name = '%02d' % j
                 ax = plt.subplot(rows, cols, i*cols+j)
                 pos1 = ax.get_position()
-                plt.text(pos1[0]+0.03, pos1[1]-0.01, name,
+                plt.text(pos1.x0+0.03, pos1.y0-0.01, name,
                          transform=fig.transFigure,
                          horizontalalignment='center',
                          verticalalignment='top',
@@ -1598,7 +1598,7 @@ def cofes_plots(ifunums, filename_array, outfile_name, vmin=-0.2, vmax=0.5):
                 name = '%01d' % i
                 ax = plt.subplot(rows, cols, i*cols+j)
                 pos1 = ax.get_position()
-                plt.text(pos1[0]-0.01, pos1[1]+0.03, name,
+                plt.text(pos1.x0-0.01, pos1.y0+0.03, name,
                          transform=fig.transFigure,
                          horizontalalignment='right',
                          verticalalignment='center',
