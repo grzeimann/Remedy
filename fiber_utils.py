@@ -507,7 +507,8 @@ def get_pixelmask(dark):
                 mask[:, xi] = True
     return np.array(mask, dtype=int)
 
-def measure_fiber_profile(image, spec, trace, wave, def_wave):
+def measure_fiber_profile(image, spec, trace, wave, def_wave, xmin=400,
+                          xmax=600):
     ''' Measure the fiber profile for an image
     
     Parameters
@@ -536,8 +537,8 @@ def measure_fiber_profile(image, spec, trace, wave, def_wave):
                          bounds_error=False)(fiberw)
         indl = int(np.max([0, np.min(fibert)-10.]))
         indh = int(np.min([image.shape[0], np.max(fibert)+10.]))
-        foff = yind[indl:indh, 400:600] - fibert[np.newaxis, 400:600]
-        V = image[indl:indh, 400:600] / ospec[np.newaxis, 400:600]
+        foff = yind[indl:indh, xmin:xmax] - fibert[np.newaxis, xmin:xmax]
+        V = image[indl:indh, xmin:xmax] / ospec[np.newaxis, xmin:xmax]
         sel = np.abs(foff) <= 6.
         profile.append([foff[sel], V[sel]])
     imodel = []
@@ -599,3 +600,66 @@ def build_model_image(init, image, trace, wave, spec, def_wave):
         model_image[yi, xi] += (init(foff[sel]) *
                                 (np.ones((indh-indl, 1)) * ospec[np.newaxis, :])[sel]) 
     return model_image
+
+
+def get_continuum(spectra, nbins=25):
+    '''
+    Get continuum from sky-subtracted spectra
+
+    Parameters
+    ----------
+    spectra : 2d numpy array
+        sky-subtracted spectra for each fiber
+
+    Returns
+    -------
+    cont : 2d numpy array
+        continuum normalization
+    '''
+    a = np.array([biweight(f, axis=1) 
+                  for f in np.array_split(spectra, nbins, axis=1)]).swapaxes(0, 1)
+    x = np.array([np.mean(xi) 
+                  for xi in np.array_split(np.arange(spectra.shape[1]), nbins)])
+    cont = np.zeros(spectra.shape)
+    X = np.arange(spectra.shape[1])
+    for i, ai in enumerate(a):
+        sel = np.isfinite(ai)
+        if np.sum(sel)>nbins/2.:
+            I = interp1d(x[sel], ai[sel], kind='quadratic',
+                         fill_value='extrapolate')
+            cont[i] = I(X)
+        else:
+            cont[i] = 0.0
+    return cont
+
+
+def detect_sources(dx, dy, spec, err, chi, ftf, adj, mask):
+    D = np.sqrt((dx - dx[:, np.newaxis])**2 + (dy - dy[:, np.newaxis])**2)
+    W = np.exp(-0.5 * (D**2) / (1.8 / 2.35)**2)
+    dummyx = np.array([0., 1.47, 1.47, 1.47, 1.47, 1.47, 1.47])
+    dsum = np.sum(np.exp(-0.5 * (dummyx**2) / (1.8 / 2.35)**2))
+    W = W / dsum
+    good = (D < 1.5).sum(axis=1) >= 5
+    cont = get_continuum(spec, nbins=35)
+    s = (spec-cont) * 1.
+    e = err * 1.
+    G = Gaussian1DKernel(1.5)
+    N = e * 0.
+    S = s * 0.
+    for i in np.arange(len(e)):
+        N[i] = np.sqrt(convolve(e[i]**2, G, boundary='extend') / np.sum(G.array**2))
+        S[i] = convolve(s[i], G, boundary='extend') / np.sum(G.array**2)
+    T = S * 0.
+    E = N * 0.
+    ss = s * 0.
+    es = e * 0.
+    for i in np.where(good)[0]:
+        neigh = D[i] < 1.5
+        T[i] = np.sum(S[neigh] * W[i][neigh, np.newaxis], axis=0) / np.sum(W[i][neigh]**2)
+        E[i] = np.sqrt(np.sum(N[neigh]**2 * W[i][neigh, np.newaxis], axis=0) / np.sum(W[i][neigh]**2))
+        M = ~mask[neigh]
+        ss[i] = np.sum(spec[neigh] * M * W[i][neigh, np.newaxis], axis=0) / np.sum(M * W[i][neigh, np.newaxis]**2, axis=0)
+        es[i] = np.sqrt(np.sum(e[neigh]**2 * M * W[i][neigh, np.newaxis], axis=0) / np.sum(M * W[i][neigh, np.newaxis]**2, axis=0))
+    y = np.where(E > 0., T / E, 0.)
+    ss[mask] = 0.0
+    ss[~np.isfinite(ss)] = 0.0
