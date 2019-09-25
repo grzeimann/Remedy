@@ -1568,11 +1568,14 @@ def cofes_plots(ifunums, filename_array, outfile_name, vmin=-0.2, vmax=0.5):
         for j in np.arange(1,11):
             ifuname='%02d%01d' % (j,i)
             index = [ind for ind, v in enumerate(ifunums) if ifuname==v]
+            ax = plt.subplot(rows, cols, i*cols+j)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            if ((i==0 and j==1) or (i==9 and j==1) or
+                (i==0 and j==10) or (i==9 and j==10)):
+                ax.axis('off')
             if len(index):
                 f = filename_array[index[0]]
-                ax = plt.subplot(rows, cols, i*cols+j)
-                ax.set_xticks([])
-                ax.set_yticks([])
                 try:
                     data = f * 1.
                     ax.imshow(data, vmin=vmin, vmax=vmax,
@@ -1588,20 +1591,30 @@ def cofes_plots(ifunums, filename_array, outfile_name, vmin=-0.2, vmax=0.5):
             if i == 9:
                 name = '%02d' % j
                 ax = plt.subplot(rows, cols, i*cols+j)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                if ((i==0 and j==1) or (i==9 and j==1) or
+                    (i==0 and j==10) or (i==9 and j==10)):
+                    ax.axis('off')
                 pos1 = ax.get_position()
-                plt.text(pos1.x0+0.03, pos1.y0-0.01, name,
+                plt.text(pos1.x0+0.02, pos1.y0-0.01, name,
                          transform=fig.transFigure,
-                         horizontalalignment='center',
+                         horizontalalignment='left',
                          verticalalignment='top',
                          weight='bold')
             if j == 1:
                 name = '%01d' % i
                 ax = plt.subplot(rows, cols, i*cols+j)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                if ((i==0 and j==1) or (i==9 and j==1) or
+                    (i==0 and j==10) or (i==9 and j==10)):
+                    ax.axis('off')
                 pos1 = ax.get_position()
-                plt.text(pos1.x0-0.01, pos1.y0+0.03, name,
+                plt.text(pos1.x0-0.01, pos1.y0+0.015, name,
                          transform=fig.transFigure,
                          horizontalalignment='right',
-                         verticalalignment='center',
+                         verticalalignment='bottom',
                          weight='bold')
                 
        
