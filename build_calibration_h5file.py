@@ -291,6 +291,7 @@ for ifuslot_key in ifuslots:
                 try:
                     wave = get_wave(cmp, trace, T_array)
                     if wave is None:
+                        wave = np.zeros((112, 1032))
                         args.log.error('Wavelength Failed for %s %s.' %
                                        (ifuslot_key, amp))
                 except:
