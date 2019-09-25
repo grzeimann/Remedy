@@ -243,6 +243,12 @@ for ifuslot_key in ifuslots:
     ifuslot, specid, ifuid, contid = ifuslot_key.split('_')
     for amp in ['LL', 'LU', 'RL', 'RU']:
         row = imagetable.row
+        masterdark = np.zeros((1032, 1032))
+        wave = np.zeros((112, 1032))
+        trace = np.zeros((112, 1032))
+        plaw = np.zeros((1032, 1032))
+        readnoise = 3.
+        pixelmask = np.zeros((1032, 1032))
         for kind in kinds:
             args.log.info('Making %s master frame for %s %s' %
                           (kind, ifuslot_key, amp))
@@ -265,9 +271,6 @@ for ifuslot_key in ifuslots:
                 if np.mean(_info[0]) < 1000.:
                     args.log.warning('Twi for %s %s below 1000 cnts on average.' %
                                      (ifuslot_key, amp))
-                    trace = np.zeros((112, 1032))
-                    wave = np.zeros((112, 1032))
-                    plaw = np.zeros((1032, 1032))
                     break
                 try:
                     trace, ref = get_trace(_info[0], specid, ifuSlot, ifuid,
@@ -290,16 +293,9 @@ for ifuslot_key in ifuslots:
                     if wave is None:
                         args.log.error('Wavelength Failed for %s %s.' %
                                        (ifuslot_key, amp))
-                        h = fits.PrimaryHDU(cmp)
-                        h1 = fits.ImageHDU(_info[0])
-                        fits.HDUList([h, h1]).writeto('testwave_%03d_%s.fits' %
-                                     (int(ifuslot), amp), overwrite=True)
-                        wave = trace * 0.
                 except:
-                    args.log.error('Wavelength Failed.')
-                    fits.PrimaryHDU(cmp).writeto('testwave.fits', overwrite=True)
-                    fits.PrimaryHDU(trace).writeto('testtrace.fits', overwrite=True)
-                    sys.exit(1)
+                    args.log.error('Wavelength Failed for %s %s.' %
+                                       (ifuslot_key, amp))
                 
         success = append_fibers_to_table(row, wave, trace, ifupos, ifuslot,
                                          ifuid, specid, amp, readnoise,
