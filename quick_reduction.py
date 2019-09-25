@@ -1744,7 +1744,7 @@ for k, _V in enumerate(intm):
     M = (k+1) * 112
     sky = obsskies[ind] * ftf[N:M] * Adj[N:M]
     sky[~np.isfinite(sky)] = 0.0
-    log.info('Writing model image for %s' % name)
+    log.info('Writing model image for %s' % _V[2])
     if init is not None:
         model_image = build_model_image(init, image, T1[N:M], W1[N:M], sky,
                                         def_wave)
