@@ -1958,6 +1958,8 @@ for ra, dec, specinfo in zip(mRA, mDec, spec_list):
     specrow.append()
 table.flush()
 
+log.info('Finished writing spectra')
+
 table = h5spec.create_table(h5spec.root, 'Fibers', Fibers, 
                             "Fiber Information")
 specrow = table.row
@@ -1968,6 +1970,8 @@ for i in np.arange(len(E.ra)):
     specrow['error'] = errspectra[i]
     specrow.append()
 table.flush()
+
+log.info('Finished writing Fibers')
 
 table = h5spec.create_table(h5spec.root, 'Cals', Cals, 
                             "Cal Information")
@@ -1987,6 +1991,8 @@ for i in np.arange(len(E.ra)):
     specrow.append()
 table.flush()
 
+log.info('Finished writing Cals')
+
 table = h5spec.create_table(h5spec.root, 'Info', Info, 
                             "Fiber Information")
 specrow = table.row
@@ -2003,6 +2009,8 @@ for i in np.arange(len(E.ra)):
     specrow.append()
 table.flush()
 
+log.info('Finished writing Info')
+
 table = h5spec.create_table(h5spec.root, 'Images', Images, 
                             "Images")
 specrow = table.row
@@ -2012,6 +2020,8 @@ for i in np.arange(len(skysub_images)):
     specrow['skysub'] = skysub_images[i][1]
     specrow.append()
 table.flush()
+
+log.info('Finished writing Images')
 
 
 h5spec.close()
