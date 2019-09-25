@@ -267,7 +267,7 @@ for ifuslot_key in ifuslots:
                                      (ifuslot_key, amp))
                     trace = np.zeros((112, 1032))
                     wave = np.zeros((112, 1032))
-                    plaw = np.zeros((112, 1032))
+                    plaw = np.zeros((1032, 1032))
                     break
                 try:
                     trace, ref = get_trace(_info[0], specid, ifuSlot, ifuid,
