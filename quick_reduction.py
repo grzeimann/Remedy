@@ -2011,7 +2011,7 @@ for i in info:
     cry = np.abs(ran[2]) / scale + 1.
     ifuslot = '%03d' % ui
     ifunums.append(ifuslot)
-    filename_array = image
+    filename_array.append(image)
     #A.get_ifuslot_projection(ifuslot, scale, crx, cry)
     #header = A.tp_ifuslot.to_header()
     #F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
