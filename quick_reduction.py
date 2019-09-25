@@ -1845,6 +1845,8 @@ for i, ui in enumerate(allifus):
     if Sources is not None:
         Total_sources.append(Sources) 
 
+
+
 # Write temporary info out
 Total_sources = np.vstack(Total_sources)
 f = Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist', 'Cgmag',
@@ -1866,6 +1868,24 @@ for j in np.arange(1):
                                       'Cgmag', 'RA', 'Dec', 'fx', 'fy', 'dra',
                                       'ddec'])
     f.write('sources.dat', format='ascii.fixed_width_two_line', overwrite=True)
+
+# Making g-band images
+filename_array = []
+ifunums = []
+for i in info:
+    image, fn, name, ui, tfile, sources = i
+    crx = np.abs(ran[0]) / scale + 1.
+    cry = np.abs(ran[2]) / scale + 1.
+    ifuslot = '%03d' % ui
+    ifunums.append(ifuslot)
+    filename_array.append(image)
+    #A.get_ifuslot_projection(ifuslot, scale, crx, cry)
+    #header = A.tp_ifuslot.to_header()
+    #F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
+    #F.writeto(name, overwrite=True)
+outfile_name = '%s_%07d_recon.png' % (args.date, args.observation)
+cofes_plots(ifunums, filename_array, outfile_name)
+
 
 # Extract
 RAFibers, DecFibers = ([], [])
@@ -2025,22 +2045,7 @@ log.info('Finished writing Images')
 
 
 h5spec.close()
-# Making g-band images
-filename_array = []
-ifunums = []
-for i in info:
-    image, fn, name, ui, tfile, sources = i
-    crx = np.abs(ran[0]) / scale + 1.
-    cry = np.abs(ran[2]) / scale + 1.
-    ifuslot = '%03d' % ui
-    ifunums.append(ifuslot)
-    filename_array.append(image)
-    #A.get_ifuslot_projection(ifuslot, scale, crx, cry)
-    #header = A.tp_ifuslot.to_header()
-    #F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
-    #F.writeto(name, overwrite=True)
-outfile_name = '%s_%07d_recon.png' % (args.date, args.observation)
-cofes_plots(ifunums, filename_array, outfile_name)
+
 
 #with open('ds9_%s_%07d.reg' % (args.date, args.observation), 'w') as k:
 #    MakeRegionFile.writeHeader(k)
