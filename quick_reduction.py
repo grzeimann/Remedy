@@ -1783,7 +1783,9 @@ scispectra = safe_division(scispectra, ftf)
 skyspectra = safe_division(scispectra, ftf)
 errspectra = safe_division(errspectra, ftf)
 mask = mask + (np.abs(scispectra) < 1e-8)
-
+scispectra[mask] = np.nan
+mask[np.isnan(scispectra).sum(axis=1) > 400] = True
+scispectra[mask] = np.nan
 # Take the ratio of the 2nd and 3rd sky to the first
 # Assume the ratio is due to illumination differences
 # Correct multiplicatively to the first exposure's illumination (scalar corrections)
