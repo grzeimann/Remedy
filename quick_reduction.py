@@ -1929,6 +1929,9 @@ log.info('Finished Extraction')
 
 name = ('%s_%07d.h5' %
                 (args.date, args.observation))
+if op.exists(name):
+    os.remove(name)
+    log.info('%s removed before writing new one' % name)
 h5spec = open_file(name, mode="w", title="%s Spectra" % name[:-3])
 
 class Fibers(IsDescription):
