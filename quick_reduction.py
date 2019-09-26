@@ -2060,17 +2060,17 @@ table.flush()
 
 log.info('Finished writing Info')
 
-table = h5spec.create_table(h5spec.root, 'Images', Images, 
-                            "Images")
-specrow = table.row
-for i in np.arange(len(skysub_images)):
-    specrow['zipcode'] = skysub_images[i][2]
-    specrow['image'] = skysub_images[i][0]
-    specrow['skysub'] = skysub_images[i][1]
-    specrow.append()
-table.flush()
-
-log.info('Finished writing Images')
+#table = h5spec.create_table(h5spec.root, 'Images', Images, 
+#                            "Images")
+#specrow = table.row
+#for i in np.arange(len(skysub_images)):
+#    specrow['zipcode'] = skysub_images[i][2]
+#    specrow['image'] = skysub_images[i][0]
+#    specrow['skysub'] = skysub_images[i][1]
+#    specrow.append()
+#table.flush()
+#
+#log.info('Finished writing Images')
 
 
 h5spec.close()
