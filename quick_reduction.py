@@ -2114,7 +2114,9 @@ try:
     D[D==0.] = 999.
     noneigh = np.min(D, axis=0) > 8.
     nsel = (np.sqrt(dr**2 + dd**2) < 1.) * noneigh 
-    plt.scatter(dr, dd, alpha=0.75, s=45)
+    plt.scatter(dr, dd, alpha=0.75, s=45, zorder=3)
+    plt.plot([0, 0], [-1.5, 1.5], 'k-', lw=1, zorder=1)
+    plt.plot([-1.5, 1.5], [0, 0], 'k-', lw=1, zorder=1)
     plt.axis([-1.5, 1.5, -1.5, 1.5])
     plt.xlabel(r'$\Delta$ RA (")', fontsize=16, labelpad=10)
     plt.ylabel(r'$\Delta$ Dec (")', fontsize=16, labelpad=10)
@@ -2154,7 +2156,8 @@ try:
     plt.gca().yaxis.set_major_locator(MLy)
     plt.gca().xaxis.set_minor_locator(ml)
     plt.gca().yaxis.set_minor_locator(mly)
-    plt.scatter(Mg, mg - Mg - median, alpha=0.75, s=75)
+    plt.scatter(Mg, mg - Mg - median, alpha=0.75, s=75, zorder=3)
+    plt.plot([15, 22], [0, 0], 'k-', lw=1, zorder=1)
     plt.plot([15, 22], [std, std], 'r--', lw=1)
     plt.plot([15, 22], [-std, -std], 'r--', lw=1)
     plt.xlim([15, 22])
