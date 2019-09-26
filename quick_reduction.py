@@ -1550,7 +1550,8 @@ def fit_astrometry(f, A1, thresh=7.):
     return A1
 
 
-def cofes_plots(ifunums, filename_array, outfile_name, vmin=-0.2, vmax=0.5):
+def cofes_plots(ifunums, specnums, filename_array, outfile_name, vmin=-0.2,
+                vmax=0.5):
     """
     filename_array is an array-like object that contains the filenames
     of fits files to plot. The output plot will be the shape of the input array.
@@ -1582,8 +1583,11 @@ def cofes_plots(ifunums, filename_array, outfile_name, vmin=-0.2, vmax=0.5):
                     ax.imshow(data, vmin=vmin, vmax=vmax,
                               interpolation='nearest', origin='lower',
                               cmap=cmap)
+                    ax.text(32.5, 32.5, 'V' + specnums[index[0]],
+                            horizontalalignment='center',
+                            verticalalignment='center', color='firebrick')
             
-                except IOError:
+                except:
                     ax.imshow(np.zeros((65, 65)), vmin=vmin, vmax=vmax,
                               interpolation='nearest', origin='lower',
                               cmap=cmap)
@@ -1766,11 +1770,17 @@ for k, _V in enumerate(intm):
         model_image = image * 0.
     skysub_images.append([image, image-model_image, _V[2]])
 
+ui_dict = {}
+for k, _V in enumerate(intm):
+    specid, ifuslot, ifuid, amp, expn = _V[2].split('_')
+    if ifuslot not in ui_dict:
+        ui_dict[ifuslot] = [specid, ifuid]
+
 # Correct fiber to fiber
 scispectra = safe_division(scispectra, ftf)
 skyspectra = safe_division(scispectra, ftf)
 errspectra = safe_division(errspectra, ftf)
-
+mask = mask + (scispectra==0.)
 
 # Take the ratio of the 2nd and 3rd sky to the first
 # Assume the ratio is due to illumination differences
@@ -1873,11 +1883,13 @@ for j in np.arange(1):
 # Making g-band images
 filename_array = []
 ifunums = []
+specnums = []
 for i in info:
     image, fn, name, ui, tfile, sources = i
     crx = np.abs(ran[0]) / scale + 1.
     cry = np.abs(ran[2]) / scale + 1.
     ifuslot = '%03d' % ui
+    specnums.append(ui_dict[ifuslot][0])
     ifunums.append(ifuslot)
     filename_array.append(image)
     #A.get_ifuslot_projection(ifuslot, scale, crx, cry)
@@ -1885,7 +1897,7 @@ for i in info:
     #F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
     #F.writeto(name, overwrite=True)
 outfile_name = '%s_%07d_recon.png' % (args.date, args.observation)
-cofes_plots(ifunums, filename_array, outfile_name)
+cofes_plots(ifunums, specnums, filename_array, outfile_name)
 
 
 # Extract
