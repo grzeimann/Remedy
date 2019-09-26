@@ -45,7 +45,7 @@ from tables import open_file, IsDescription, Float32Col, StringCol, Int32Col
 
 
 # Plot Style
-sns.set_context('talk')
+sns.set_context('notebook')
 sns.set_style('whitegrid')
 
 # Turn off annoying warnings (even though some deserve attention)
@@ -2108,8 +2108,8 @@ try:
     nsel = (np.sqrt(dr**2 + dd**2) < 1.) * noneigh 
     plt.scatter(dr, dd, alpha=0.75, s=45)
     plt.axis([-1.5, 1.5, -1.5, 1.5])
-    plt.xlabel(r'$\Delta$ RA (")', fontsize=20, labelpad=20)
-    plt.ylabel(r'$\Delta$ Dec (")', fontsize=20, labelpad=20)
+    plt.xlabel(r'$\Delta$ RA (")', fontsize=16, labelpad=10)
+    plt.ylabel(r'$\Delta$ Dec (")', fontsize=16, labelpad=10)
     plt.savefig('astrometry_%s_%07d.png'  % (args.date, args.observation), dpi=300)
     plt.figure(figsize=(6, 6))
     Mg = Total_sources[sel, 4][nsel]
@@ -2126,8 +2126,8 @@ try:
     plt.xlim([15, 22])
     plt.ylim([-0.5, 0.5])
     plt.text(15.5, 0.3, 'Magnitude Offset: %0.2f +/- %0.2f' % (median, std))
-    plt.xlabel('Pan-STARRS g (AB mag)', fontsize=20, labelpad=20)
-    plt.ylabel("VIRUS g' - Pan-STARRS g' + Cor", fontsize=20, labelpad=20)
+    plt.xlabel('Pan-STARRS g (AB mag)', fontsize=16, labelpad=10)
+    plt.ylabel("VIRUS g' - Pan-STARRS g' + Cor", fontsize=16, labelpad=10)
     plt.savefig('mag_offset_%s_%07d.png'  % (args.date, args.observation), dpi=300)
 except:
     log.info('Gonna skip these plots')
