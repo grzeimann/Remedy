@@ -1787,7 +1787,7 @@ for k, _V in enumerate(intm):
                                         def_wave)
     else:
         model_image = image * 0.
-    skysub_images.append([image, image-model_image, _V[2]])
+    skysub_images.append([image, image-model_image, _V[2], (N+M)/2])
 
 ui_dict = {}
 for k, _V in enumerate(intm):
@@ -2080,6 +2080,13 @@ h5spec.close()
 #with open('ds9_%s_%07d.reg' % (args.date, args.observation), 'w') as k:
 #    MakeRegionFile.writeHeader(k)
 #    MakeRegionFile.writeSource(k, coords.ra.deg, coords.dec.deg)
+
+x = [518 for s in skysub_images]
+y = [s[3] for s in skysub_images]
+te = [s[2] for s in skysub_images]
+with open('ds9_%s_%07d_skysub.reg' % (args.date, args.observation), 'w') as k:
+    MakeRegionFile.writeHeader(k)
+    MakeRegionFile.writeText(k, x, y, te)
 
 if args.simulate:
     i = 0
