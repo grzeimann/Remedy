@@ -1382,8 +1382,9 @@ def make_photometric_image(x, y, data, filtg, mask, Dx, Dy,
     cDx = [np.mean(dx) for dx in np.array_split(Dx, nchunks)]
     cDy = [np.mean(dy) for dy in np.array_split(Dy, nchunks)]
     S = np.zeros((len(x), 2))
-    images = []
     G = Gaussian2DKernel(seeing/2.35/scale)
+    WT = []
+    simage = 0. * grid_x
     for k in np.arange(nchunks):
         S[:, 0] = x - cDx[k]
         S[:, 1] = y - cDy[k]
@@ -1394,11 +1395,11 @@ def make_photometric_image(x, y, data, filtg, mask, Dx, Dy,
                                method=kind)
             grid_z0 = convolve(grid_z0, G, fill_value=np.nan,
                                preserve_nan=True)
-        else:
-            grid_z0 = 0. * grid_x
-        images.append(grid_z0)
-    images = np.array(images)
-    image = np.sum(images * weights[:, np.newaxis, np.newaxis], axis=0) 
+            simage += weights[k] * grid_z0
+            WT.append(weights[k])
+    image = simage / np.sum(WT)
+    if np.all(image == 0.):
+        image = np.nan * grid_x
     return image
 
 def match_to_archive(sources, image, A, ifuslot, scale, ran, coords,
@@ -1783,7 +1784,7 @@ for i in np.arange(1, nexp):
 
 # Subtract sky and correct normalization
 
-errspectra[~np.isfinite(scispectra)] = np.nan
+errspectra[mask] = np.nan
 
 # Get RA, Dec from header
 ra, dec, pa = get_ra_dec_from_header(tfile, fn)
