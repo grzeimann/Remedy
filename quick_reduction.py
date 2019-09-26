@@ -1586,7 +1586,8 @@ def cofes_plots(ifunums, specnums, filename_array, outfile_name, vmin=-0.2,
                               cmap=cmap)
                     ax.text(32.5, 32.5, 'V' + specnums[index[0]],
                             horizontalalignment='center',
-                            verticalalignment='center', color='firebrick')
+                            verticalalignment='center', color='firebrick',
+                            fontsize=10)
             
                 except:
                     ax.imshow(np.zeros((65, 65)), vmin=vmin, vmax=vmax,
@@ -1781,7 +1782,7 @@ for k, _V in enumerate(intm):
 scispectra = safe_division(scispectra, ftf)
 skyspectra = safe_division(scispectra, ftf)
 errspectra = safe_division(errspectra, ftf)
-mask = mask + (scispectra==0.)
+mask = mask + (np.abs(scispectra) < 1e-8)
 
 # Take the ratio of the 2nd and 3rd sky to the first
 # Assume the ratio is due to illumination differences
