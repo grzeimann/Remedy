@@ -1694,14 +1694,14 @@ scispectra[scispectra<1e-42] = np.nan
 # Number of exposures
 nexp = scispectra.shape[0] / 448 / nslots
 log.info('Number of exposures: %i' % nexp)
+#############################
+# Fiber to Fiber Correction #
+#############################
 log.info('Getting Fiber to Fiber Correction')
-###################
-# Subtracting Sky #
-###################
+
 log.info('Subtracting sky for all ifuslots')
 Sky = ftf * 0.0
 Adj = ftf * 0.0
-skies = []
 for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
     bins = 9
@@ -1722,10 +1722,12 @@ for k in np.arange(nexp):
                                    fill_value='extrapolate')(def_wave)
         else:
             scispectra[sel(j)] = np.nan
-    sky = biweight(scispectra[sel] / ftf[sel] / Adj[sel], axis=0)
-    skies.append(sky)
-    Sky[sel] = ftf[sel] * Adj[sel] * sky[np.newaxis, :]
-    scispectra[sel] -= Sky[sel]
+    
+
+# Correct fiber to fiber
+scispectra = safe_division(scispectra, ftf*Adj)
+skyspectra = safe_division(scispectra, ftf*Adj)
+errspectra = safe_division(errspectra, ftf*Adj)
 
 ###########
 # Masking #
@@ -1740,11 +1742,22 @@ for i in np.arange(-2, 3):
     n = (x1 > -1) * (x1 < mask.shape[1])
     mask[y[n], x1[n]] = True
 mask[mask.sum(axis=1) > 200] = True
-for k in np.arange(0, len(inds), 112*nexp):
+for k in np.arange(0, int(len(inds)/112./nexp)):
     npix = 112*nexp*1036.
     if mask[k*112*nexp:(k+1)*112*nexp].sum() / npix > 0.2:
         mask[k*112*nexp:(k+1)*112*nexp] = True
 scispectra[mask] = np.nan
+errspectra[mask] = np.nan
+
+###################
+# Sky Subtraction #
+###################
+skies = []
+for k in np.arange(nexp):
+    sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
+    sky = biweight(scispectra, axis=0)
+    skies.append(sky)
+    scispectra[sel] = scispectra[sel] - sky
 
 #########################
 # Make 2d sky-sub image #
@@ -1752,7 +1765,9 @@ scispectra[mask] = np.nan
 obsskies = []
 for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
-    sky = biweight(s1[sel] / ftf[sel] / Adj[sel], axis=0)
+    y = s1[sel] / ftf[sel] / Adj[sel]
+    y[mask[sel]] = np.nan
+    sky = biweight(y, axis=0)
     obsskies.append(sky)
 skysub_images = []
 for k, _V in enumerate(intm):
@@ -1778,14 +1793,10 @@ for k, _V in enumerate(intm):
     if ifuslot not in ui_dict:
         ui_dict[ifuslot] = [specid, ifuid]
 
-# Correct fiber to fiber
-scispectra = safe_division(scispectra, ftf)
-skyspectra = safe_division(scispectra, ftf)
-errspectra = safe_division(errspectra, ftf)
-mask = mask + (np.abs(scispectra) < 1e-8)
-scispectra[mask] = np.nan
-mask[np.isnan(scispectra).sum(axis=1) > 400] = True
-scispectra[mask] = np.nan
+
+back_val, error_cor = biweight(scispectra / errspectra, calc_std=True)
+log.info('Error Correction: %02.f' % error_cor)
+errspectra *= error_cor
 # Take the ratio of the 2nd and 3rd sky to the first
 # Assume the ratio is due to illumination differences
 # Correct multiplicatively to the first exposure's illumination (scalar corrections)
@@ -1796,9 +1807,6 @@ for i in np.arange(1, nexp):
     log.info('Ratio for exposure %i to exposure 1: %0.2f' %
              (i+1, exp_ratio[i]))
 
-# Subtract sky and correct normalization
-
-errspectra[mask] = np.nan
 
 # Get RA, Dec from header
 ra, dec, pa = get_ra_dec_from_header(tfile, fn)
