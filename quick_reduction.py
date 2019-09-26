@@ -47,7 +47,7 @@ from matplotlib.ticker import MultipleLocator
 
 # Plot Style
 sns.set_context('notebook')
-sns.set_style('whitegrid')
+sns.set_style('ticks')
 
 # Turn off annoying warnings (even though some deserve attention)
 warnings.filterwarnings("ignore")
@@ -2153,7 +2153,7 @@ try:
     plt.xlim([15, 22])
     plt.ylim([-0.5, 0.5])
     plt.text(15.5, 0.3, 'Magnitude Offset: %0.2f +/- %0.2f' % (median, std))
-    plt.xlabel('Pan-STARRS g (AB mag)', fontsize=16, labelpad=10)
+    plt.xlabel("Pan-STARRS g' (AB mag)", fontsize=16, labelpad=10)
     plt.ylabel("VIRUS g' - Pan-STARRS g' + Cor", fontsize=16, labelpad=10)
     plt.savefig('mag_offset_%s_%07d.png'  % (args.date, args.observation), dpi=300)
 except:
