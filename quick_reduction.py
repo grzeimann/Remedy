@@ -1743,9 +1743,15 @@ for i in np.arange(-2, 3):
     mask[y[n], x1[n]] = True
 mask[mask.sum(axis=1) > 200] = True
 for k in np.arange(0, int(len(inds)/112./nexp)):
-    npix = 112*nexp*1036.
-    if mask[k*112*nexp:(k+1)*112*nexp].sum() / npix > 0.2:
-        mask[k*112*nexp:(k+1)*112*nexp] = True
+    ll = k*112*nexp
+    hl = (k+1)*112*nexp
+    totsum = 1. * mask[ll:hl, :].sum()
+    npix = 112 * nexp * 1036.
+    idx = int(k / 4)
+    ampid = amps[k % 4]
+    if (totsum / npix) > 0.2:
+        log.info('%03d%s Amplifier marked bad.' % (allifus[idx], ampid))
+        mask[ll:hl, :] = True
 scispectra[mask] = np.nan
 errspectra[mask] = np.nan
 
@@ -2115,8 +2121,8 @@ try:
     noneigh = np.min(D, axis=0) > 8.
     nsel = (np.sqrt(dr**2 + dd**2) < 1.) * noneigh 
     plt.scatter(dr, dd, alpha=0.75, s=45, zorder=3)
-    plt.plot([0, 0], [-1.5, 1.5], 'k-', lw=1, zorder=1)
-    plt.plot([-1.5, 1.5], [0, 0], 'k-', lw=1, zorder=1)
+    plt.plot([0, 0], [-1.5, 1.5], 'k-', lw=1, alpha=0.5, zorder=1)
+    plt.plot([-1.5, 1.5], [0, 0], 'k-', lw=1, alpha=0.5, zorder=1)
     plt.axis([-1.5, 1.5, -1.5, 1.5])
     plt.xlabel(r'$\Delta$ RA (")', fontsize=16, labelpad=10)
     plt.ylabel(r'$\Delta$ Dec (")', fontsize=16, labelpad=10)
@@ -2157,7 +2163,7 @@ try:
     plt.gca().xaxis.set_minor_locator(ml)
     plt.gca().yaxis.set_minor_locator(mly)
     plt.scatter(Mg, mg - Mg - median, alpha=0.75, s=75, zorder=3)
-    plt.plot([15, 22], [0, 0], 'k-', lw=1, zorder=1)
+    plt.plot([15, 22], [0, 0], 'k-', lw=1, alpha=0.5, zorder=1)
     plt.plot([15, 22], [std, std], 'r--', lw=1)
     plt.plot([15, 22], [-std, -std], 'r--', lw=1)
     plt.xlim([15, 22])
