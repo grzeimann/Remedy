@@ -1383,6 +1383,7 @@ def make_photometric_image(x, y, data, filtg, mask, Dx, Dy,
     cDy = [np.mean(dy) for dy in np.array_split(Dy, nchunks)]
     S = np.zeros((len(x), 2))
     G = Gaussian2DKernel(seeing/2.35/scale)
+    area = np.pi * 0.75**2 / scale**2
     WT = []
     simage = 0. * grid_x
     for k in np.arange(nchunks):
@@ -1395,7 +1396,7 @@ def make_photometric_image(x, y, data, filtg, mask, Dx, Dy,
                                method=kind)
             grid_z0 = convolve(grid_z0, G, fill_value=np.nan,
                                preserve_nan=True)
-            simage += weights[k] * grid_z0
+            simage += weights[k] * grid_z0 / area
             WT.append(weights[k])
     image = simage / np.sum(WT)
     if np.all(image == 0.):
