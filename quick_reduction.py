@@ -2097,7 +2097,7 @@ try:
     sel = f['dist'] < 2.5
     print('Number of sources within 2.5": %i' % sel.sum())
     mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
-    plt.figure(figsize=(9, 8))
+    plt.figure(figsize=(6, 6))
     plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
     dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - mRA)
     dd = 3600. * (f['Dec'][sel] - mDec)
@@ -2111,7 +2111,7 @@ try:
     plt.xlabel(r'$\Delta$ RA (")', fontsize=20, labelpad=20)
     plt.ylabel(r'$\Delta$ Dec (")', fontsize=20, labelpad=20)
     plt.savefig('astrometry_%s_%07d.png'  % (args.date, args.observation), dpi=300)
-    plt.figure(figsize=(9, 8))
+    plt.figure(figsize=(6, 6))
     Mg = Total_sources[sel, 4][nsel]
     mg = Total_sources[sel, 2][nsel]
     ss = (Mg > 15) * (Mg < 22) * (mg < 25.)
@@ -2125,8 +2125,9 @@ try:
     plt.plot([15, 22], [-std, -std], 'r--', lw=1)
     plt.xlim([15, 22])
     plt.ylim([-0.5, 0.5])
+    plt.text(15.5, 0.3, 'Magnitude Offset: %0.2f +/- %0.2f' % (median, std))
     plt.xlabel('Pan-STARRS g (AB mag)', fontsize=20, labelpad=20)
-    plt.ylabel('VIRUS g - Pan-STARRS g (AB mag)', fontsize=20, labelpad=20)
+    plt.ylabel("VIRUS g' - Pan-STARRS g' + Cor", fontsize=20, labelpad=20)
     plt.savefig('mag_offset_%s_%07d.png'  % (args.date, args.observation), dpi=300)
 except:
     log.info('Gonna skip these plots')
