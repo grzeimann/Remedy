@@ -1699,7 +1699,6 @@ log.info('Number of exposures: %i' % nexp)
 #############################
 log.info('Getting Fiber to Fiber Correction')
 
-log.info('Subtracting sky for all ifuslots')
 Sky = ftf * 0.0
 Adj = ftf * 0.0
 for k in np.arange(nexp):
@@ -1752,10 +1751,12 @@ errspectra[mask] = np.nan
 ###################
 # Sky Subtraction #
 ###################
+log.info('Subtracting sky for all ifuslots')
+
 skies = []
 for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
-    sky = biweight(scispectra, axis=0)
+    sky = biweight(scispectra[sel], axis=0)
     skies.append(sky)
     scispectra[sel] = scispectra[sel] - sky
 
@@ -1795,7 +1796,7 @@ for k, _V in enumerate(intm):
 
 
 back_val, error_cor = biweight(scispectra / errspectra, calc_std=True)
-log.info('Error Correction: %02.f' % error_cor)
+log.info('Error Correction: %0.2f' % error_cor)
 errspectra *= error_cor
 # Take the ratio of the 2nd and 3rd sky to the first
 # Assume the ratio is due to illumination differences
