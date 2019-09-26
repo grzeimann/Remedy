@@ -42,6 +42,7 @@ from photutils import DAOStarFinder, aperture_photometry, CircularAperture
 from scipy.interpolate import griddata, interp1d, interp2d
 from scipy.signal import savgol_filter
 from tables import open_file, IsDescription, Float32Col, StringCol, Int32Col
+from matplotlib.ticker import MultipleLocator
 
 
 # Plot Style
@@ -2110,6 +2111,19 @@ try:
     plt.axis([-1.5, 1.5, -1.5, 1.5])
     plt.xlabel(r'$\Delta$ RA (")', fontsize=16, labelpad=10)
     plt.ylabel(r'$\Delta$ Dec (")', fontsize=16, labelpad=10)
+    plt.gca().tick_params(axis='both', which='both', direction='in')
+    plt.gca().tick_params(axis='y', which='both', left=True, right=True)
+    plt.gca().tick_params(axis='x', which='both', bottom=True, top=True)
+    plt.gca().tick_params(axis='both', which='major', length=15, width=3)
+    plt.gca().tick_params(axis='both', which='minor', length=6, width=2)
+    ML = MultipleLocator(0.5)
+    ml = MultipleLocator(0.1)
+    MLy = MultipleLocator(0.5)
+    mly = MultipleLocator(0.1)
+    plt.gca().xaxis.set_major_locator(ML)
+    plt.gca().yaxis.set_major_locator(MLy)
+    plt.gca().xaxis.set_minor_locator(ml)
+    plt.gca().yaxis.set_minor_locator(mly)
     plt.savefig('astrometry_%s_%07d.png'  % (args.date, args.observation), dpi=300)
     plt.figure(figsize=(6, 6))
     Mg = Total_sources[sel, 4][nsel]
@@ -2120,6 +2134,19 @@ try:
     print('The mean, median, and std for the mag offset is for %s_%07d: '
           '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean, median, std))
     plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
+    plt.gca().tick_params(axis='both', which='both', direction='in')
+    plt.gca().tick_params(axis='y', which='both', left=True, right=True)
+    plt.gca().tick_params(axis='x', which='both', bottom=True, top=True)
+    plt.gca().tick_params(axis='both', which='major', length=15, width=3)
+    plt.gca().tick_params(axis='both', which='minor', length=6, width=2)
+    ML = MultipleLocator(2)
+    ml = MultipleLocator(0.5)
+    MLy = MultipleLocator(0.2)
+    mly = MultipleLocator(0.05)
+    plt.gca().xaxis.set_major_locator(ML)
+    plt.gca().yaxis.set_major_locator(MLy)
+    plt.gca().xaxis.set_minor_locator(ml)
+    plt.gca().yaxis.set_minor_locator(mly)
     plt.scatter(Mg, mg - Mg - median, alpha=0.75, s=75)
     plt.plot([15, 22], [std, std], 'r--', lw=1)
     plt.plot([15, 22], [-std, -std], 'r--', lw=1)
