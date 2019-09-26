@@ -64,6 +64,7 @@ class MakeRegionFile(object):
             s.append('circle(%0.6f, %0.6f, %0.2f")' % (r, d, rad))
         f.write('\n'.join(s) + '\n')
         f.flush()
+    @classmethod
     def writeText(cls, f, x, y, t, fontsize=12):
         s = []
         for xi, yi, ti in zip(x, y, t):
