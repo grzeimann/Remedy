@@ -1689,7 +1689,7 @@ _I = np.hstack(_I)
 # Get fiber to fiber from twilight spectra
 ftf = get_fiber_to_fiber(twispectra)
 inds = np.arange(scispectra.shape[0])
-scispectra[scispectra<1e-42] = np.nan
+scispectra[errspectra == 0.] = np.nan
 
 
 # Number of exposures
@@ -1725,31 +1725,40 @@ for k in np.arange(nexp):
     
 
 # Correct fiber to fiber
-scispectra = safe_division(scispectra, ftf*Adj)
-skyspectra = safe_division(scispectra, ftf*Adj)
-errspectra = safe_division(errspectra, ftf*Adj)
+scispectra = safe_division(scispectra, ftf * Adj)
+skyspectra = safe_division(scispectra, ftf * Adj)
+errspectra = safe_division(errspectra, ftf * Adj)
 
 ###########
 # Masking #
 ###########
-bad = ((ftf < 0.5)  + (np.abs(Adj-1.) > 0.1) + (C1 > 5.) +
-       (~np.isfinite(scispectra)) * (np.abs(scispectra)<1e-8))
+mask = np.zeros(scispectra.shape, dtype=bool)
 
-mask = np.zeros(bad.shape, dtype=bool)
-y, x = np.where(bad)
+badchi2 = (C1 > 5.)
+y, x = np.where(badchi2)
 for i in np.arange(-2, 3):
     x1 = x + i
     n = (x1 > -1) * (x1 < mask.shape[1])
     mask[y[n], x1[n]] = True
-mask[mask.sum(axis=1) > 200] = True
+
+badftf = (ftf < 0.5) + (np.abs(Adj-1.) > 0.1)
+mask[badftf] = True
+
+badpixmask = errspectra == 0.
+mask[badpixmask] = True
+
+badfiberflag = mask.sum(axis=1) > 200
+badfibers = np.where(badfiberflag)[0]
+mask[badfibers] = True
+
 for k in np.arange(0, int(len(inds)/112./nexp)):
     ll = k*112*nexp
     hl = (k+1)*112*nexp
-    totsum = 1. * mask[ll:hl, :].sum()
-    npix = 112 * nexp * 1036.
+    nbadfibers = badfiberflag[ll:hl].sum()
+    nfibers = hl - ll
     idx = int(k / 4)
     ampid = amps[k % 4]
-    if (totsum / npix) > 0.2:
+    if (nbadfibers*1./nfibers) > 0.2:
         log.info('%03d%s Amplifier marked bad.' % (allifus[idx], ampid))
         mask[ll:hl, :] = True
 scispectra[mask] = np.nan
