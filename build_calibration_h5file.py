@@ -229,6 +229,7 @@ for kind in kinds:
     filename_dict[kind] = get_filenames(args, daterange, kind)
     tarname_dict[kind] = get_tarfiles(filename_dict[kind])
     if kind == 'twi':
+        print(tarname_dict[kind])
         ifuslots = get_unique_ifuslots(tarname_dict[kind])
 
 args.log.info('Number of unique ifuslots: %i' % len(ifuslots))
