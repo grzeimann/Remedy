@@ -131,7 +131,7 @@ def get_ifuslots(tarfolder):
     return sorted(ifuslots)
 
 def get_unique_ifuslots(tarfolders):
-    dates = [tarfolder.split('/')[-1] for tarfolder in tarfolders]
+    dates = [tarfolder.split('/')[-3] for tarfolder in tarfolders]
     utars, inds = np.unique(dates, return_index=True)
     print(utars)
     utarfolders = [tarfolders[ind] for ind in inds]
