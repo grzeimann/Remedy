@@ -157,8 +157,9 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
         fn = itm + '%s%s_%s.fits' % (ifuslot, amp, kind)
         try:
             I, E, header = base_reduction(fn, get_header=True)
-            hspecid, hifuid, hcontid = ['%03d' % int(header[name])
-                                     for name in ['SPECID', 'IFUID', 'CONTID']]
+            hspecid, hifuid = ['%03d' % int(header[name])
+                               for name in ['SPECID', 'IFUID']]
+            hcontid = header['CONTID']
             if (hspecid != specid) or (hifuid != ifuid) or (hcontid != contid):
                 continue
             date, time = header['DATE'].split('T')
