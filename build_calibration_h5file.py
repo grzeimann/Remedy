@@ -137,7 +137,9 @@ def get_unique_ifuslots(tarfolders):
     ifuslots = []
     for tarfolder in utarfolders:
         result = get_ifuslots(tarfolder)
+        print(result)
         ifuslots = list(np.union1d(ifuslots, result))
+    sys.exit(1)
     return ifuslots
 
 def expand_date_range(daterange, days):
@@ -283,7 +285,6 @@ for ifuslot_key in ifuslots:
                 args.log.info('Getting powerlaw for %03d %s' %
                               (int(ifuslot), amp))
                 plaw = get_powerlaw(_info[0], trace, twi, amp)
-                
             if kind == 'cmp':
                 args.log.info('Getting wavelength for %03d %s' %
                               (int(ifuslot), amp))
