@@ -148,7 +148,8 @@ def expand_date_range(daterange, days):
     return l1 + daterange + l2
 
 
-def build_master_frame(file_list, ifuslot, amp, kind, log, folder):
+def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
+                       ifuid, contid):
     # Create empty lists for the left edge jump, right edge jump, and structure
     objnames = ['hg', 'cd-a']
     bia_list = []
@@ -156,6 +157,10 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder):
         fn = itm + '%s%s_%s.fits' % (ifuslot, amp, kind)
         try:
             I, E, header = base_reduction(fn, get_header=True)
+            hspecid, hifuid, hcontid = ['%03d' % int(header[name])
+                                     for name in ['SPECID', 'IFUID', 'CONTID']]
+            if (hspecid != specid) or (hifuid != ifuid) or (hcontid != contid):
+                continue
             date, time = header['DATE'].split('T')
             datelist = date.split('-')
             timelist = time.split(':')
@@ -253,7 +258,8 @@ for ifuslot_key in ifuslots:
             args.log.info('Making %s master frame for %s %s' %
                           (kind, ifuslot_key, amp))
             _info = build_master_frame(filename_dict[kind], ifuslot, amp, kind,
-                                       args.log, args.folder)
+                                       args.log, args.folder, specid, ifuid,
+                                       contid)
             specid, ifuSlot, ifuid = ['%03d' % int(z)
                                       for z in [_info[3], ifuslot, _info[4]]]
             if kind == 'drk':
