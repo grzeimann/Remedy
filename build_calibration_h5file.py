@@ -133,14 +133,11 @@ def get_ifuslots(tarfolder):
 def get_unique_ifuslots(tarfolders):
     dates = [tarfolder.split('/')[-3] for tarfolder in tarfolders]
     utars, inds = np.unique(dates, return_index=True)
-    print(utars)
     utarfolders = [tarfolders[ind] for ind in inds]
     ifuslots = []
     for tarfolder in utarfolders:
         result = get_ifuslots(tarfolder)
-        print(result)
         ifuslots = list(np.union1d(ifuslots, result))
-    sys.exit(1)
     return ifuslots
 
 def expand_date_range(daterange, days):
