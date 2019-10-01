@@ -133,6 +133,7 @@ def get_ifuslots(tarfolder):
 def get_unique_ifuslots(tarfolders):
     dates = [tarfolder.split('/')[-2] for tarfolder in tarfolders]
     utars, inds = np.unique(dates, return_index=True)
+    print(utars)
     utarfolders = [tarfolders[ind] for ind in inds]
     ifuslots = []
     for tarfolder in utarfolders:
@@ -229,7 +230,6 @@ for kind in kinds:
     filename_dict[kind] = get_filenames(args, daterange, kind)
     tarname_dict[kind] = get_tarfiles(filename_dict[kind])
     if kind == 'twi':
-        print(tarname_dict[kind])
         ifuslots = get_unique_ifuslots(tarname_dict[kind])
 
 args.log.info('Number of unique ifuslots: %i' % len(ifuslots))
