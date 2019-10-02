@@ -313,6 +313,6 @@ for ifuslot_key in ifuslots:
                 
         success = append_fibers_to_table(row, wave, trace, ifupos, ifuslot,
                                          ifuid, specid, amp, readnoise,
-                                         pixelmask, masterdark, plaw, _info[5])
+                                         pixelmask, masterdark, plaw, contid)
         if success:
             imagetable.flush()
