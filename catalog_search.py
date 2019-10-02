@@ -54,12 +54,12 @@ class MakeRegionFile(object):
         s.append('global color=green dashlist=8 3 width=1 '
                  'font="helvetica 10 normal roman" select=1 highlite=1 dash=0 '
                  'fixed=0 edit=1 move=1 delete=1 include=1 source=1')
-        s.append('fk5')
         f.write('\n'.join(s) + "\n")
 
     @classmethod
     def writeSource(cls, f, ra, dec, rad=2):
         s = []
+        s.append('fk5')
         for r, d in zip(ra, dec):
             s.append('circle(%0.6f, %0.6f, %0.2f")' % (r, d, rad))
         f.write('\n'.join(s) + '\n')
@@ -67,8 +67,9 @@ class MakeRegionFile(object):
     @classmethod
     def writeText(cls, f, x, y, t, fontsize=12):
         s = []
+        s.append('physical')
         for xi, yi, ti in zip(x, y, t):
-            s.append('text(%i,%i) text={%s}' % (xi, yi, ti))
+            s.append('#text(%i,%i) text={%s}' % (xi, yi, ti))
         f.write('\n'.join(s) + '\n')
         f.flush()
 
