@@ -157,6 +157,9 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
         fn = itm + '%s%s_%s.fits' % (ifuslot, amp, kind)
         try:
             I, E, header = base_reduction(fn, get_header=True)
+            if kind == 'twi':
+                if np.mean(I) < 1000.:
+                    continue
             hspecid, hifuid = ['%03d' % int(header[name])
                                for name in ['SPECID', 'IFUID']]
             hcontid = header['CONTID']
@@ -175,7 +178,7 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
 
     # Select only the bias frames that match the input amp, e.g., "RU"
     if not len(bia_list):
-        log.warning('No bias frames found for date range given')
+        log.warning('No %s frames found for date range given' % kind)
         return None
 
     if kind != 'cmp':
