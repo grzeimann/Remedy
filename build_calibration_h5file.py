@@ -158,7 +158,7 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
         try:
             I, E, header = base_reduction(fn, get_header=True)
             if kind == 'twi':
-                if np.mean(I) < 1000.:
+                if (np.mean(I) < 1000.) or (np.mean(I) > 50000):
                     continue
             hspecid, hifuid = ['%03d' % int(header[name])
                                for name in ['SPECID', 'IFUID']]
