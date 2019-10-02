@@ -265,6 +265,8 @@ for ifuslot_key in ifuslots:
                                        args.log, args.folder, specid, ifuid,
                                        contid)
             if _info is None:
+                args.log.error("Can't complete reduction for %s %s because of"
+                               " lack of %s files." % (ifuslot_key, amp, kind))
                 break
             specid, ifuSlot, ifuid = ['%03d' % int(z)
                                       for z in [_info[3], ifuslot, _info[4]]]
