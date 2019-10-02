@@ -14,11 +14,16 @@ import tarfile
 from astropy.io import fits
 from math_utils import biweight
 from datetime import datetime
-from scipy.interpolate import interp2d, interp1d
+from scipy.interpolate import interp2d, interp1d, LinearNDInterpolator
 
+from astropy.modeling.models import Gaussian1D
+from astropy.modeling.fitting import LevMarLSQFitter
 from astropy.stats import sigma_clip, mad_std, sigma_clipped_stats
 from astropy.convolution import Gaussian1DKernel, convolve
 from astropy.convolution import interpolate_replace_nans
+
+from sklearn.cluster import AgglomerativeClustering
+
 
 def orient_image(image, amp, ampname):
     '''
@@ -445,18 +450,17 @@ def get_wave_single(y, T_array, order=3, thresh=5., dthresh=25.):
     x = np.arange(len(y))
     dw = T_array[-1] - T_array[0]
     dx = loc[-1] - loc[0]
+    p = np.array([-9.83655146e-09,  1.18442454e-04, -4.58877122e-01,
+                  5.75772866e+02])
     wave = (x-loc[0]) * dw / dx + T_array[0]
+    wave = wave + np.polyval(p, wave)
     guess_wave = np.interp(loc, x, wave)
-    diff = guess_wave[:, np.newaxis] - T_array
-    ind = np.zeros(T_array.shape, dtype=int)
-    d = np.zeros(T_array.shape, dtype=float)
-    for j in np.arange(len(T_array)):
-        sel = np.abs(diff[:, j]) < 50.
-        ind[j] = np.where(peaks == np.max(peaks[sel]))[0][0]
-        d[j] = diff[ind[j], j]
-    P = np.polyfit(loc[ind], T_array, order)
+    diff = np.abs(guess_wave[:, np.newaxis] - T_array)
+    ind = np.argmin(diff, axis=0)
+    sel = np.min(diff, axis=0) < 2.5
+    P = np.polyfit(loc[ind][sel], T_array[sel], order)
     yv = np.polyval(P, loc[ind])
-    res = np.std(T_array-yv)
+    res = np.std((T_array-yv)[sel])
     wave = np.polyval(P, x)
     return wave, res
 
@@ -626,40 +630,158 @@ def get_continuum(spectra, nbins=25):
         sel = np.isfinite(ai)
         if np.sum(sel)>nbins/2.:
             I = interp1d(x[sel], ai[sel], kind='quadratic',
-                         fill_value='extrapolate')
+                         fill_value=np.nan, bounds_error=False)
             cont[i] = I(X)
         else:
             cont[i] = 0.0
     return cont
 
 
-def detect_sources(dx, dy, spec, err, chi, ftf, adj, mask):
-    D = np.sqrt((dx - dx[:, np.newaxis])**2 + (dy - dy[:, np.newaxis])**2)
-    W = np.exp(-0.5 * (D**2) / (1.8 / 2.35)**2)
-    dummyx = np.array([0., 1.47, 1.47, 1.47, 1.47, 1.47, 1.47])
-    dsum = np.sum(np.exp(-0.5 * (dummyx**2) / (1.8 / 2.35)**2))
-    W = W / dsum
-    good = (D < 1.5).sum(axis=1) >= 5
-    cont = get_continuum(spec, nbins=35)
-    s = (spec-cont) * 1.
-    e = err * 1.
-    G = Gaussian1DKernel(1.5)
-    N = e * 0.
-    S = s * 0.
-    for i in np.arange(len(e)):
-        N[i] = np.sqrt(convolve(e[i]**2, G, boundary='extend') / np.sum(G.array**2))
-        S[i] = convolve(s[i], G, boundary='extend') / np.sum(G.array**2)
-    T = S * 0.
-    E = N * 0.
-    ss = s * 0.
-    es = e * 0.
-    for i in np.where(good)[0]:
-        neigh = D[i] < 1.5
-        T[i] = np.sum(S[neigh] * W[i][neigh, np.newaxis], axis=0) / np.sum(W[i][neigh]**2)
-        E[i] = np.sqrt(np.sum(N[neigh]**2 * W[i][neigh, np.newaxis], axis=0) / np.sum(W[i][neigh]**2))
-        M = ~mask[neigh]
-        ss[i] = np.sum(spec[neigh] * M * W[i][neigh, np.newaxis], axis=0) / np.sum(M * W[i][neigh, np.newaxis]**2, axis=0)
-        es[i] = np.sqrt(np.sum(e[neigh]**2 * M * W[i][neigh, np.newaxis], axis=0) / np.sum(M * W[i][neigh, np.newaxis]**2, axis=0))
-    y = np.where(E > 0., T / E, 0.)
-    ss[mask] = 0.0
-    ss[~np.isfinite(ss)] = 0.0
+def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale,
+                   spec_res=5.6, thresh=5.):
+    '''
+    Detection algorithm
+    
+    Parameters
+    ----------
+    dx : 1d numpy array
+        delta_x or delta_ra in " for each fiber compared to a given 0, 0
+    dy : 1d numpy array
+        delta_y or delta_dec in " for each fiber compared to a given 0, 0
+    spec : 2d numpy array
+        spectrum (sky-subtracted) for each fiber
+    err : 2d numpy array
+        error spectrum for each fiber
+    chi : 2d numpy array
+        chi2 for each spectrum compared to a fiber profile when extracted
+    ftf : 2d numpy array
+        initial fiber to fiber for each fiber
+    adj : 2d numpy array
+        adjusted fiber to fiber for better sky subtraction
+    mask : 2d numpy array
+        masked spectrum values for bad fiber to fiber, bad pixels, or bad chi2
+    seeing : float
+        spatial seeing fwhm
+    spec_res : float
+        spectral resolution in pixels (2A) and refers to radius not fwhm
+    
+    Returns
+    -------
+    '''
+    N1 = int((ran[1] - ran[0]) / scale) + 1
+    N2 = int((ran[3] - ran[2]) / scale) + 1
+    gridx, gridy = np.meshgrid(np.linspace(ran[0], ran[1], N1),
+                               np.linspace(ran[2], ran[3], N2))
+    T = np.array([psf[1].ravel(), psf[2].ravel()]).swapaxes(0, 1)
+    I = LinearNDInterpolator(T, psf[0].ravel(), fill_value=0.0)
+    psfpixscale = np.abs(psf[1][0, 1] - psf[1][0, 0])
+    area = 0.75**2 * np.pi
+    cube = np.zeros((gridx.shape[0], gridx.shape[1], len(def_wave)))
+    errcube = np.zeros((gridx.shape[0], gridx.shape[1], len(def_wave)))
+    origcube = np.zeros((gridx.shape[0], gridx.shape[1], len(def_wave)))
+    origerrcube = np.zeros((gridx.shape[0], gridx.shape[1], len(def_wave)))
+    mask = ~np.isfinite(spec)
+    G = Gaussian1DKernel(spec_res/2.35/(def_wave[1]-def_wave[0]))
+    cont = get_continuum(spec, nbins=25)
+    S = spec - cont
+    for i in np.arange(gridx.shape[0]):
+        for j in np.arange(gridx.shape[1]):
+            xg = gridx[i, j]
+            yg = gridy[i, j]
+            sel = np.where(np.sqrt((dx-xg)**2 + (dy-yg)**2)<=4.0)[0]
+            weights = I(dx[sel]-xg, dy[sel]-yg) * area / psfpixscale**2
+            imask = ~(mask[sel])
+            X = S[sel]*1.
+            X[mask[sel]] = 0.0
+            Y = err[sel]*1.
+            Y[mask[sel]] = 0.0
+            origcube[i, j, :] = np.sum(weights[:, np.newaxis]*X*imask, axis=0) / np.sum(weights[:, np.newaxis]**2 * imask, axis=0)
+            origerrcube[i, j, :] = np.sqrt(np.sum(weights[:, np.newaxis]*Y**2*imask, axis=0) / np.sum(weights[:, np.newaxis]**2 * imask, axis=0))
+            w = np.sum(weights[:, np.newaxis] * imask, axis=0)
+            cube[i, j, w<0.7] = np.nan
+            errcube[i, j, w<0.7] = np.nan
+            WS = convolve(origcube[i, j], G, preserve_nan=True, fill_value=0.0) / np.sum(G.array**2)
+            WE = np.sqrt(convolve(origerrcube[i, j]**2, G, preserve_nan=True, fill_value=0.0) / np.sum(G.array**2))
+            cube[i, j, :] = WS
+            errcube[i, j, :] = WE
+    Y = cube / errcube
+    bl, bm = biweight(Y.ravel(), calc_std=True)
+    test = Y > thresh * bm
+    L = np.zeros((0, 3))
+    if test.sum():
+        ids = np.where(test)
+        Z = Y[ids[0],ids[1],ids[2]]
+        sid = np.argsort(Z)[::-1]
+        ids_sorted = (ids[0][sid], ids[1][sid], ids[2][sid])
+        z = np.array([gridx[ids_sorted[0], ids_sorted[1]]*3.,
+                      gridy[ids_sorted[0], ids_sorted[1]]*3.,
+                      def_wave[ids_sorted[2]]]).swapaxes(0, 1)
+    
+        clustering = AgglomerativeClustering(n_clusters=None, 
+                                             compute_full_tree=True,
+                                             distance_threshold=50,
+                                             linkage='complete').fit(z)
+        
+        z = np.array([gridx[ids_sorted[0], ids_sorted[1]],
+                      gridy[ids_sorted[0], ids_sorted[1]],
+                      def_wave[ids_sorted[2]]]).swapaxes(0, 1)
+        US = np.unique(clustering.labels_)
+        L = np.zeros((len(US), 5))
+        K = np.zeros((len(US), len(def_wave), 3))
+        fitter = LevMarLSQFitter()
+        for i, ui in enumerate(US):
+            sel = clustering.labels_ == ui
+            L[i, 0] = np.mean(z[sel, 0])
+            L[i, 1] = np.mean(z[sel, 1])
+            L[i, 2] = np.mean(z[sel, 2])
+            dsel = np.sqrt((gridx - L[i, 0])**2 + (gridy - L[i, 1])**2) < 2.5
+            wi = int(np.interp(L[i, 2], def_wave, np.arange(len(def_wave))))
+            x = gridx[dsel]
+            y = gridy[dsel]
+            v = cube[:, :, wi][dsel]
+            fsel = np.isfinite(v)
+            xc = np.sum(x[fsel]*v[fsel]) / np.sum(v[fsel])
+            yc = np.sum(y[fsel]*v[fsel]) / np.sum(v[fsel])
+            sel = np.where(np.sqrt((dx-xc)**2 + (dy-yc)**2)<=4.0)[0]
+            weights = I(dx[sel]-xc, dy[sel]-yc) * area / psfpixscale**2
+            if weights.sum() < 0.7:
+                L[i, :] = 0.0
+                continue
+            imask = ~(mask[sel])
+            X = S[sel]*1.
+            X[mask[sel]] = 0.0
+            Y = err[sel]*1.
+            Y[mask[sel]] = 0.0
+            spatial_spec = np.sum(weights[:, np.newaxis]*X*imask, axis=0) / np.sum(weights[:, np.newaxis]**2 * imask, axis=0)
+            spatial_spec_err = np.sqrt(np.sum(weights[:, np.newaxis]*Y**2*imask, axis=0) / np.sum(weights[:, np.newaxis]**2 * imask, axis=0))
+            X = spec[sel]*1.
+            X[mask[sel]] = 0.0
+            Y = err[sel]*1.
+            Y[mask[sel]] = 0.0
+            spatial_spec_or = np.sum(weights[:, np.newaxis]*X*imask, axis=0) / np.sum(weights[:, np.newaxis]**2 * imask, axis=0)
+            spatial_spec_err_or = np.sqrt(np.sum(weights[:, np.newaxis]*Y**2*imask, axis=0) / np.sum(weights[:, np.newaxis]**2 * imask, axis=0))
+            wsel = np.where(np.abs(def_wave - L[i, 2]) <= 8.)[0]
+            if (~np.isfinite(spatial_spec[wsel])).sum() > 0.:
+                L[i, :] = 0.0
+                continue
+            G = Gaussian1D(mean=L[i, 2], stddev=spec_res/2.35)
+            G.stddev.bounds = (4./2.35, 8./2.35)
+            G.mean.bounds = (L[i, 2] - 4., L[i, 2] + 4.)
+            fit = fitter(G, def_wave[wsel], spatial_spec[wsel])
+            wc = fit.mean.value
+            csel = np.where(np.abs(def_wave - L[i, 2]) <= 10.)[0]
+            chi2 = (1. / (len(csel) - 3.) *
+                    np.sum((fit(def_wave[csel])-spatial_spec[csel])**2 /
+                           spatial_spec_err[csel]**2))
+            L[i, 0] = xc
+            L[i, 1] = yc
+            L[i, 2] = wc
+            L[i, 3] = fit.stddev.value
+            L[i, 4] = chi2
+            K[i, :, 0] = spatial_spec_or
+            K[i, :, 1] = spatial_spec_err_or
+            K[i, :, 2] = fit(def_wave)
+            
+            
+    return cube, errcube, origcube, origerrcube, L, K
+    
