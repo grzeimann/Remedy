@@ -264,6 +264,8 @@ for ifuslot_key in ifuslots:
             _info = build_master_frame(filename_dict[kind], ifuslot, amp, kind,
                                        args.log, args.folder, specid, ifuid,
                                        contid)
+            if _info is None:
+                break
             specid, ifuSlot, ifuid = ['%03d' % int(z)
                                       for z in [_info[3], ifuslot, _info[4]]]
             if kind == 'drk':
