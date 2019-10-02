@@ -34,10 +34,10 @@ from astropy.table import Table
 from catalog_search import query_panstarrs, MakeRegionFile
 from datetime import datetime, timedelta
 from extract import Extract
-from fiber_utils import identify_sky_pixels, measure_fiber_profile, get_trace, build_model_image
+from fiber_utils import identify_sky_pixels, measure_fiber_profile, get_trace
+from fiber_utils import build_model_image, detect_sources
 from input_utils import setup_logging
 from math_utils import biweight
-from multiprocessing import Pool
 from photutils import DAOStarFinder, aperture_photometry, CircularAperture
 from scipy.interpolate import griddata, interp1d, interp2d
 from scipy.signal import savgol_filter
@@ -1732,8 +1732,10 @@ errspectra = safe_division(errspectra, ftf * Adj)
 ###########
 # Masking #
 ###########
+log.info('Masking bad pixels/fibers/amps')
 mask = np.zeros(scispectra.shape, dtype=bool)
 
+# Chi2 cut (pre-error adjustment, which is usually 0.8, so may need to think more)
 badchi2 = (C1 > 5.)
 y, x = np.where(badchi2)
 for i in np.arange(-2, 3):
@@ -1741,16 +1743,20 @@ for i in np.arange(-2, 3):
     n = (x1 > -1) * (x1 < mask.shape[1])
     mask[y[n], x1[n]] = True
 
+# Fiber to fiber < 0.5 (dead fiber) and Adj <0.9 or >1.1 should be considered questionable
 badftf = (ftf < 0.5) + (np.abs(Adj-1.) > 0.1)
 mask[badftf] = True
 
+# Error spectra with 0.0 are either outside the wavelength range or pixels masked by bad pixel mask
 badpixmask = errspectra == 0.
 mask[badpixmask] = True
 
+# Flag a fiber as bad if more than 200 columns are already flagged bad
 badfiberflag = mask.sum(axis=1) > 200
 badfibers = np.where(badfiberflag)[0]
 mask[badfibers] = True
 
+# Flag an amp as bad if more than 20% of their fibers are marked as bad
 for k in np.arange(0, int(len(inds)/112./nexp)):
     ll = k*112*nexp
     hl = (k+1)*112*nexp
@@ -1857,6 +1863,7 @@ info = []
 # Image scale and range
 scale = 0.75
 ran = [-23., 25., -23., 25.]
+
 for i, ui in enumerate(allifus):
     # Get the info for the given ifuslot
     log.info('Making collapsed frame for %03d' % ui)
@@ -1884,13 +1891,15 @@ for i, ui in enumerate(allifus):
     Sources = match_to_archive(sources, image, A, ui, scale, ran, coords)
     if Sources is not None:
         Total_sources.append(Sources) 
+    
+    
 
 
 
 # Write temporary info out
 Total_sources = np.vstack(Total_sources)
 f = Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist', 'Cgmag',
-                              'RA', 'Dec', 'fx', 'fy', 'dra', 'ddec'])
+                                  'RA', 'Dec', 'fx', 'fy', 'dra', 'ddec'])
 f.write('sources.dat', format='ascii.fixed_width_two_line',
         overwrite=True)
 
@@ -1909,6 +1918,29 @@ for j in np.arange(1):
                                       'ddec'])
     f.write('sources.dat', format='ascii.fixed_width_two_line', overwrite=True)
 
+##############
+# Detections #
+##############
+E = Extract()
+tophat = E.tophat_psf(3., 10.5, 0.25)
+moffat = E.moffat_psf(1.75, 10.5, 0.25)
+newpsf = tophat[0]*moffat[0]
+newpsf /= newpsf.sum()
+psf = [newpsf, moffat[1], moffat[2]]
+
+for i, ui in enumerate(allifus): 
+    N = 448 * nexp
+    data = scispectra[N*i:(i+1)*N]
+    error = errspectra[N*i:(i+1)*N]
+    M = mask[N*i:(i+1)*N]
+    P = pos[N*i:(i+1)*N]
+    ifu = A.fplane.by_ifuslot('%03d' % ui)
+    ifux, ifuy = (ifu.y, ifu.x) 
+    sources = detect_sources(P[:, 0], P[:, 1], data, error, M, def_wave, psf,
+                             ran, scale, spec_res=5.6, thresh=5.)
+    fx, fy = (sources['xcentroid']*scale + ran[0] + ifux,
+              sources['ycentroid']*scale + ran[2] + ifuy)
+    sra, sdec = A.tp.wcs_pix2world(fx, fy, 1)
 # Making g-band images
 filename_array = []
 ifunums = []
@@ -1998,7 +2030,7 @@ class Info(IsDescription):
      amp  = StringCol(2)
      exp = Int32Col()
 
-class Spectra(IsDescription):
+class CatSpectra(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
      dec  = Float32Col()    # float  (single-precision)
      spectrum  = Float32Col((1036,))    # float  (single-precision)
@@ -2008,7 +2040,7 @@ class Spectra(IsDescription):
      ygrid = Float32Col((21, 21))
 
 
-table = h5spec.create_table(h5spec.root, 'Spectra', Spectra, 
+table = h5spec.create_table(h5spec.root, 'CatSpectra', CatSpectra, 
                             "Extracted Spectra")
 specrow = table.row
 for ra, dec, specinfo in zip(mRA, mDec, spec_list):
@@ -2118,7 +2150,7 @@ if args.simulate:
 
 try:
     sel = f['dist'] < 2.5
-    print('Number of sources within 2.5": %i' % sel.sum())
+    log.info('Number of sources within 2.5": %i' % sel.sum())
     mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
     plt.figure(figsize=(6, 6))
     plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
@@ -2152,11 +2184,10 @@ try:
     plt.figure(figsize=(6, 6))
     Mg = Total_sources[sel, 4][nsel]
     mg = Total_sources[sel, 2][nsel]
-    ss = (Mg > 15) * (Mg < 22) * (mg < 25.)
-    print((mg - Mg)[ss])
+    ss = (Mg > 15) * (Mg < 21) * (mg < 25.)
     mean, median, std = sigma_clipped_stats((mg - Mg)[ss], stdfunc=mad_std)
-    print('The mean, median, and std for the mag offset is for %s_%07d: '
-          '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean, median, std))
+    log.info('The mean, median, and std for the mag offset is for %s_%07d: '
+             '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean, median, std))
     plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
     plt.gca().tick_params(axis='both', which='both', direction='in')
     plt.gca().tick_params(axis='y', which='both', left=True, right=True)
