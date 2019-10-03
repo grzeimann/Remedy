@@ -1921,26 +1921,26 @@ for j in np.arange(1):
 ##############
 # Detections #
 ##############
-E = Extract()
-tophat = E.tophat_psf(3., 10.5, 0.25)
-moffat = E.moffat_psf(1.75, 10.5, 0.25)
-newpsf = tophat[0]*moffat[0]
-newpsf /= newpsf.sum()
-psf = [newpsf, moffat[1], moffat[2]]
-
-for i, ui in enumerate(allifus): 
-    N = 448 * nexp
-    data = scispectra[N*i:(i+1)*N]
-    error = errspectra[N*i:(i+1)*N]
-    M = mask[N*i:(i+1)*N]
-    P = pos[N*i:(i+1)*N]
-    ifu = A.fplane.by_ifuslot('%03d' % ui)
-    ifux, ifuy = (ifu.y, ifu.x) 
-    sources = detect_sources(P[:, 0], P[:, 1], data, error, M, def_wave, psf,
-                             ran, scale, spec_res=5.6, thresh=5.)
-    fx, fy = (sources['xcentroid']*scale + ran[0] + ifux,
-              sources['ycentroid']*scale + ran[2] + ifuy)
-    sra, sdec = A.tp.wcs_pix2world(fx, fy, 1)
+#E = Extract()
+#tophat = E.tophat_psf(3., 10.5, 0.25)
+#moffat = E.moffat_psf(1.75, 10.5, 0.25)
+#newpsf = tophat[0]*moffat[0]
+#newpsf /= newpsf.sum()
+#psf = [newpsf, moffat[1], moffat[2]]
+#
+#for i, ui in enumerate(allifus): 
+#    N = 448 * nexp
+#    data = scispectra[N*i:(i+1)*N]
+#    error = errspectra[N*i:(i+1)*N]
+#    M = mask[N*i:(i+1)*N]
+#    P = pos[N*i:(i+1)*N]
+#    ifu = A.fplane.by_ifuslot('%03d' % ui)
+#    ifux, ifuy = (ifu.y, ifu.x) 
+#    sources = detect_sources(P[:, 0], P[:, 1], data, error, M, def_wave, psf,
+#                             ran, scale, spec_res=5.6, thresh=5.)
+#    fx, fy = (sources['xcentroid']*scale + ran[0] + ifux,
+#              sources['ycentroid']*scale + ran[2] + ifuy)
+#    sra, sdec = A.tp.wcs_pix2world(fx, fy, 1)
 # Making g-band images
 filename_array = []
 ifunums = []
