@@ -1902,7 +1902,7 @@ for k, _V in enumerate(intm):
         ui_dict[ifuslot] = [specid, ifuid]
 
 
-back_val, error_cor = biweight(scispectra / errspectra, calc_std=True)
+back_val, error_cor = biweight((scispectra / errspectra)[:, 800:900], calc_std=True)
 log.info('Error Correction: %0.2f' % error_cor)
 errspectra *= error_cor
 # Take the ratio of the 2nd and 3rd sky to the first
