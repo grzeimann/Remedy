@@ -369,6 +369,40 @@ class Extract:
             weights[:, i] = I(S[:, 0], S[:, 1]) * area / scale**2
 
         return weights
+    
+    def build_weights_no_ADR(self, xc, yc, ifux, ifuy, psf):
+        '''
+        Build weight matrix for spectral extraction
+        
+        Parameters
+        ----------
+        xc: float
+            The ifu x-coordinate for the center of the collapse frame
+        yc: float 
+            The ifu y-coordinate for the center of the collapse frame
+        xloc: numpy array
+            The ifu x-coordinate for each fiber
+        yloc: numpy array
+            The ifu y-coordinate for each fiber
+        psf: numpy 3d array
+            zeroth dimension: psf image, xgrid, ygrid
+        
+        Returns
+        -------
+        weights: numpy 2d array (len of fibers by wavelength dimension)
+            Weights for each fiber as function of wavelength for extraction
+        '''
+        S = np.zeros((len(ifux), 2))
+        T = np.array([psf[1].ravel(), psf[2].ravel()]).swapaxes(0, 1)
+        I = LinearNDInterpolator(T, psf[0].ravel(),
+                                 fill_value=0.0)
+        scale = np.abs(psf[1][0, 1] - psf[1][0, 0])
+        area = 0.75**2 * np.pi
+        S[:, 0] = ifux - xc
+        S[:, 1] = ifuy - yc
+        weights = I(S[:, 0], S[:, 1]) * area / scale**2
+
+        return weights
 
     def get_spectrum(self, data, error, mask, weights):
         '''
@@ -407,7 +441,7 @@ class Extract:
         spectrum[bad] = np.nan
         spectrum_error[bad] = np.nan
         
-        return spectrum, spectrum_error
+        return spectrum, spectrum_error, w
     
     def get_info_within_radius(self, ra, dec, data, error, mask, rac, decc,
                                thresh=7.):
@@ -483,19 +517,16 @@ class Extract:
                                                   self.mask, ra_cen, dec_cen,
                                                   thresh=7.)
         if info_result is None:
-            return [], []
+            return [], [], [], [], [], []
         
         self.log.info('Extracting %i' % ind)
         rafibers, decfibers, data, error, mask = info_result
-        too_far = np.sqrt(rafibers**2 + decfibers**2) > 3.
-        mask[too_far] = False
         weights = self.build_weights(0., 0., rafibers, decfibers, self.psf)
         result = self.get_spectrum(data, error, mask, weights)
-        spectrum, spectrum_error = [res for res in result]
+        spectrum, spectrum_error, mweight = [res for res in result]
         image_array = self.make_collapsed_image(0., 0., rafibers, decfibers,
                                                 data, mask, seeing_fac=1.5,
                                                 scale=0.5, boxsize=10.,
                                                 convolve_image=True)
         image, xgrid, ygrid = image_array
-        return spectrum, spectrum_error, image, xgrid, ygrid
-            
+        return spectrum, spectrum_error, mweight, image, xgrid, ygrid
