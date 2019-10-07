@@ -1769,7 +1769,7 @@ pos, twispectra, scispectra, errspectra, fn, tfile, _I, s1, E1, P1, MD1, C1, T1,
                                                                         h5table)
 
 _I = np.hstack(_I)
-
+h5table.close()
 
 # Get fiber to fiber from twilight spectra
 ftf = get_fiber_to_fiber(twispectra)
