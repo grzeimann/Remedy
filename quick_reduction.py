@@ -1775,7 +1775,7 @@ _I = np.hstack(_I)
 ftf = get_fiber_to_fiber(twispectra)
 inds = np.arange(scispectra.shape[0])
 scispectra[errspectra == 0.] = np.nan
-
+del twispectra
 
 # Number of exposures
 nexp = scispectra.shape[0] / 448 / nslots
@@ -1785,7 +1785,6 @@ log.info('Number of exposures: %i' % nexp)
 #############################
 log.info('Getting Fiber to Fiber Correction')
 
-Sky = ftf * 0.0
 Adj = ftf * 0.0
 for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
@@ -1811,7 +1810,6 @@ for k in np.arange(nexp):
 
 # Correct fiber to fiber
 scispectra = safe_division(scispectra, ftf * Adj)
-skyspectra = safe_division(scispectra, ftf * Adj)
 errspectra = safe_division(errspectra, ftf * Adj)
 
 ###########
@@ -1840,6 +1838,8 @@ mask[badpixmask] = True
 badfiberflag = mask.sum(axis=1) > 200
 badfibers = np.where(badfiberflag)[0]
 mask[badfibers] = True
+
+del badchi2, badftf, badpixmask
 
 # Flag an amp as bad if more than 20% of their fibers are marked as bad
 for k in np.arange(0, int(len(inds)/112./nexp)):
@@ -2027,6 +2027,15 @@ cofes_plots(ifunums, specnums, filename_array, outfile_name)
 
 
 # Extract
+RAFibers = []
+DecFibers = []
+for i, _info in enumerate(info):
+    image, fn, name, ui, tfile, sources = _info
+    N = 448 * nexp
+    P = pos[N*i:(i+1)*N]
+    ra, dec = A.get_ifupos_ra_dec('%03d' % ui, P[:, 0], P[:, 1])
+    RAFibers.append(ra)
+    DecFibers.append(dec)
 mRA, mDec = A.tp.wcs_pix2world(f['fx'], f['fy'], 1)
 E = Extract()
 E.psf = E.moffat_psf(1.8, 10.5, 0.25)
