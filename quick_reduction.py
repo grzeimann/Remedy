@@ -1631,6 +1631,90 @@ def cofes_plots(ifunums, specnums, filename_array, outfile_name, vmin=-0.2,
     fig.savefig(outfile_name, dpi=300)
 
 
+def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
+                      coords):
+    '''
+    Parameters
+    ----------
+    tfile : str
+        Tarfile name
+    fn : str
+        File name
+    scispectra : 2d numpy array
+        Sky subtracted spectra
+    allifus: 1d numpy array
+        Array of all ifus
+    pos : 2d numpy array
+        IFU x and y positions for all fibers
+    A : Astrometry Object
+        initial astrometric solution from header
+    scale : float
+        pixel scale of the g-band image
+    ran : list
+        min(x), max(x), min(y), max(y) for image
+    coords : SkyCoord Object
+        coordinates of archival catalog
+    Returns
+    -------
+    '''
+    # Make g-band image and find sources
+    Total_sources = []
+    info = []
+    # Image scale and range
+    scale = 0.75
+    ran = [-23., 25., -23., 25.]
+    
+    for i, ui in enumerate(allifus):
+        # Get the info for the given ifuslot
+        log.info('Making collapsed frame for %03d' % ui)
+        N = 448 * nexp
+        data = scispectra[N*i:(i+1)*N]
+        P = pos[N*i:(i+1)*N]
+        name = '%s_%07d_%03d.fits' % (args.date, args.observation, ui)
+        
+        # Make g-band image
+        image = make_photometric_image(P[:, 0], P[:, 1], data, filtg,
+                                       mask[N*i:(i+1)*N],
+                                       ADRx, 0.*ADRx, nchunks=11,
+                                       ran=ran,  scale=scale)
+        
+        # Make full fits file with wcs info (using default header)
+        mean, median, std = sigma_clipped_stats(image, sigma=3.0, stdfunc=mad_std)
+        daofind = DAOStarFinder(fwhm=4.0, threshold=7. * std, exclude_border=True) 
+        sources = daofind(image)
+        log.info('Found %i sources' % len(sources))
+        
+        # Keep certain info for new loops
+        info.append([image, fn, name, ui, tfile, sources])
+        
+        # Match sources to archive catalog
+        Sources = match_to_archive(sources, image, A, ui, scale, ran, coords)
+        if Sources is not None:
+            Total_sources.append(Sources) 
+    
+    # Write temporary info out
+    Total_sources = np.vstack(Total_sources)
+    f = Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist',
+                                      'Cgmag', 'RA', 'Dec', 'fx', 'fy', 'dra',
+                                      'ddec'])
+    # Fit astrometric offset
+    for j in np.arange(1):
+        A = fit_astrometry(f, A)
+        Total_sources = []
+        for i, ui in enumerate(allifus):
+            image, fn, name, ui, tfile, sources = info[i]
+            Sources = match_to_archive(sources, image, A, ui, scale, ran, coords)
+            if Sources is not None:
+                Total_sources.append(Sources) 
+        Total_sources = np.vstack(Total_sources)
+        f = Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist',
+                                          'Cgmag', 'RA', 'Dec', 'fx', 'fy', 'dra',
+                                          'ddec'])
+        f.write('sources.dat', format='ascii.fixed_width_two_line', overwrite=True)
+
+    return f, Total_sources, info, A
+
+
 ###############################################################################
 # MAIN SCRIPT
 
@@ -1684,8 +1768,9 @@ log.info('Reducing ifuslot: %03d' % args.ifuslot)
 pos, twispectra, scispectra, errspectra, fn, tfile, _I, s1, E1, P1, MD1, C1, T1, W1, intm = reduce_ifuslot(ifuloop,
                                                                         h5table)
 
-
 _I = np.hstack(_I)
+
+
 # Get fiber to fiber from twilight spectra
 ftf = get_fiber_to_fiber(twispectra)
 inds = np.arange(scispectra.shape[0])
@@ -1774,7 +1859,6 @@ errspectra[mask] = np.nan
 # Sky Subtraction #
 ###################
 log.info('Subtracting sky for all ifuslots')
-
 skies = []
 for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
@@ -1785,30 +1869,31 @@ for k in np.arange(nexp):
 #########################
 # Make 2d sky-sub image #
 #########################
-obsskies = []
-for k in np.arange(nexp):
-    sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
-    y = s1[sel] / ftf[sel] / Adj[sel]
-    y[mask[sel]] = np.nan
-    sky = biweight(y, axis=0)
-    obsskies.append(sky)
-skysub_images = []
-for k, _V in enumerate(intm):
-    ind = k % 3
-    init = _V[0]
-    image = _V[1]
-    name = 'multi_' + _V[2] + '.fits'
-    N = k * 112
-    M = (k+1) * 112
-    sky = obsskies[ind] * ftf[N:M] * Adj[N:M]
-    sky[~np.isfinite(sky)] = 0.0
-    log.info('Writing model image for %s' % _V[2])
-    if init is not None:
-        model_image = build_model_image(init, image, T1[N:M], W1[N:M], sky,
-                                        def_wave)
-    else:
-        model_image = image * 0.
-    skysub_images.append([image, image-model_image, _V[2], (N+M)/2])
+#obsskies = []
+#for k in np.arange(nexp):
+#    sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
+#    y = s1[sel] / ftf[sel] / Adj[sel]
+#    y[mask[sel]] = np.nan
+#    sky = biweight(y, axis=0)
+#    obsskies.append(sky)
+#skysub_images = []
+#for k, _V in enumerate(intm):
+#    ind = k % 3
+#    init = _V[0]
+#    image = _V[1]
+#    name = 'multi_' + _V[2] + '.fits'
+#    N = k * 112
+#    M = (k+1) * 112
+#    sky = obsskies[ind] * ftf[N:M] * Adj[N:M]
+#    sky[~np.isfinite(sky)] = 0.0
+#    log.info('Writing model image for %s' % _V[2])
+#    if init is not None:
+#        model_image = build_model_image(init, image, T1[N:M], W1[N:M], sky,
+#                                        def_wave)
+#    else:
+#        model_image = image * 0.
+#    skysub_images.append([image, image-model_image, _V[2], (N+M)/2])
+
 
 ui_dict = {}
 for k, _V in enumerate(intm):
@@ -1856,67 +1941,46 @@ raC, decC, gC = (np.array(Pan['raMean']), np.array(Pan['decMean']),
                  np.array(Pan['gApMag']))
 coords = SkyCoord(raC*units.degree, decC*units.degree, frame='fk5')
 
-
-# Make g-band image and find sources
-Total_sources = []
-info = []
-# Image scale and range
 scale = 0.75
 ran = [-23., 25., -23., 25.]
+f, Total_sources, info, A = advanced_analysis(tfile, fn, scispectra, allifus,
+                                              pos, A, scale, ran)
 
-for i, ui in enumerate(allifus):
-    # Get the info for the given ifuslot
-    log.info('Making collapsed frame for %03d' % ui)
-    N = 448 * nexp
-    data = scispectra[N*i:(i+1)*N]
-    P = pos[N*i:(i+1)*N]
-    name = '%s_%07d_%03d.fits' % (args.date, args.observation, ui)
+#####################
+# Get normalization #
+#####################
+E = Extract()
+tophat = E.tophat_psf(3., 10.5, 0.25)
+moffat = E.moffat_psf(1.75, 10.5, 0.25)
+newpsf = tophat[0]*moffat[0]
+newpsf /= newpsf.sum()
+psf = [newpsf, moffat[1], moffat[2]]
+E.psf = psf
+objsel = f['Cgmag'] < 21.
+if objsel.sum():
+    mRA, mDec = A.tp.wcs_pix2world(f['fx'], f['fy'], 1)
+    E.coords = SkyCoord(mRA*units.deg, mDec*units.deg, frame='fk5')
+    RAFibers, DecFibers = ([], [])
+    for i, _info in enumerate(info):
+        image, fn, name, ui, tfile, sources = _info
+        N = 448 * nexp
+        data = scispectra[N*i:(i+1)*N]
+        P = pos[N*i:(i+1)*N]
+        ra, dec = A.get_ifupos_ra_dec('%03d' % ui, P[:, 0], P[:, 1])
+        RAFibers.append(ra)
+        DecFibers.append(dec)
+    for k in np.arange(nexp):
+        sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
+        E.ra, E.dec = [np.hstack(x) for x in [RAFibers[sel], DecFibers[sel]]]
+        E.data = scispectra[sel]
+        E.error = errspectra[sel]
+        E.mask = mask[sel]
+        E.get_ADR_RAdec(A)
+        log.info('Beginning Extraction for exposure %i' % k+1)
+        spec_list = []
+        for i in np.arange(len(E.coords)):
+            spec_list.append(E.get_spectrum_by_coord_index(i))
     
-    # Make g-band image
-    image = make_photometric_image(P[:, 0], P[:, 1], data, filtg,
-                                   mask[N*i:(i+1)*N],
-                                   ADRx, 0.*ADRx, nchunks=11,
-                                   ran=ran,  scale=scale)
-    
-    # Make full fits file with wcs info (using default header)
-    mean, median, std = sigma_clipped_stats(image, sigma=3.0, stdfunc=mad_std)
-    daofind = DAOStarFinder(fwhm=4.0, threshold=7. * std, exclude_border=True) 
-    sources = daofind(image)
-    log.info('Found %i sources' % len(sources))
-    
-    # Keep certain info for new loops
-    info.append([image, fn, name, ui, tfile, sources])
-    
-    # Match sources to archive catalog
-    Sources = match_to_archive(sources, image, A, ui, scale, ran, coords)
-    if Sources is not None:
-        Total_sources.append(Sources) 
-    
-    
-
-
-
-# Write temporary info out
-Total_sources = np.vstack(Total_sources)
-f = Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist', 'Cgmag',
-                                  'RA', 'Dec', 'fx', 'fy', 'dra', 'ddec'])
-f.write('sources.dat', format='ascii.fixed_width_two_line',
-        overwrite=True)
-
-# Fit astrometric offset
-for j in np.arange(1):
-    A = fit_astrometry(f, A)
-    Total_sources = []
-    for i, ui in enumerate(allifus):
-        image, fn, name, ui, tfile, sources = info[i]
-        Sources = match_to_archive(sources, image, A, ui, scale, ran, coords)
-        if Sources is not None:
-            Total_sources.append(Sources) 
-    Total_sources = np.vstack(Total_sources)
-    f = Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist',
-                                      'Cgmag', 'RA', 'Dec', 'fx', 'fy', 'dra',
-                                      'ddec'])
-    f.write('sources.dat', format='ascii.fixed_width_two_line', overwrite=True)
 
 ##############
 # Detections #
@@ -1927,6 +1991,7 @@ for j in np.arange(1):
 #newpsf = tophat[0]*moffat[0]
 #newpsf /= newpsf.sum()
 #psf = [newpsf, moffat[1], moffat[2]]
+#E.psf = psf
 #
 #for i, ui in enumerate(allifus): 
 #    N = 448 * nexp
@@ -1962,16 +2027,6 @@ cofes_plots(ifunums, specnums, filename_array, outfile_name)
 
 
 # Extract
-RAFibers, DecFibers = ([], [])
-for i, _info in enumerate(info):
-    image, fn, name, ui, tfile, sources = _info
-    N = 448 * nexp
-    data = scispectra[N*i:(i+1)*N]
-    P = pos[N*i:(i+1)*N]
-    ra, dec = A.get_ifupos_ra_dec('%03d' % ui, P[:, 0], P[:, 1])
-    RAFibers.append(ra)
-    DecFibers.append(dec)
-
 mRA, mDec = A.tp.wcs_pix2world(f['fx'], f['fy'], 1)
 E = Extract()
 E.psf = E.moffat_psf(1.8, 10.5, 0.25)
@@ -2035,6 +2090,7 @@ class CatSpectra(IsDescription):
      dec  = Float32Col()    # float  (single-precision)
      spectrum  = Float32Col((1036,))    # float  (single-precision)
      error  = Float32Col((1036,))    # float  (single-precision)
+     weight  = Float32Col((1036,))    # float  (single-precision)
      image = Float32Col((11, 21, 21))
      xgrid = Float32Col((21, 21))
      ygrid = Float32Col((21, 21))
@@ -2049,9 +2105,10 @@ for ra, dec, specinfo in zip(mRA, mDec, spec_list):
     if len(specinfo[0]) > 0:
         specrow['spectrum'] = specinfo[0]
         specrow['error'] = specinfo[1]
-        specrow['image'] = specinfo[2]
-        specrow['xgrid'] = specinfo[3]
-        specrow['ygrid'] = specinfo[4]
+        specrow['weight'] = specinfo[2]
+        specrow['image'] = specinfo[3]
+        specrow['xgrid'] = specinfo[4]
+        specrow['ygrid'] = specinfo[5]
     specrow.append()
 table.flush()
 
@@ -2128,12 +2185,12 @@ h5spec.close()
 #    MakeRegionFile.writeHeader(k)
 #    MakeRegionFile.writeSource(k, coords.ra.deg, coords.dec.deg)
 
-x = [518 for s in skysub_images]
-y = [s[3] for s in skysub_images]
-te = [s[2] for s in skysub_images]
-with open('ds9_%s_%07d_skysub.reg' % (args.date, args.observation), 'w') as k:
-    MakeRegionFile.writeHeader(k)
-    MakeRegionFile.writeText(k, x, y, te)
+#x = [518 for s in skysub_images]
+#y = [s[3] for s in skysub_images]
+#te = [s[2] for s in skysub_images]
+#with open('ds9_%s_%07d_skysub.reg' % (args.date, args.observation), 'w') as k:
+#    MakeRegionFile.writeHeader(k)
+#    MakeRegionFile.writeText(k, x, y, te)
 
 if args.simulate:
     i = 0
