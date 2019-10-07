@@ -19,6 +19,7 @@ import seaborn as sns
 import sys
 import tarfile
 import warnings
+import psutil
 
 
 from astrometry import Astrometry
@@ -1031,7 +1032,10 @@ def reduce_ifuslot(ifuloop, h5table):
             _I = np.char.array(['%s_%s_%s_%s' % (specid, ifuslot, ifuid, amp)] * N)
             _V = '%s_%s_%s_%s_exp%02d' % (specid, ifuslot, ifuid, amp, j+1)
             for x, i in zip([p, t, s, e, _i, s1, e1, p1, m1, c1, t1, w1, intm], [pos, twi, spec, espec, _I, spec1, espec1, plaw1, mdark1, chi21, trace, wave, [0.0, 0.0, _V]]):
-                x.append(i * 1)        
+                x.append(i * 1) 
+        
+        process = psutil.Process(os.getpid())
+        log.info('Memory Used: %0.2f' % (process.memory_info()[0] / 1e9))
     
     p, t, s, e, _i, s1, e1, p1, m1, c1, t1, w1 = [np.vstack(j) for j in [p, t, s, e, _i, s1, e1, p1, m1, c1, t1, w1]]
     
