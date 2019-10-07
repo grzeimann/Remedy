@@ -1944,42 +1944,42 @@ coords = SkyCoord(raC*units.degree, decC*units.degree, frame='fk5')
 scale = 0.75
 ran = [-23., 25., -23., 25.]
 f, Total_sources, info, A = advanced_analysis(tfile, fn, scispectra, allifus,
-                                              pos, A, scale, ran)
+                                              pos, A, scale, ran, coords)
 
 #####################
 # Get normalization #
 #####################
-E = Extract()
-tophat = E.tophat_psf(3., 10.5, 0.25)
-moffat = E.moffat_psf(1.75, 10.5, 0.25)
-newpsf = tophat[0]*moffat[0]
-newpsf /= newpsf.sum()
-psf = [newpsf, moffat[1], moffat[2]]
-E.psf = psf
-objsel = f['Cgmag'] < 21.
-if objsel.sum():
-    mRA, mDec = A.tp.wcs_pix2world(f['fx'], f['fy'], 1)
-    E.coords = SkyCoord(mRA*units.deg, mDec*units.deg, frame='fk5')
-    RAFibers, DecFibers = ([], [])
-    for i, _info in enumerate(info):
-        image, fn, name, ui, tfile, sources = _info
-        N = 448 * nexp
-        data = scispectra[N*i:(i+1)*N]
-        P = pos[N*i:(i+1)*N]
-        ra, dec = A.get_ifupos_ra_dec('%03d' % ui, P[:, 0], P[:, 1])
-        RAFibers.append(ra)
-        DecFibers.append(dec)
-    for k in np.arange(nexp):
-        sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
-        E.ra, E.dec = [np.hstack(x) for x in [RAFibers[sel], DecFibers[sel]]]
-        E.data = scispectra[sel]
-        E.error = errspectra[sel]
-        E.mask = mask[sel]
-        E.get_ADR_RAdec(A)
-        log.info('Beginning Extraction for exposure %i' % k+1)
-        spec_list = []
-        for i in np.arange(len(E.coords)):
-            spec_list.append(E.get_spectrum_by_coord_index(i))
+#E = Extract()
+#tophat = E.tophat_psf(3., 10.5, 0.25)
+#moffat = E.moffat_psf(1.75, 10.5, 0.25)
+#newpsf = tophat[0]*moffat[0]
+#newpsf /= newpsf.sum()
+#psf = [newpsf, moffat[1], moffat[2]]
+#E.psf = psf
+#objsel = f['Cgmag'] < 21.
+#if objsel.sum():
+#    mRA, mDec = A.tp.wcs_pix2world(f['fx'], f['fy'], 1)
+#    E.coords = SkyCoord(mRA*units.deg, mDec*units.deg, frame='fk5')
+#    RAFibers, DecFibers = ([], [])
+#    for i, _info in enumerate(info):
+#        image, fn, name, ui, tfile, sources = _info
+#        N = 448 * nexp
+#        data = scispectra[N*i:(i+1)*N]
+#        P = pos[N*i:(i+1)*N]
+#        ra, dec = A.get_ifupos_ra_dec('%03d' % ui, P[:, 0], P[:, 1])
+#        RAFibers.append(ra)
+#        DecFibers.append(dec)
+#    for k in np.arange(nexp):
+#        sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
+#        E.ra, E.dec = [np.hstack(x) for x in [RAFibers[sel], DecFibers[sel]]]
+#        E.data = scispectra[sel]
+#        E.error = errspectra[sel]
+#        E.mask = mask[sel]
+#        E.get_ADR_RAdec(A)
+#        log.info('Beginning Extraction for exposure %i' % k+1)
+#        spec_list = []
+#        for i in np.arange(len(E.coords)):
+#            spec_list.append(E.get_spectrum_by_coord_index(i))
     
 
 ##############
