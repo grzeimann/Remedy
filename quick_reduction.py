@@ -1902,6 +1902,7 @@ pos, twispectra, scispectra, errspectra, fn, tfile, _I, C1, intm = reduce_ifuslo
 
 _I = np.hstack(_I)
 h5table.close()
+h5table = None
 
 # Get fiber to fiber from twilight spectra
 ftf = get_fiber_to_fiber(twispectra)
