@@ -2122,7 +2122,8 @@ for i in np.arange(len(E.coords)):
     spec_list.append(E.get_spectrum_by_coord_index(i))
 log.info('Finished Extraction')
 
-table = tableh5
+table = h5spec.create_table(h5spec.root, 'CatSpectra', CatSpectra, 
+                            "Spectral Extraction Information")
 
 specrow = table.row
 for ra, dec, specinfo in zip(mRA, mDec, spec_list):
