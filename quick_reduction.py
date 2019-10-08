@@ -1031,7 +1031,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
     scitarfile : str or None
         name of the tar file for the science frames if there is one
     '''
-    p, t, s, e, _i, c1, intm = ([], [], [], [], [], [], [])
+    _i, intm = ([], [])
     
     # Calibration factors to convert electrons to uJy
     mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.7
@@ -1040,7 +1040,18 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
 
     scinames, twinames, scitarfile, twitarfile = get_sci_twi_files()
     specrow = tableh5.row
-
+    ifuslot = '%03d' % h5table[ifuloop[0]]['ifuslot']
+    amp = 'LL'
+    fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
+    filenames = fnmatch.filter(scinames, fnames_glob)
+    nexposures = len(filenames)
+    N = len(ifuloop) * nexposures * 112
+    p = np.zeros((N, 2))
+    t = np.zeros((N, len(def_wave)))
+    s = np.zeros((N, len(def_wave)))
+    e = np.zeros((N, len(def_wave)))
+    c1 = np.zeros((N, len(def_wave)))
+    cnt = 0
     for ind in ifuloop:
         ifuslot = '%03d' % h5table[ind]['ifuslot']
         ifuid = h5table[ind]['ifuid']
@@ -1106,12 +1117,18 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
                 specrow['trace'] = trace[loop]
                 specrow['wavelength'] = wave[loop]
                 specrow.append()
-            for x, i in zip([p, t, s, e, _i, c1, intm], [pos, twi, spec, espec, _I, chi21, [intpm, 0.0, _V]]):
+            p[cnt:cnt+112, :] = pos
+            t[cnt:cnt+112, :] = twi
+            s[cnt:cnt+112, :] = spec
+            e[cnt:cnt+112, :] = espec
+            c1[cnt:cnt+112, :] = chi21
+            cnt += 112
+            for x, i in zip([_i, intm], [_I, [intpm, 0.0, _V]]):
                 x.append(i * 1) 
         
         process = psutil.Process(os.getpid())
         log.info('Memory Used: %0.2f' % (process.memory_info()[0] / 1e9))
-    p, t, s, e, _i, c1 = [np.vstack(j) for j in [p, t, s, e, _i, c1]]
+    _i = np.vstack(_i)
     tableh5.flush()
     tableh5 = None
     return p, t, s, e, fn, scitarfile, _i, c1, intm
