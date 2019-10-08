@@ -834,8 +834,8 @@ def get_mask(scispectra, C1, ftf, Adj, nexp):
         ampid = amps[k % 4]
         if (nbadfibers*1./nfibers) > 0.2:
             log.info('%03d%s Amplifier marked bad.' % (allifus[idx], ampid))
-            #mask[ll:hl, :] = True
-    mask = np.zeros(scispectra.shape, dtype=bool)
+            mask[ll:hl, :] = True
+    
     return mask
 
 def power_law(x, c1, c2=.5, c3=.15, c4=1., sig=2.5):
