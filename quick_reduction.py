@@ -203,6 +203,8 @@ def get_ra_dec_from_header(tfile, fn):
     ra = a[0].header['TRAJCRA'] * 15.
     dec = a[0].header['TRAJCDEC'] * 1.
     pa = a[0].header['PARANGLE'] * 1.
+    if tfile is not None:
+        t.close()
     return ra, dec, pa
 
 
@@ -419,7 +421,6 @@ def base_reduction(filename, get_header=False, tfile=None, rdnoise=None):
     if tfile is not None:
         t = tarfile.open(tfile,'r')
         a = fits.open(t.extractfile(filename))
-        t.close()
     else:
         a = fits.open(filename)
 
@@ -452,6 +453,8 @@ def base_reduction(filename, get_header=False, tfile=None, rdnoise=None):
     
     # Calculate error frame
     E = np.sqrt(rdnoise**2 + np.where(a > 0., a, 0.))
+    if tfile is not None:
+        t.close()
     if get_header:
         return a, E, header
     return a, E
