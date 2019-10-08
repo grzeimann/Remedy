@@ -749,7 +749,7 @@ def get_fiber_to_fiber(twispectra):
                   for f in np.array_split(t, nbins, axis=1)]).swapaxes(0, 1)
     x = np.array([np.mean(xi) 
                   for xi in np.array_split(np.arange(t.shape[1]), nbins)])
-    ftf_init = np.zeros(scispectra.shape)
+    ftf_init = np.zeros(twispectra.shape)
     X = np.arange(t.shape[1])
     for i, ai in enumerate(a):
         sel = np.isfinite(ai)
@@ -944,7 +944,7 @@ def get_sci_twi_files(kind='twi'):
             twinames = sorted(tf.getnames())
     return scinames, twinames, scitarfile, twitarfile
 
-def reduce_ifuslot(ifuloop, h5table):
+def reduce_ifuslot(ifuloop, h5table, tableh5):
     '''
     Parameters
     ----------
@@ -966,7 +966,7 @@ def reduce_ifuslot(ifuloop, h5table):
     scitarfile : str or None
         name of the tar file for the science frames if there is one
     '''
-    p, t, s, e, _i, s1, e1, p1, m1, c1, t1, w1, intm = ([], [], [], [], [], [], [], [], [], [], [], [], [])
+    p, t, s, e, _i, c1, intm = ([], [], [], [], [], [], [])
     
     # Calibration factors to convert electrons to uJy
     mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.7
@@ -974,6 +974,8 @@ def reduce_ifuslot(ifuloop, h5table):
     # Check if tarred
 
     scinames, twinames, scitarfile, twitarfile = get_sci_twi_files()
+    specrow = table.row
+
     for ind in ifuloop:
         ifuslot = '%03d' % h5table[ind]['ifuslot']
         ifuid = h5table[ind]['ifuid']
@@ -1031,15 +1033,23 @@ def reduce_ifuslot(ifuloop, h5table):
             N = twi.shape[0]
             _I = np.char.array(['%s_%s_%s_%s' % (specid, ifuslot, ifuid, amp)] * N)
             _V = '%s_%s_%s_%s_exp%02d' % (specid, ifuslot, ifuid, amp, j+1)
-            for x, i in zip([p, t, s, e, _i, s1, e1, p1, m1, c1, t1, w1, intm], [pos, twi, spec, espec, _I, spec1, espec1, plaw1, mdark1, chi21, trace, wave, [0.0, 0.0, _V]]):
+            for loop in np.arange(len(spec)):
+                specrow['observed'] = spec1[loop]
+                specrow['observed_error'] = espec1[loop]
+                specrow['plawspec'] = plaw1[loop]
+                specrow['mdarkspec'] = mdark1[loop]
+                specrow['trace'] = trace[loop]
+                specrow['wavelength'] = wave[loop]
+                specrow.append()
+            for x, i in zip([p, t, s, e, _i, c1, intm], [pos, twi, spec, espec, _I, chi21, [intpm, 0.0, _V]]):
                 x.append(i * 1) 
         
         process = psutil.Process(os.getpid())
         log.info('Memory Used: %0.2f' % (process.memory_info()[0] / 1e9))
     
-    p, t, s, e, _i, s1, e1, p1, m1, c1, t1, w1 = [np.vstack(j) for j in [p, t, s, e, _i, s1, e1, p1, m1, c1, t1, w1]]
-    
-    return p, t, s, e, fn , scitarfile, _i, s1, e1, p1, m1, c1, t1, w1, intm
+    p, t, s, e, _i, c1 = [np.vstack(j) for j in [p, t, s, e, _i, c1]]
+    tableh5.flush()
+    return p, t, s, e, fn, scitarfile, _i, c1, intm
 
 
 def make_cube(xloc, yloc, data, Dx, Dy, ftf, scale, ran,
@@ -1718,6 +1728,64 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
 
     return f, Total_sources, info, A
 
+# Setup logging
+log = setup_logging()
+if args.hdf5file is None:
+    log.error('Please specify an hdf5file.  A default is not yet setup.')
+    sys.exit(1)
+
+###########
+# H5 File #
+###########
+name = ('%s_%07d.h5' %
+                (args.date, args.observation))
+if op.exists(name):
+    os.remove(name)
+    log.info('%s removed before writing new one' % name)
+h5spec = open_file(name, mode="w", title="%s Spectra" % name[:-3])
+
+class Fibers(IsDescription):
+     spectrum  = Float32Col((1036,))    # float  (single-precision)
+     error  = Float32Col((1036,))    # float  (single-precision)
+     chi2spec = Float32Col((1036,))
+     fiber_to_fiber  = Float32Col((1036,))    # float  (single-precision)
+     fiber_to_fiber_adj  = Float32Col((1036,))    # float  (single-precision)     
+
+class Cals(IsDescription):
+     trace  = Float32Col((1032,))    # float  (single-precision)
+     wavelength  = Float32Col((1032,))    # float  (single-precision)
+     observed  = Float32Col((1036,))
+     observed_error = Float32Col((1036,))
+     plawspec = Float32Col((1036,))
+     mdarkspec = Float32Col((1036,))
+     
+class Images(IsDescription):
+     zipcode  = StringCol(21)
+     skysub  = Float32Col((1032,1032))    # float  (single-precision)
+     image  = Float32Col((1032,1032))    # float  (single-precision)
+
+
+class Info(IsDescription):
+     ra  = Float32Col()    # float  (single-precision)
+     dec  = Float32Col()    # float  (single-precision)
+     ifux  = Float32Col()    # float  (single-precision)
+     ifuy  = Float32Col()    # float  (single-precision)
+     specid  = Int32Col()    # float  (single-precision)
+     ifuslot  = Int32Col()    # float  (single-precision)
+     ifuid  = Int32Col()   # float  (single-precision)
+     amp  = StringCol(2)
+     exp = Int32Col()
+
+class CatSpectra(IsDescription):
+     ra  = Float32Col()    # float  (single-precision)
+     dec  = Float32Col()    # float  (single-precision)
+     spectrum  = Float32Col((1036,))    # float  (single-precision)
+     error  = Float32Col((1036,))    # float  (single-precision)
+     weight  = Float32Col((1036,))    # float  (single-precision)
+     image = Float32Col((11, 21, 21))
+     xgrid = Float32Col((21, 21))
+     ygrid = Float32Col((21, 21))
+
 
 ###############################################################################
 # MAIN SCRIPT
@@ -1728,11 +1796,7 @@ DIRNAME = get_script_path()
 # Instrument for reductions
 instrument = 'virus'
 
-# Setup logging
-log = setup_logging()
-if args.hdf5file is None:
-    log.error('Please specify an hdf5file.  A default is not yet setup.')
-    sys.exit(1)
+
 
 # Open HDF5 file
 h5file = open_file(args.hdf5file, mode='r')
@@ -1767,10 +1831,13 @@ nslots = len(ifuloop) / 4
 allifus = np.hstack(allifus)
 
 
+
 # Reducing IFUSLOT
+tableh5 = h5spec.create_table(h5spec.root, 'Cals', Cals, 
+                            "Cal Information")
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
-pos, twispectra, scispectra, errspectra, fn, tfile, _I, s1, E1, P1, MD1, C1, T1, W1, intm = reduce_ifuslot(ifuloop,
-                                                                        h5table)
+pos, twispectra, scispectra, errspectra, fn, tfile, _I, C1, intm = reduce_ifuslot(ifuloop,
+                                                                        h5table, tableh5)
 
 _I = np.hstack(_I)
 h5table.close()
@@ -2055,62 +2122,8 @@ for i in np.arange(len(E.coords)):
     spec_list.append(E.get_spectrum_by_coord_index(i))
 log.info('Finished Extraction')
 
-name = ('%s_%07d.h5' %
-                (args.date, args.observation))
-if op.exists(name):
-    os.remove(name)
-    log.info('%s removed before writing new one' % name)
-h5spec = open_file(name, mode="w", title="%s Spectra" % name[:-3])
+table = tableh5
 
-class Fibers(IsDescription):
-     ra  = Float32Col()    # float  (single-precision)
-     dec  = Float32Col()    # float  (single-precision)
-     spectrum  = Float32Col((1036,))    # float  (single-precision)
-     error  = Float32Col((1036,))    # float  (single-precision)
-
-class Cals(IsDescription):
-     ra  = Float32Col()    # float  (single-precision)
-     dec  = Float32Col()    # float  (single-precision)
-     trace  = Float32Col((1032,))    # float  (single-precision)
-     wavelength  = Float32Col((1032,))    # float  (single-precision)
-     fiber_to_fiber  = Float32Col((1036,))    # float  (single-precision)
-     fiber_to_fiber_adj  = Float32Col((1036,))    # float  (single-precision)
-     observed  = Float32Col((1036,))
-     observed_error = Float32Col((1036,))
-     plawspec = Float32Col((1036,))
-     mdarkspec = Float32Col((1036,))
-     chi2spec = Float32Col((1036,))
-     
-class Images(IsDescription):
-     zipcode  = StringCol(21)
-     skysub  = Float32Col((1032,1032))    # float  (single-precision)
-     image  = Float32Col((1032,1032))    # float  (single-precision)
-
-
-class Info(IsDescription):
-     ra  = Float32Col()    # float  (single-precision)
-     dec  = Float32Col()    # float  (single-precision)
-     ifux  = Float32Col()    # float  (single-precision)
-     ifuy  = Float32Col()    # float  (single-precision)
-     specid  = Int32Col()    # float  (single-precision)
-     ifuslot  = Int32Col()    # float  (single-precision)
-     ifuid  = Int32Col()   # float  (single-precision)
-     amp  = StringCol(2)
-     exp = Int32Col()
-
-class CatSpectra(IsDescription):
-     ra  = Float32Col()    # float  (single-precision)
-     dec  = Float32Col()    # float  (single-precision)
-     spectrum  = Float32Col((1036,))    # float  (single-precision)
-     error  = Float32Col((1036,))    # float  (single-precision)
-     weight  = Float32Col((1036,))    # float  (single-precision)
-     image = Float32Col((11, 21, 21))
-     xgrid = Float32Col((21, 21))
-     ygrid = Float32Col((21, 21))
-
-
-table = h5spec.create_table(h5spec.root, 'CatSpectra', CatSpectra, 
-                            "Extracted Spectra")
 specrow = table.row
 for ra, dec, specinfo in zip(mRA, mDec, spec_list):
     specrow['ra'] = ra
@@ -2130,35 +2143,17 @@ log.info('Finished writing spectra')
 table = h5spec.create_table(h5spec.root, 'Fibers', Fibers, 
                             "Fiber Information")
 specrow = table.row
-for i in np.arange(len(E.ra)):
-    specrow['ra'] = E.ra[i]
-    specrow['dec'] = E.dec[i]
+for i in np.arange(len(scispectra)):
     specrow['spectrum'] = scispectra[i]
     specrow['error'] = errspectra[i]
+    specrow['chi2spec'] = C1[i]
+    specrow['fiber_to_fiber'] = ftf[i]
+    specrow['fiber_to_fiber_adj'] = Adj[i]
     specrow.append()
 table.flush()
 
 log.info('Finished writing Fibers')
 
-table = h5spec.create_table(h5spec.root, 'Cals', Cals, 
-                            "Cal Information")
-specrow = table.row
-for i in np.arange(len(E.ra)):
-    specrow['ra'] = E.ra[i]
-    specrow['dec'] = E.dec[i]
-    specrow['observed'] = s1[i]
-    specrow['observed_error'] = E1[i]
-    specrow['plawspec'] = P1[i]
-    specrow['mdarkspec'] = MD1[i]
-    specrow['chi2spec'] = C1[i]
-    specrow['fiber_to_fiber'] = ftf[i]
-    specrow['fiber_to_fiber_adj'] = Adj[i]
-    specrow['trace'] = T1[i]
-    specrow['wavelength'] = W1[i]
-    specrow.append()
-table.flush()
-
-log.info('Finished writing Cals')
 
 table = h5spec.create_table(h5spec.root, 'Info', Info, 
                             "Fiber Information")
