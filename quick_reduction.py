@@ -2200,8 +2200,10 @@ log.info('Finished writing Info')
 #
 #log.info('Finished writing Images')
 
-
+process = psutil.Process(os.getpid())
+log.info('Memory Used: %0.2f' % (process.memory_info()[0] / 1e9))
 h5spec.close()
+h5spec = None
 
 
 #with open('ds9_%s_%07d.reg' % (args.date, args.observation), 'w') as k:
