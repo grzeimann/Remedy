@@ -1106,7 +1106,10 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             twi[:] = safe_division(twi, throughput)
             spec = safe_division(spec1, throughput) * mult_fac
             espec = safe_division(espec1, throughput) * mult_fac
-            pos = amppos + dither_pattern[j]
+            try:
+                pos = amppos + dither_pattern[j]
+            except:
+                pos = amppos + dither_pattern[-1]
             N = twi.shape[0]
             _I = np.char.array(['%s_%s_%s_%s' % (specid, ifuslot, ifuid, amp)] * N)
             _V = '%s_%s_%s_%s_exp%02d' % (specid, ifuslot, ifuid, amp, j+1)
