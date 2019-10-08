@@ -419,6 +419,7 @@ def base_reduction(filename, get_header=False, tfile=None, rdnoise=None):
     if tfile is not None:
         t = tarfile.open(tfile,'r')
         a = fits.open(t.extractfile(filename))
+        t.close()
     else:
         a = fits.open(filename)
 
@@ -527,6 +528,7 @@ def get_twi_tarfile(pathname, date, kind='twi'):
                     flag = False
             if twitarfile is not None:
                 break
+            T.close()
     return twitarfile
 
 def roll_through_dates(pathname, date):
