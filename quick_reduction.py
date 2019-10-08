@@ -1106,10 +1106,9 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         
         process = psutil.Process(os.getpid())
         log.info('Memory Used: %0.2f' % (process.memory_info()[0] / 1e9))
-        gc.collect()
     p, t, s, e, _i, c1 = [np.vstack(j) for j in [p, t, s, e, _i, c1]]
     tableh5.flush()
-    gc.collect()
+    tableh5 = None
     return p, t, s, e, fn, scitarfile, _i, c1, intm
 
 
@@ -1744,13 +1743,13 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
         log.info('Making collapsed frame for %03d' % ui)
         N = 448 * nexp
         data = scispectra[N*i:(i+1)*N]
+        M = ~np.isfinite(data)
         P = pos[N*i:(i+1)*N]
         name = '%s_%07d_%03d.fits' % (args.date, args.observation, ui)
         
         # Make g-band image
         image = make_photometric_image(P[:, 0], P[:, 1], data, filtg,
-                                       mask[N*i:(i+1)*N],
-                                       ADRx, 0.*ADRx, nchunks=11,
+                                       M, ADRx, 0.*ADRx, nchunks=11,
                                        ran=ran,  scale=scale)
         
         # Make full fits file with wcs info (using default header)
@@ -1824,7 +1823,6 @@ class Images(IsDescription):
      zipcode  = StringCol(21)
      skysub  = Float32Col((1032,1032))    # float  (single-precision)
      image  = Float32Col((1032,1032))    # float  (single-precision)
-
 
 class Info(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
@@ -1939,8 +1937,6 @@ mask = get_mask(scispectra, C1, ftf, Adj, nexp)
 scispectra[mask] = np.nan
 errspectra[mask] = np.nan
 
-del mask
-gc.collect()
 ###################
 # Sky Subtraction #
 ###################
