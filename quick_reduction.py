@@ -780,7 +780,7 @@ def get_fiber_to_fiber(t):
 def get_fiber_to_fiber_adj(scispectra, ftf, nexp):
     Adj = ftf * 0.0
     for k in np.arange(nexp):
-        sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
+        sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
         bins = 9
         adj = np.zeros((len(sel), bins))
         X = np.array([np.mean(xi) for xi in np.array_split(def_wave, bins)])
@@ -1969,7 +1969,7 @@ errspectra[mask] = np.nan
 log.info('Subtracting sky for all ifuslots')
 skies = []
 for k in np.arange(nexp):
-    sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
+    sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
     sky = biweight(scispectra[sel], axis=0)
     skies.append(sky)
     scispectra[sel] = scispectra[sel] - sky
@@ -1982,7 +1982,7 @@ log.info('Memory Used: %0.2f' % (process.memory_info()[0] / 1e9))
 #########################
 #obsskies = []
 #for k in np.arange(nexp):
-#    sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
+#    sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
 #    y = s1[sel] / ftf[sel] / Adj[sel]
 #    y[mask[sel]] = np.nan
 #    sky = biweight(y, axis=0)
@@ -2081,7 +2081,7 @@ f, Total_sources, info, A = advanced_analysis(tfile, fn, scispectra, allifus,
 #        RAFibers.append(ra)
 #        DecFibers.append(dec)
 #    for k in np.arange(nexp):
-#        sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
+#        sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
 #        E.ra, E.dec = [np.hstack(x) for x in [RAFibers[sel], DecFibers[sel]]]
 #        E.data = scispectra[sel]
 #        E.error = errspectra[sel]
