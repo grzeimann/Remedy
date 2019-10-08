@@ -974,7 +974,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
     # Check if tarred
 
     scinames, twinames, scitarfile, twitarfile = get_sci_twi_files()
-    specrow = table.row
+    specrow = tableh5.row
 
     for ind in ifuloop:
         ifuslot = '%03d' % h5table[ind]['ifuslot']
