@@ -1907,6 +1907,8 @@ _I = np.hstack(_I)
 h5table.close()
 h5table = None
 h5file = None
+process = psutil.Process(os.getpid())
+log.info('[MRK] Memory Used: %0.2f' % (process.memory_info()[0] / 1e9))
 
 # Get fiber to fiber from twilight spectra
 ftf = get_fiber_to_fiber(twispectra)
