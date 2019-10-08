@@ -14,6 +14,7 @@ import glob
 import matplotlib.pyplot as plt
 import numpy as np
 import os
+import gc
 import os.path as op
 import seaborn as sns
 import sys
@@ -728,13 +729,13 @@ def get_continuum(spectra, nbins=25):
             cont[i] = 0.0
     return cont
 
-def get_fiber_to_fiber(twispectra):
+def get_fiber_to_fiber(t):
     '''
     Get Fiber to Fiber from twilight spectra
     
     Parameters
     ----------
-    twispectra : 2d numpy array
+    t : 2d numpy array
         twilight spectra for each fiber
         
     Returns
@@ -742,14 +743,13 @@ def get_fiber_to_fiber(twispectra):
     ftf : 2d numpy array
         fiber to fiber normalization
     '''
-    t = twispectra * 1.
     t[t< 1e-8] = np.nan
     nbins = 25
     a = np.array([np.nanmedian(f, axis=1) 
                   for f in np.array_split(t, nbins, axis=1)]).swapaxes(0, 1)
     x = np.array([np.mean(xi) 
                   for xi in np.array_split(np.arange(t.shape[1]), nbins)])
-    ftf_init = np.zeros(twispectra.shape)
+    ftf_init = np.zeros(t.shape)
     X = np.arange(t.shape[1])
     for i, ai in enumerate(a):
         sel = np.isfinite(ai)
@@ -771,6 +771,66 @@ def get_fiber_to_fiber(twispectra):
     avg_spec = finer_avg * smooth_avg * big_Norm
     ftf = safe_division(t, avg_spec)
     return ftf
+
+def get_fiber_to_fiber_adj(scispectra, ftf, nexp):
+    Adj = ftf * 0.0
+    for k in np.arange(nexp):
+        sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
+        bins = 9
+        adj = np.zeros((len(sel), bins))
+        X = np.array([np.mean(xi) for xi in np.array_split(def_wave, bins)])
+        cnt = 0
+        for o, f in zip(np.array_split(scispectra[sel], bins, axis=1),
+                        np.array_split(ftf[sel], bins, axis=1)):
+            y = biweight(o / f, axis=1)
+            norm = biweight(y)
+            mask, cont = identify_sky_pixels(y, kernel=2.5)
+            adj[:, cnt] = cont / norm
+            cnt += 1
+        for j in np.arange(len(sel)):
+            good = np.isfinite(adj[j])
+            if good.sum() > bins-3:
+                Adj[sel[j]] = interp1d(X, adj[j], kind='quadratic',
+                                       fill_value='extrapolate')(def_wave)
+            else:
+                scispectra[sel(j)] = np.nan
+    return scispectra, Adj
+
+def get_mask(scispectra, C1, ftf, Adj, nexp):
+    mask = np.zeros(scispectra.shape, dtype=bool)
+
+    # Chi2 cut (pre-error adjustment, which is usually 0.8, so may need to think more)
+    badchi2 = (C1 > 5.)
+    y, x = np.where(badchi2)
+    for i in np.arange(-2, 3):
+        x1 = x + i
+        n = (x1 > -1) * (x1 < mask.shape[1])
+        mask[y[n], x1[n]] = True
+    
+    # Fiber to fiber < 0.5 (dead fiber) and Adj <0.9 or >1.1 should be considered questionable
+    badftf = (ftf < 0.5) + (np.abs(Adj-1.) > 0.1)
+    mask[badftf] = True
+    
+    # Error spectra with 0.0 are either outside the wavelength range or pixels masked by bad pixel mask
+    badpixmask = errspectra == 0.
+    mask[badpixmask] = True
+    
+    # Flag a fiber as bad if more than 200 columns are already flagged bad
+    badfiberflag = mask.sum(axis=1) > 200
+    badfibers = np.where(badfiberflag)[0]
+    mask[badfibers] = True
+    # Flag an amp as bad if more than 20% of their fibers are marked as bad
+    for k in np.arange(0, int(len(inds)/112./nexp)):
+        ll = k*112*nexp
+        hl = (k+1)*112*nexp
+        nbadfibers = badfiberflag[ll:hl].sum()
+        nfibers = hl - ll
+        idx = int(k / 4)
+        ampid = amps[k % 4]
+        if (nbadfibers*1./nfibers) > 0.2:
+            log.info('%03d%s Amplifier marked bad.' % (allifus[idx], ampid))
+            mask[ll:hl, :] = True
+    return mask
 
 def power_law(x, c1, c2=.5, c3=.15, c4=1., sig=2.5):
     '''
@@ -1046,9 +1106,10 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         
         process = psutil.Process(os.getpid())
         log.info('Memory Used: %0.2f' % (process.memory_info()[0] / 1e9))
-    
+        gc.collect()
     p, t, s, e, _i, c1 = [np.vstack(j) for j in [p, t, s, e, _i, c1]]
     tableh5.flush()
+    gc.collect()
     return p, t, s, e, fn, scitarfile, _i, c1, intm
 
 
@@ -1847,6 +1908,9 @@ ftf = get_fiber_to_fiber(twispectra)
 inds = np.arange(scispectra.shape[0])
 scispectra[errspectra == 0.] = np.nan
 del twispectra
+gc.collect()
+process = psutil.Process(os.getpid())
+log.info('Memory Used: %0.2f' % (process.memory_info()[0] / 1e9))
 
 # Number of exposures
 nexp = scispectra.shape[0] / 448 / nslots
@@ -1856,28 +1920,9 @@ log.info('Number of exposures: %i' % nexp)
 #############################
 log.info('Getting Fiber to Fiber Correction')
 
-Adj = ftf * 0.0
-for k in np.arange(nexp):
-    sel = np.where(np.array(inds / 112, dtype=int) % 3 == k)[0]
-    bins = 9
-    adj = np.zeros((len(sel), bins))
-    X = np.array([np.mean(xi) for xi in np.array_split(def_wave, bins)])
-    cnt = 0
-    for o, f in zip(np.array_split(scispectra[sel], bins, axis=1),
-                    np.array_split(ftf[sel], bins, axis=1)):
-        y = biweight(o / f, axis=1)
-        norm = biweight(y)
-        mask, cont = identify_sky_pixels(y, kernel=2.5)
-        adj[:, cnt] = cont / norm
-        cnt += 1
-    for j in np.arange(len(sel)):
-        good = np.isfinite(adj[j])
-        if good.sum() > bins-3:
-            Adj[sel[j]] = interp1d(X, adj[j], kind='quadratic',
-                                   fill_value='extrapolate')(def_wave)
-        else:
-            scispectra[sel(j)] = np.nan
-    
+scispectra, Adj = get_fiber_to_fiber_adj(scispectra, ftf, nexp)
+process = psutil.Process(os.getpid())
+log.info('Memory Used: %0.2f' % (process.memory_info()[0] / 1e9))    
 
 # Correct fiber to fiber
 scispectra = safe_division(scispectra, ftf * Adj)
@@ -1887,45 +1932,14 @@ errspectra = safe_division(errspectra, ftf * Adj)
 # Masking #
 ###########
 log.info('Masking bad pixels/fibers/amps')
-mask = np.zeros(scispectra.shape, dtype=bool)
 
-# Chi2 cut (pre-error adjustment, which is usually 0.8, so may need to think more)
-badchi2 = (C1 > 5.)
-y, x = np.where(badchi2)
-for i in np.arange(-2, 3):
-    x1 = x + i
-    n = (x1 > -1) * (x1 < mask.shape[1])
-    mask[y[n], x1[n]] = True
+mask = get_mask(scispectra, C1, ftf, Adj, nexp)
 
-# Fiber to fiber < 0.5 (dead fiber) and Adj <0.9 or >1.1 should be considered questionable
-badftf = (ftf < 0.5) + (np.abs(Adj-1.) > 0.1)
-mask[badftf] = True
-
-# Error spectra with 0.0 are either outside the wavelength range or pixels masked by bad pixel mask
-badpixmask = errspectra == 0.
-mask[badpixmask] = True
-
-# Flag a fiber as bad if more than 200 columns are already flagged bad
-badfiberflag = mask.sum(axis=1) > 200
-badfibers = np.where(badfiberflag)[0]
-mask[badfibers] = True
-
-del badchi2, badftf, badpixmask
-
-# Flag an amp as bad if more than 20% of their fibers are marked as bad
-for k in np.arange(0, int(len(inds)/112./nexp)):
-    ll = k*112*nexp
-    hl = (k+1)*112*nexp
-    nbadfibers = badfiberflag[ll:hl].sum()
-    nfibers = hl - ll
-    idx = int(k / 4)
-    ampid = amps[k % 4]
-    if (nbadfibers*1./nfibers) > 0.2:
-        log.info('%03d%s Amplifier marked bad.' % (allifus[idx], ampid))
-        mask[ll:hl, :] = True
 scispectra[mask] = np.nan
 errspectra[mask] = np.nan
 
+del mask
+gc.collect()
 ###################
 # Sky Subtraction #
 ###################
@@ -1936,6 +1950,9 @@ for k in np.arange(nexp):
     sky = biweight(scispectra[sel], axis=0)
     skies.append(sky)
     scispectra[sel] = scispectra[sel] - sky
+
+process = psutil.Process(os.getpid())
+log.info('Memory Used: %0.2f' % (process.memory_info()[0] / 1e9))
 
 #########################
 # Make 2d sky-sub image #
