@@ -2353,6 +2353,5 @@ with warnings.catch_warnings():
     write_cube(def_wave, xgrid, ygrid, zgrid, cubename, he)
 
 
-h5file.close()
     
         
