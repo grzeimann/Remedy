@@ -1814,6 +1814,67 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
 
     return f, Total_sources, info, A
 
+def plot_astrometry(f, A):
+    sel = f['dist'] < 2.5
+    log.info('Number of sources within 2.5": %i' % sel.sum())
+    mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
+    plt.figure(figsize=(6, 6))
+    plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
+    dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - mRA)
+    dd = 3600. * (f['Dec'][sel] - mDec)
+    plt.scatter(dr, dd, alpha=0.75, s=45, zorder=3)
+    plt.plot([0, 0], [-1.5, 1.5], 'k-', lw=1, alpha=0.5, zorder=1)
+    plt.plot([-1.5, 1.5], [0, 0], 'k-', lw=1, alpha=0.5, zorder=1)
+    plt.axis([-1.5, 1.5, -1.5, 1.5])
+    plt.xlabel(r'$\Delta$ RA (")', fontsize=16, labelpad=10)
+    plt.ylabel(r'$\Delta$ Dec (")', fontsize=16, labelpad=10)
+    plt.gca().tick_params(axis='both', which='both', direction='in')
+    plt.gca().tick_params(axis='y', which='both', left=True, right=True)
+    plt.gca().tick_params(axis='x', which='both', bottom=True, top=True)
+    plt.gca().tick_params(axis='both', which='major', length=15, width=3)
+    plt.gca().tick_params(axis='both', which='minor', length=6, width=2)
+    ML = MultipleLocator(0.5)
+    ml = MultipleLocator(0.1)
+    MLy = MultipleLocator(0.5)
+    mly = MultipleLocator(0.1)
+    plt.gca().xaxis.set_major_locator(ML)
+    plt.gca().yaxis.set_major_locator(MLy)
+    plt.gca().xaxis.set_minor_locator(ml)
+    plt.gca().yaxis.set_minor_locator(mly)
+    plt.savefig('astrometry_%s_%07d.png'  % (args.date, args.observation), dpi=300)
+
+def plot_photometry(GMag):
+    plt.figure(figsize=(6, 6))
+    mean, median, std = sigma_clipped_stats((GMag[:, 0] - GMag[:, 1]),
+                                            stdfunc=mad_std)
+    log.info('The mean, median, and std for the mag offset is for %s_%07d: '
+             '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean,
+                                      median, std))
+    plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
+    plt.gca().tick_params(axis='both', which='both', direction='in')
+    plt.gca().tick_params(axis='y', which='both', left=True, right=True)
+    plt.gca().tick_params(axis='x', which='both', bottom=True, top=True)
+    plt.gca().tick_params(axis='both', which='major', length=15, width=3)
+    plt.gca().tick_params(axis='both', which='minor', length=6, width=2)
+    ML = MultipleLocator(2)
+    ml = MultipleLocator(0.5)
+    MLy = MultipleLocator(0.2)
+    mly = MultipleLocator(0.05)
+    plt.gca().xaxis.set_major_locator(ML)
+    plt.gca().yaxis.set_major_locator(MLy)
+    plt.gca().xaxis.set_minor_locator(ml)
+    plt.gca().yaxis.set_minor_locator(mly)
+    plt.scatter(GMag[:, 0], GMag[:, 0] - GMag[:, 1] - median, alpha=0.75, s=75, zorder=3)
+    plt.plot([15, 22], [0, 0], 'k-', lw=1, alpha=0.5, zorder=1)
+    plt.plot([15, 22], [std, std], 'r--', lw=1)
+    plt.plot([15, 22], [-std, -std], 'r--', lw=1)
+    plt.xlim([15, 22])
+    plt.ylim([-0.5, 0.5])
+    plt.text(15.5, 0.3, 'Magnitude Offset: %0.2f +/- %0.2f' % (median, std))
+    plt.xlabel("Pan-STARRS g' (AB mag)", fontsize=16, labelpad=10)
+    plt.ylabel("Pan-STARRS g' - VIRUS g' + Cor", fontsize=16, labelpad=10)
+    plt.savefig('mag_offset_%s_%07d.png'  % (args.date, args.observation), dpi=300)
+
 # =============================================================================
 # MAIN SCRIPT
 # =============================================================================
@@ -1870,6 +1931,8 @@ class Info(IsDescription):
 class CatSpectra(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
      dec  = Float32Col()    # float  (single-precision)
+     gmag  = Float32Col()    # float  (single-precision)
+     syngmag  = Float32Col()    # float  (single-precision)
      spectrum  = Float32Col((1036,))    # float  (single-precision)
      error  = Float32Col((1036,))    # float  (single-precision)
      weight  = Float32Col((1036,))    # float  (single-precision)
@@ -2140,11 +2203,17 @@ if objsel.sum():
     exp_ratio = np.ones((nexp,))
     for i in np.arange(1, nexp):
         exp_ratio[i] = mult_offset[i] / mult_offset[0]
+        sel = (np.array(inds / 112, dtype=int) % nexp) == i
+        if np.isfinite(exp_ratio[i]):
+            scispectra[sel] = scispectra[sel] / exp_ratio[i]
+            errspectra[sel] = errspectra[sel] / exp_ratio[i]
         log.info('Spectroscopic ratio for exposure %i to exposure 1: %0.2f' %
                  (i+1, exp_ratio[i]))
     fits.PrimaryHDU(GMag).writeto('testmag_%s_%07d.fits' %
                                   (args.date, args.observation))
-    
+
+f, Total_sources, info, A = advanced_analysis(tfile, fn, scispectra, allifus,
+                                              pos, A, scale, ran, coords)
 
 # =============================================================================
 # Detections
@@ -2190,45 +2259,60 @@ outfile_name = '%s_%07d_recon.png' % (args.date, args.observation)
 cofes_plots(ifunums, specnums, filename_array, outfile_name)
 
 
-# Extract
-RAFibers = []
-DecFibers = []
-for i, _info in enumerate(info):
-    image, fn, name, ui, tfile, sources = _info
-    N = 448 * nexp
-    P = pos[N*i:(i+1)*N]
-    ra, dec = A.get_ifupos_ra_dec('%03d' % ui, P[:, 0], P[:, 1])
-    RAFibers.append(ra)
-    DecFibers.append(dec)
-mRA, mDec = A.tp.wcs_pix2world(f['fx'], f['fy'], 1)
+# =============================================================================
+# Extraction of nearby sources
+# =============================================================================
+
 E = Extract()
-E.psf = E.moffat_psf(1.8, 10.5, 0.25)
+tophat = E.tophat_psf(3., 10.5, 0.25)
+moffat = E.moffat_psf(1.75, 10.5, 0.25)
+newpsf = tophat[0]*moffat[0]
+newpsf /= newpsf.sum()
+psf = [newpsf, moffat[1], moffat[2]]
+E.psf = psf
+E.get_ADR_RAdec(A)
+objsel = (f['Cgmag'] < 22.) * (f['dist'] < 1.)
+mRA, mDec = A.tp.wcs_pix2world(f['fx'][objsel], f['fy'][objsel], 1)
 E.coords = SkyCoord(mRA*units.deg, mDec*units.deg, frame='fk5')
-E.ra, E.dec = [np.hstack(x) for x in [RAFibers, DecFibers]]
+GMag = np.ones((len(E.coords), 2)) * np.nan
+GMag[:, 0] = f['Cgmag'][objsel]
+E.ra, E.dec = (RAFibers, DecFibers)
 E.data = scispectra
 E.error = errspectra
-E.mask = np.isfinite(scispectra)
-E.get_ADR_RAdec(A)
-log.info('Beginning Extraction')
+E.mask = np.isfinite(scispectra[sel])
 spec_list = []
 for i in np.arange(len(E.coords)):
-    spec_list.append(E.get_spectrum_by_coord_index(i))
-log.info('Finished Extraction')
+    specinfo = E.get_spectrum_by_coord_index(i)
+    gmask = np.isfinite(specinfo[0]) * (specinfo[2] > (0.7))
+    if gmask.sum() > 50.:
+        gmag = np.dot(specinfo[0][gmask], filtg[gmask]) / np.sum(filtg[gmask])
+        GMag[i, 1] = -2.5 * np.log10(gmag) + 23.9
+    else:
+        GMag[i, 1] = np.nan
+    spec_list.append([mRA, mDec, GMag[i, 0], GMag[i, 1]] + specinfo)
+
+try:
+    plot_astrometry(f, A)
+    plot_photometry(GMag)
+except:
+    log.info('Gonna skip these plots')
 
 table = h5spec.create_table(h5spec.root, 'CatSpectra', CatSpectra, 
                             "Spectral Extraction Information")
 
 specrow = table.row
-for ra, dec, specinfo in zip(mRA, mDec, spec_list):
-    specrow['ra'] = ra
-    specrow['dec'] = dec
-    if len(specinfo[0]) > 0:
-        specrow['spectrum'] = specinfo[0]
-        specrow['error'] = specinfo[1]
-        specrow['weight'] = specinfo[2]
-        specrow['image'] = specinfo[3]
-        specrow['xgrid'] = specinfo[4]
-        specrow['ygrid'] = specinfo[5]
+for specinfo in spec_list:
+    specrow['ra'] = specinfo[0]
+    specrow['dec'] = specinfo[1]
+    specrow['gmag'] = specinfo[2]
+    specrow['syngmag'] = specinfo[3]
+    if len(specinfo[4]) > 0:
+        specrow['spectrum'] = specinfo[4]
+        specrow['error'] = specinfo[5]
+        specrow['weight'] = specinfo[6]
+        specrow['image'] = specinfo[7]
+        specrow['xgrid'] = specinfo[8]
+        specrow['ygrid'] = specinfo[9]
     specrow.append()
 table.flush()
 
@@ -2308,73 +2392,6 @@ if args.simulate:
                                  args.source_x, args.source_y, 
                                  args.source_seeing)
     scispectra[N*i:(i+1)*N] = simdata * 1.
-
-try:
-    sel = f['dist'] < 2.5
-    log.info('Number of sources within 2.5": %i' % sel.sum())
-    mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
-    plt.figure(figsize=(6, 6))
-    plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
-    dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - mRA)
-    dd = 3600. * (f['Dec'][sel] - mDec)
-    D = np.sqrt((f['fx'][sel] - f['fx'][sel][:, np.newaxis])**2 +
-                (f['fy'][sel] - f['fy'][sel][:, np.newaxis])**2)
-    D[D==0.] = 999.
-    noneigh = np.min(D, axis=0) > 8.
-    nsel = (np.sqrt(dr**2 + dd**2) < 1.) * noneigh 
-    plt.scatter(dr, dd, alpha=0.75, s=45, zorder=3)
-    plt.plot([0, 0], [-1.5, 1.5], 'k-', lw=1, alpha=0.5, zorder=1)
-    plt.plot([-1.5, 1.5], [0, 0], 'k-', lw=1, alpha=0.5, zorder=1)
-    plt.axis([-1.5, 1.5, -1.5, 1.5])
-    plt.xlabel(r'$\Delta$ RA (")', fontsize=16, labelpad=10)
-    plt.ylabel(r'$\Delta$ Dec (")', fontsize=16, labelpad=10)
-    plt.gca().tick_params(axis='both', which='both', direction='in')
-    plt.gca().tick_params(axis='y', which='both', left=True, right=True)
-    plt.gca().tick_params(axis='x', which='both', bottom=True, top=True)
-    plt.gca().tick_params(axis='both', which='major', length=15, width=3)
-    plt.gca().tick_params(axis='both', which='minor', length=6, width=2)
-    ML = MultipleLocator(0.5)
-    ml = MultipleLocator(0.1)
-    MLy = MultipleLocator(0.5)
-    mly = MultipleLocator(0.1)
-    plt.gca().xaxis.set_major_locator(ML)
-    plt.gca().yaxis.set_major_locator(MLy)
-    plt.gca().xaxis.set_minor_locator(ml)
-    plt.gca().yaxis.set_minor_locator(mly)
-    plt.savefig('astrometry_%s_%07d.png'  % (args.date, args.observation), dpi=300)
-    plt.figure(figsize=(6, 6))
-    Mg = Total_sources[sel, 4][nsel]
-    mg = Total_sources[sel, 2][nsel]
-    ss = (Mg > 15) * (Mg < 21) * (mg < 25.)
-    mean, median, std = sigma_clipped_stats((mg - Mg)[ss], stdfunc=mad_std)
-    log.info('The mean, median, and std for the mag offset is for %s_%07d: '
-             '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean, median, std))
-    plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
-    plt.gca().tick_params(axis='both', which='both', direction='in')
-    plt.gca().tick_params(axis='y', which='both', left=True, right=True)
-    plt.gca().tick_params(axis='x', which='both', bottom=True, top=True)
-    plt.gca().tick_params(axis='both', which='major', length=15, width=3)
-    plt.gca().tick_params(axis='both', which='minor', length=6, width=2)
-    ML = MultipleLocator(2)
-    ml = MultipleLocator(0.5)
-    MLy = MultipleLocator(0.2)
-    mly = MultipleLocator(0.05)
-    plt.gca().xaxis.set_major_locator(ML)
-    plt.gca().yaxis.set_major_locator(MLy)
-    plt.gca().xaxis.set_minor_locator(ml)
-    plt.gca().yaxis.set_minor_locator(mly)
-    plt.scatter(Mg, mg - Mg - median, alpha=0.75, s=75, zorder=3)
-    plt.plot([15, 22], [0, 0], 'k-', lw=1, alpha=0.5, zorder=1)
-    plt.plot([15, 22], [std, std], 'r--', lw=1)
-    plt.plot([15, 22], [-std, -std], 'r--', lw=1)
-    plt.xlim([15, 22])
-    plt.ylim([-0.5, 0.5])
-    plt.text(15.5, 0.3, 'Magnitude Offset: %0.2f +/- %0.2f' % (median, std))
-    plt.xlabel("Pan-STARRS g' (AB mag)", fontsize=16, labelpad=10)
-    plt.ylabel("VIRUS g' - Pan-STARRS g' + Cor", fontsize=16, labelpad=10)
-    plt.savefig('mag_offset_%s_%07d.png'  % (args.date, args.observation), dpi=300)
-except:
-    log.info('Gonna skip these plots')
 
 
 if args.simulate:
