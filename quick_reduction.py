@@ -2142,7 +2142,7 @@ if objsel.sum():
         exp_ratio[i] = mult_offset[i] / mult_offset[0]
         log.info('Spectroscopic ratio for exposure %i to exposure 1: %0.2f' %
                  (i+1, exp_ratio[i]))
-    fits.PrimaryHDU(GMag).writeto('testmag_%s_%07d'
+    fits.PrimaryHDU(GMag).writeto('testmag_%s_%07d.fits' %
                                   (args.date, args.observation))
     
 
