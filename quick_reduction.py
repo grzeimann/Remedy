@@ -2130,7 +2130,6 @@ if objsel.sum():
             specinfo = E.get_spectrum_by_coord_index(i)
             gmask = np.isfinite(specinfo[0]) * (specinfo[2] > 0.7)
             gmag = np.dot(specinfo[0][gmask], filtg[gmask]) / np.sum(filtg[gmask])
-            print(i, gmag)
             GMag[i, k+1] = -2.5 * np.log10(gmag) + 23.9
     mult_offset = np.ones((nexp,))
     for i in np.arange(nexp):
