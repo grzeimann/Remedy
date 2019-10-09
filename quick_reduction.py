@@ -2209,8 +2209,7 @@ if objsel.sum():
             errspectra[sel] = errspectra[sel] / exp_ratio[i]
         log.info('Spectroscopic ratio for exposure %i to exposure 1: %0.2f' %
                  (i+1, exp_ratio[i]))
-    fits.PrimaryHDU(GMag).writeto('testmag_%s_%07d.fits' %
-                                  (args.date, args.observation))
+
 
 f, Total_sources, info, A = advanced_analysis(tfile, fn, scispectra, allifus,
                                               pos, A, scale, ran, coords)
