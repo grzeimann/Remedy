@@ -2126,7 +2126,6 @@ if objsel.sum():
         E.mask = np.isfinite(scispectra[sel])
         for i in np.arange(len(E.coords)):
             specinfo = E.get_spectrum_by_coord_index(i)
-            print(specinfo[0][400:420], specinfo[2][400:420])
             gmask = np.isfinite(specinfo[0]) * (specinfo[2] > (0.7 / 3.))
             if gmask.sum() > 50.:
                 gmag = np.dot(specinfo[0][gmask], filtg[gmask]) / np.sum(filtg[gmask])
@@ -2142,7 +2141,9 @@ if objsel.sum():
     for i in np.arange(1, nexp):
         exp_ratio[i] = mult_offset[i] / mult_offset[0]
         log.info('Spectroscopic ratio for exposure %i to exposure 1: %0.2f' %
-                 (i+1, exp_ratio[i]))        
+                 (i+1, exp_ratio[i]))
+    fits.PrimaryHDU(GMag).writeto('testmag_%s_%07d'
+                                  (args.date, args.observation))
     
 
 # =============================================================================
