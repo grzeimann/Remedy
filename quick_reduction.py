@@ -2118,7 +2118,7 @@ if objsel.sum():
     E.coords = SkyCoord(mRA*units.deg, mDec*units.deg, frame='fk5')
     spec_list = []
     GMag = np.zeros((len(E.coords), nexp+1))
-    GMag[:, 0] = f['Cgmag']
+    GMag[:, 0] = f['Cgmag'][objsel]
     for k in np.arange(nexp):
         sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
         E.ra, E.dec = (RAFibers[sel], DecFibers[sel])
