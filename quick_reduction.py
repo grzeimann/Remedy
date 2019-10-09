@@ -2111,12 +2111,12 @@ newpsf = tophat[0]*moffat[0]
 newpsf /= newpsf.sum()
 psf = [newpsf, moffat[1], moffat[2]]
 E.psf = psf
+E.get_ADR_RAdec(A)
 objsel = (f['Cgmag'] < 21.) * (f['dist'] < 1.)
 
 if objsel.sum():
     mRA, mDec = A.tp.wcs_pix2world(f['fx'][objsel], f['fy'][objsel], 1)
     E.coords = SkyCoord(mRA*units.deg, mDec*units.deg, frame='fk5')
-    spec_list = []
     GMag = np.zeros((len(E.coords), nexp+1))
     GMag[:, 0] = f['Cgmag'][objsel]
     for k in np.arange(nexp):
@@ -2125,8 +2125,7 @@ if objsel.sum():
         E.data = scispectra[sel]
         E.error = errspectra[sel]
         E.mask = np.isfinite(scispectra[sel])
-        E.get_ADR_RAdec(A)
-        spec_list = []
+        print(E.ra, E.dec, mRA, mDec, np.sum(E.mask))
         for i in np.arange(len(E.coords)):
             specinfo = E.get_spectrum_by_coord_index(i)
             gmask = np.isfinite(specinfo[0]) * (specinfo[2] > 0.7)
