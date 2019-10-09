@@ -2127,9 +2127,12 @@ if objsel.sum():
         for i in np.arange(len(E.coords)):
             specinfo = E.get_spectrum_by_coord_index(i)
             print(specinfo[0][400:420], specinfo[2][400:420])
-            gmask = np.isfinite(specinfo[0]) * (specinfo[2] > 0.7)
-            gmag = np.dot(specinfo[0][gmask], filtg[gmask]) / np.sum(filtg[gmask])
-            GMag[i, k+1] = -2.5 * np.log10(gmag) + 23.9
+            gmask = np.isfinite(specinfo[0]) * (specinfo[2] > (0.7 / 3.))
+            if gmask.sum() > 50.:
+                gmag = np.dot(specinfo[0][gmask], filtg[gmask]) / np.sum(filtg[gmask])
+                GMag[i, k+1] = -2.5 * np.log10(gmag) + 23.9
+            else:
+                GMag[i, k+1] = np.nan
     mult_offset = np.ones((nexp,))
     for i in np.arange(nexp):
         mult_offset[i] = 10**(-0.4 * (biweight(GMag[:, 0] - GMag[:, i+1])))
