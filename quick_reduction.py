@@ -1131,7 +1131,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
                 x.append(i * 1) 
         
         process = psutil.Process(os.getpid())
-        log.info('Memory Used: %0.2f' % (process.memory_info()[0] / 1e9))
+        log.info('Memory Used: %0.2f Gb' % (process.memory_info()[0] / 1e9))
     _i = np.vstack(_i)
     tableh5.flush()
     tableh5 = None
@@ -1814,15 +1814,21 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
 
     return f, Total_sources, info, A
 
+# =============================================================================
+# MAIN SCRIPT
+# =============================================================================
+
+# =============================================================================
 # Setup logging
+# =============================================================================
 log = setup_logging()
 if args.hdf5file is None:
     log.error('Please specify an hdf5file.  A default is not yet setup.')
     sys.exit(1)
 
-###########
-# H5 File #
-###########
+# =============================================================================
+# H5 File 
+# =============================================================================
 name = ('%s_%07d.h5' %
                 (args.date, args.observation))
 if op.exists(name):
@@ -1871,32 +1877,40 @@ class CatSpectra(IsDescription):
      xgrid = Float32Col((21, 21))
      ygrid = Float32Col((21, 21))
 
-
-###############################################################################
-# MAIN SCRIPT
-
+# =============================================================================
 # Get directory name for path building
+# =============================================================================
 DIRNAME = get_script_path()
 
+# =============================================================================
 # Instrument for reductions
+# =============================================================================
 instrument = 'virus'
 
 
 
+# =============================================================================
 # Open HDF5 file
+# =============================================================================
 h5file = open_file(args.hdf5file, mode='r')
 h5table = h5file.root.Cals
 ifuslots = h5table.cols.ifuslot[:]
 
+# =============================================================================
 # Get unique IFU slot names
+# =============================================================================
 u_ifuslots = np.unique(ifuslots)
 
+# =============================================================================
 # Get photometric filter
+# =============================================================================
 T = Table.read(op.join(DIRNAME, 'filters/ps1g.dat'), format='ascii')
 filtg = np.interp(def_wave, T['col1'], T['col2'], left=0.0, right=0.0)
 filtg /= filtg.sum()
  
+# =============================================================================
 # Collect indices for ifuslots (target and neighbors)
+# =============================================================================
 sel1 = list(np.where(args.ifuslot == ifuslots)[0])
 ifuslotn = get_slot_neighbors(args.ifuslot, u_ifuslots,
                               dist=args.neighbor_dist)
@@ -1917,7 +1931,9 @@ allifus = np.hstack(allifus)
 
 
 
+# =============================================================================
 # Reducing IFUSLOT
+# =============================================================================
 tableh5 = h5spec.create_table(h5spec.root, 'Cals', Cals, 
                             "Cal Information")
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
@@ -1929,36 +1945,39 @@ h5table.close()
 h5table = None
 h5file = None
 process = psutil.Process(os.getpid())
-log.info('[MRK] Memory Used: %0.2f' % (process.memory_info()[0] / 1e9))
+log.info('[MRK] Memory Used: %0.2f Gb' % (process.memory_info()[0] / 1e9))
 
+# =============================================================================
 # Get fiber to fiber from twilight spectra
+# =============================================================================
 ftf = get_fiber_to_fiber(twispectra)
 inds = np.arange(scispectra.shape[0])
 scispectra[errspectra == 0.] = np.nan
 del twispectra
 gc.collect()
 process = psutil.Process(os.getpid())
-log.info('Memory Used: %0.2f' % (process.memory_info()[0] / 1e9))
+log.info('Memory Used: %0.2f Gb' % (process.memory_info()[0] / 1e9))
 
+# =============================================================================
 # Number of exposures
+# =============================================================================
 nexp = scispectra.shape[0] / 448 / nslots
 log.info('Number of exposures: %i' % nexp)
-#############################
-# Fiber to Fiber Correction #
-#############################
+
+# =============================================================================
+# Fiber to Fiber Adjustment correction
+# =============================================================================
 log.info('Getting Fiber to Fiber Correction')
 
 scispectra, Adj = get_fiber_to_fiber_adj(scispectra, ftf, nexp)
 process = psutil.Process(os.getpid())
-log.info('Memory Used: %0.2f' % (process.memory_info()[0] / 1e9))    
-
-# Correct fiber to fiber
+log.info('Memory Used: %0.2f Gb' % (process.memory_info()[0] / 1e9))    
 scispectra = safe_division(scispectra, ftf * Adj)
 errspectra = safe_division(errspectra, ftf * Adj)
 
-###########
-# Masking #
-###########
+# =============================================================================
+# Masking
+# =============================================================================
 log.info('Masking bad pixels/fibers/amps')
 
 mask = get_mask(scispectra, C1, ftf, Adj, nexp)
@@ -1966,9 +1985,9 @@ mask = get_mask(scispectra, C1, ftf, Adj, nexp)
 scispectra[mask] = np.nan
 errspectra[mask] = np.nan
 
-###################
-# Sky Subtraction #
-###################
+# =============================================================================
+# Sky Subtraction
+# =============================================================================
 log.info('Subtracting sky for all ifuslots')
 skies = []
 for k in np.arange(nexp):
@@ -1977,12 +1996,9 @@ for k in np.arange(nexp):
     skies.append(sky)
     scispectra[sel] = scispectra[sel] - sky
 
-process = psutil.Process(os.getpid())
-log.info('Memory Used: %0.2f' % (process.memory_info()[0] / 1e9))
-
-#########################
-# Make 2d sky-sub image #
-#########################
+# =============================================================================
+# Make 2d sky-sub image 
+# =============================================================================
 #obsskies = []
 #for k in np.arange(nexp):
 #    sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
@@ -2008,35 +2024,41 @@ log.info('Memory Used: %0.2f' % (process.memory_info()[0] / 1e9))
 #        model_image = image * 0.
 #    skysub_images.append([image, image-model_image, _V[2], (N+M)/2])
 
-
+# =============================================================================
+# Ifuslot dictionary
+# =============================================================================
 ui_dict = {}
 for k, _V in enumerate(intm):
     specid, ifuslot, ifuid, amp, expn = _V[2].split('_')
     if ifuslot not in ui_dict:
         ui_dict[ifuslot] = [specid, ifuid]
 
-
-back_val, error_cor = biweight((scispectra / errspectra)[:, 800:900], calc_std=True)
+# =============================================================================
+# Correct error to sigma = 1., error typically too large by 25%
+# =============================================================================
+back_val, error_cor = biweight((scispectra / errspectra)[:, 800:900],
+                               calc_std=True)
 log.info('Error Correction: %0.2f' % error_cor)
 errspectra *= error_cor
-# Take the ratio of the 2nd and 3rd sky to the first
-# Assume the ratio is due to illumination differences
-# Correct multiplicatively to the first exposure's illumination (scalar corrections)
-exp_ratio = np.ones((nexp,))
 
+# =============================================================================
+# Calculate ratio of skies from multiple exposures. Normalization factor??
+# =============================================================================
+exp_ratio_sky = np.ones((nexp,))
 for i in np.arange(1, nexp):
-    exp_ratio[i] = np.nanmedian(skies[i] / skies[0])
+    exp_ratio_sky[i] = np.nanmedian(skies[i] / skies[0])
     log.info('Ratio for exposure %i to exposure 1: %0.2f' %
-             (i+1, exp_ratio[i]))
+             (i+1, exp_ratio_sky[i]))
 
-
-# Get RA, Dec from header
-ra, dec, pa = get_ra_dec_from_header(tfile, fn)
-
+# =============================================================================
 # Build astrometry class
+# =============================================================================
+ra, dec, pa = get_ra_dec_from_header(tfile, fn)
 A = Astrometry(ra, dec, pa, 0., 0., fplane_file=args.fplane_file)
 
+# =============================================================================
 # Query catalog Sources in the area
+# =============================================================================
 log.info('Querying Pan-STARRS at: %0.5f %0.5f' % (ra, dec))
 pname = 'Panstarrs_%0.6f_%0.5f_%0.4f.dat' % (ra, dec, 11. / 60.)
 if op.exists(pname):
@@ -2055,50 +2077,77 @@ raC, decC, gC = (np.array(Pan['raMean']), np.array(Pan['decMean']),
                  np.array(Pan['gApMag']))
 coords = SkyCoord(raC*units.degree, decC*units.degree, frame='fk5')
 
+
+# =============================================================================
+# Find sources in collapsed frames, match to archive, fit for astrometry
+# =============================================================================
 scale = 0.75
 ran = [-23., 25., -23., 25.]
 f, Total_sources, info, A = advanced_analysis(tfile, fn, scispectra, allifus,
                                               pos, A, scale, ran, coords)
 
-#####################
-# Get normalization #
-#####################
-#E = Extract()
-#tophat = E.tophat_psf(3., 10.5, 0.25)
-#moffat = E.moffat_psf(1.75, 10.5, 0.25)
-#newpsf = tophat[0]*moffat[0]
-#newpsf /= newpsf.sum()
-#psf = [newpsf, moffat[1], moffat[2]]
-#E.psf = psf
-#objsel = f['Cgmag'] < 21.
-#if objsel.sum():
-#    mRA, mDec = A.tp.wcs_pix2world(f['fx'], f['fy'], 1)
-#    E.coords = SkyCoord(mRA*units.deg, mDec*units.deg, frame='fk5')
-#    RAFibers, DecFibers = ([], [])
-#    for i, _info in enumerate(info):
-#        image, fn, name, ui, tfile, sources = _info
-#        N = 448 * nexp
-#        data = scispectra[N*i:(i+1)*N]
-#        P = pos[N*i:(i+1)*N]
-#        ra, dec = A.get_ifupos_ra_dec('%03d' % ui, P[:, 0], P[:, 1])
-#        RAFibers.append(ra)
-#        DecFibers.append(dec)
-#    for k in np.arange(nexp):
-#        sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
-#        E.ra, E.dec = [np.hstack(x) for x in [RAFibers[sel], DecFibers[sel]]]
-#        E.data = scispectra[sel]
-#        E.error = errspectra[sel]
-#        E.mask = mask[sel]
-#        E.get_ADR_RAdec(A)
-#        log.info('Beginning Extraction for exposure %i' % k+1)
-#        spec_list = []
-#        for i in np.arange(len(E.coords)):
-#            spec_list.append(E.get_spectrum_by_coord_index(i))
+
+# =============================================================================
+# Get RA and Declination for each Fiber
+# =============================================================================
+RAFibers, DecFibers = ([], [])
+for i, _info in enumerate(info):
+    image, fn, name, ui, tfile, sources = _info
+    N = 448 * nexp
+    data = scispectra[N*i:(i+1)*N]
+    P = pos[N*i:(i+1)*N]
+    ra, dec = A.get_ifupos_ra_dec('%03d' % ui, P[:, 0], P[:, 1])
+    RAFibers.append(ra)
+    DecFibers.append(dec)
+RAFibers, DecFibers = [np.hstack(x) for x in [RAFibers, DecFibers]]
+
+# =============================================================================
+# Get Normalization
+# =============================================================================
+E = Extract()
+tophat = E.tophat_psf(3., 10.5, 0.25)
+moffat = E.moffat_psf(1.75, 10.5, 0.25)
+newpsf = tophat[0]*moffat[0]
+newpsf /= newpsf.sum()
+psf = [newpsf, moffat[1], moffat[2]]
+E.psf = psf
+objsel = (f['Cgmag'] < 21.) * (f['dist'] < 1.)
+
+if objsel.sum():
+    mRA, mDec = A.tp.wcs_pix2world(f['fx'], f['fy'], 1)
+    E.coords = SkyCoord(mRA*units.deg, mDec*units.deg, frame='fk5')
+    spec_list = []
+    GMag = np.zeros((len(E.coords), nexp+1))
+    GMag[:, 0] = f['Cgmag']
+    for k in np.arange(nexp):
+        sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
+        E.ra, E.dec = (RAFibers[sel], DecFibers[sel])
+        E.data = scispectra[sel]
+        E.error = errspectra[sel]
+        E.mask = mask[sel]
+        E.get_ADR_RAdec(A)
+        log.info('Beginning Extraction for exposure %i' % k+1)
+        spec_list = []
+        for i in np.arange(len(E.coords)):
+            specinfo = E.get_spectrum_by_coord_index(i)
+            gmask = np.isfinite(specinfo[0])
+            gmag = np.dot(specinfo[0][gmask], filtg[gmask]) / np.sum(filtg[gmask])
+            GMag[i, k+1] = -2.5 * np.log10(gmag) + 23.9
+    mult_offset = np.ones((nexp,))
+    for i in np.arange(nexp):
+        mult_offset[i] = 10**(-0.4 * (biweight(GMag[:, 0] - GMag[:, i+1])))
+        log.info('Multiplicative offset for exposure %i to Catalog: %0.2f' %
+                 (i+1, mult_offset[i]))
+    exp_ratio = np.ones((nexp,))
+    for i in np.arange(1, nexp):
+        exp_ratio[i] = mult_offset[i] / mult_offset[0]
+        log.info('Spectroscopic ratio for exposure %i to exposure 1: %0.2f' %
+                 (i+1, exp_ratio[i]))        
     
 
-##############
-# Detections #
-##############
+# =============================================================================
+# Detections
+# =============================================================================
 #E = Extract()
 #tophat = E.tophat_psf(3., 10.5, 0.25)
 #moffat = E.moffat_psf(1.75, 10.5, 0.25)
@@ -2230,7 +2279,7 @@ log.info('Finished writing Info')
 #log.info('Finished writing Images')
 
 process = psutil.Process(os.getpid())
-log.info('Memory Used: %0.2f' % (process.memory_info()[0] / 1e9))
+log.info('Memory Used: %0.2f Gb' % (process.memory_info()[0] / 1e9))
 h5spec.close()
 h5spec = None
 
