@@ -1941,8 +1941,7 @@ pos, twispectra, scispectra, errspectra, fn, tfile, _I, C1, intm = reduce_ifuslo
                                                                         h5table, tableh5)
 
 _I = np.hstack(_I)
-h5table.close()
-h5table = None
+h5file.close()
 h5file = None
 process = psutil.Process(os.getpid())
 log.info('[MRK] Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
@@ -2125,9 +2124,9 @@ if objsel.sum():
         E.data = scispectra[sel]
         E.error = errspectra[sel]
         E.mask = np.isfinite(scispectra[sel])
-        print(E.ra, E.dec, mRA, mDec, np.sum(E.mask))
         for i in np.arange(len(E.coords)):
             specinfo = E.get_spectrum_by_coord_index(i)
+            print(specinfo[0][400:420], specinfo[2][400:420])
             gmask = np.isfinite(specinfo[0]) * (specinfo[2] > 0.7)
             gmag = np.dot(specinfo[0][gmask], filtg[gmask]) / np.sum(filtg[gmask])
             GMag[i, k+1] = -2.5 * np.log10(gmag) + 23.9
