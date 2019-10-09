@@ -2114,7 +2114,7 @@ E.psf = psf
 objsel = (f['Cgmag'] < 21.) * (f['dist'] < 1.)
 
 if objsel.sum():
-    mRA, mDec = A.tp.wcs_pix2world(f['fx'], f['fy'], 1)
+    mRA, mDec = A.tp.wcs_pix2world(f['fx'][objsel], f['fy'][objsel], 1)
     E.coords = SkyCoord(mRA*units.deg, mDec*units.deg, frame='fk5')
     spec_list = []
     GMag = np.zeros((len(E.coords), nexp+1))
