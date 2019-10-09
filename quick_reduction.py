@@ -2124,7 +2124,7 @@ if objsel.sum():
         E.ra, E.dec = (RAFibers[sel], DecFibers[sel])
         E.data = scispectra[sel]
         E.error = errspectra[sel]
-        E.mask = mask[sel]
+        E.mask = ~mask[sel]
         E.get_ADR_RAdec(A)
         spec_list = []
         for i in np.arange(len(E.coords)):
