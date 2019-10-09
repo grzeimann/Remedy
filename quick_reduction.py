@@ -1131,7 +1131,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
                 x.append(i * 1) 
         
         process = psutil.Process(os.getpid())
-        log.info('Memory Used: %0.2f Gb' % (process.memory_info()[0] / 1e9))
+        log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
     _i = np.vstack(_i)
     tableh5.flush()
     tableh5 = None
@@ -1945,7 +1945,7 @@ h5table.close()
 h5table = None
 h5file = None
 process = psutil.Process(os.getpid())
-log.info('[MRK] Memory Used: %0.2f Gb' % (process.memory_info()[0] / 1e9))
+log.info('[MRK] Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
 
 # =============================================================================
 # Get fiber to fiber from twilight spectra
@@ -1956,7 +1956,7 @@ scispectra[errspectra == 0.] = np.nan
 del twispectra
 gc.collect()
 process = psutil.Process(os.getpid())
-log.info('Memory Used: %0.2f Gb' % (process.memory_info()[0] / 1e9))
+log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
 
 # =============================================================================
 # Number of exposures
@@ -1971,7 +1971,7 @@ log.info('Getting Fiber to Fiber Correction')
 
 scispectra, Adj = get_fiber_to_fiber_adj(scispectra, ftf, nexp)
 process = psutil.Process(os.getpid())
-log.info('Memory Used: %0.2f Gb' % (process.memory_info()[0] / 1e9))    
+log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))    
 scispectra = safe_division(scispectra, ftf * Adj)
 errspectra = safe_division(errspectra, ftf * Adj)
 
@@ -2126,7 +2126,6 @@ if objsel.sum():
         E.error = errspectra[sel]
         E.mask = mask[sel]
         E.get_ADR_RAdec(A)
-        log.info('Beginning Extraction for exposure %i' % k+1)
         spec_list = []
         for i in np.arange(len(E.coords)):
             specinfo = E.get_spectrum_by_coord_index(i)
@@ -2279,7 +2278,7 @@ log.info('Finished writing Info')
 #log.info('Finished writing Images')
 
 process = psutil.Process(os.getpid())
-log.info('Memory Used: %0.2f Gb' % (process.memory_info()[0] / 1e9))
+log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
 h5spec.close()
 h5spec = None
 
