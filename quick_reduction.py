@@ -1822,7 +1822,15 @@ def plot_astrometry(f, A):
     plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
     dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - mRA)
     dd = 3600. * (f['Dec'][sel] - mDec)
+    mean, medianr, stdr = sigma_clipped_stats(dr, stdfunc=mad_std)
+    mean, mediand, stdd = sigma_clipped_stats(dd, stdfunc=mad_std)
+    t = np.linspace(0, np.pi * 2., 361)
+    cx = np.cos(t) * stdr + medianr
+    cy = np.sin(t) * stdd + mediand
     plt.scatter(dr, dd, alpha=0.75, s=45, zorder=3)
+    plt.text(-1.2, 1.2, r'$\Delta$ RA (") = %0.2f +/ %0.2f' % (medianr, stdr))
+    plt.text(-1.2, 1.05, r'$\Delta$ Dec (") = %0.2f +/ %0.2f' % (medianD, stdD))
+    plt.plot(cx, cy, 'r--', lw=1)
     plt.plot([0, 0], [-1.5, 1.5], 'k-', lw=1, alpha=0.5, zorder=1)
     plt.plot([-1.5, 1.5], [0, 0], 'k-', lw=1, alpha=0.5, zorder=1)
     plt.axis([-1.5, 1.5, -1.5, 1.5])
