@@ -1603,7 +1603,7 @@ def fit_astrometry(f, A1, thresh=10.):
     '''
     A = A1
     P = Polynomial2D(1)
-    fitter = FittingWithOutlierRemoval(LevMarLSQFitter(), sigma_clip)
+    fitter = FittingWithOutlierRemoval(LevMarLSQFitter(), sigma_clip)()
     sel = (f['dist'] < thresh) * (f['Cgmag']<22.) * (f['Cgmag'] > 15.)
     dr = np.cos(np.deg2rad(f['Dec']))*f['dra']*3600.
     dd = f['ddec']*3600.
