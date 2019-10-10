@@ -1549,7 +1549,7 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords,
     gmags = np.where(phot_table['aperture_sum'] > 0.,
                      -2.5 * np.log10(phot_table['aperture_sum']) + 23.9,
                      99.)
-    Sources = np.zeros((len(sources), 11))
+    Sources = np.zeros((len(sources), 12))
     Sources[:, 0], Sources[:, 1] = (sources['xcentroid'], sources['ycentroid'])
     Sources[:, 2] = gmags
     RA, Dec = A.get_ifupos_ra_dec('%03d' % ifuslot,
@@ -1683,8 +1683,7 @@ def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-0.2,
                 f = filename_array[index[0]]
                 try:
                     data = f * 1.
-                    sel = np.array(fF['ifuslot'], dtype=int) == int(ifuname)
-                    print(sel.sum())
+                    sel = fF['ifuslot'] == int(ifuname)
                     ax.imshow(data, vmin=vmin, vmax=vmax,
                               interpolation='nearest', origin='lower',
                               cmap=cmap)
