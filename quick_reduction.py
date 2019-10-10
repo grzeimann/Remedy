@@ -1683,8 +1683,8 @@ def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-0.2,
                 f = filename_array[index[0]]
                 try:
                     data = f * 1.
-                    sel = fF['ifuslot'] == int(ifuname)
-                    
+                    sel = np.array(fF['ifuslot'], dtype=int) == int(ifuname)
+                    print(sel.sum())
                     ax.imshow(data, vmin=vmin, vmax=vmax,
                               interpolation='nearest', origin='lower',
                               cmap=cmap)
