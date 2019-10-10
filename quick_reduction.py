@@ -1571,7 +1571,7 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords,
     Sources[:, 9], Sources[:, 10] = (RA-Sources[:,5], Dec-Sources[:, 6])
     return Sources
 
-def fit_astrometry(f, A1, thresh=7.):
+def fit_astrometry(f, A1, thresh=15.):
     '''
     Fit astrometry using a linear fit to the conversion of focal plane x and y
     to RA as well as a linear fit to the conversion of focal plane x and y to
