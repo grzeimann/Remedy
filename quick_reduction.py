@@ -1086,7 +1086,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         filenames = fnmatch.filter(scinames, fnames_glob)
         for j, fn in enumerate(filenames):
             sciimage, scierror, header = base_reduction(fn, tfile=scitarfile,
-                                                rdnoise=readnoise, get_header)
+                                                rdnoise=readnoise, get_header=True)
             sciimage[:] = sciimage - masterdark
             div = safe_division(sciimage, masterflt)
             ratio = savgol_filter(np.median(div, axis=0), 351, 3)
