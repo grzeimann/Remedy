@@ -2180,6 +2180,8 @@ tophat = E.tophat_psf(3., 10.5, 0.25)
 moffat = E.moffat_psf(1.75, 10.5, 0.25)
 newpsf = tophat[0]*moffat[0]
 newpsf /= newpsf.sum()
+apcor = np.max(newpsf) / np.max(moffat[0])
+log.info('Aperture correction factor: %0.2f' % apcor)
 psf = [newpsf, moffat[1], moffat[2]]
 E.psf = psf
 E.get_ADR_RAdec(A)
