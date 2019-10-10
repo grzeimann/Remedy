@@ -1085,8 +1085,8 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
         filenames = fnmatch.filter(scinames, fnames_glob)
         for j, fn in enumerate(filenames):
-            sciimage, scierror = base_reduction(fn, tfile=scitarfile,
-                                                rdnoise=readnoise)
+            sciimage, scierror, header = base_reduction(fn, tfile=scitarfile,
+                                                rdnoise=readnoise, get_header)
             sciimage[:] = sciimage - masterdark
             div = safe_division(sciimage, masterflt)
             ratio = savgol_filter(np.median(div, axis=0), 351, 3)
@@ -1101,10 +1101,14 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
                 except:
                     intpm = None
                     log.warning('modeling images failed')
-            
+            if header['EXPTIME'] > 0.:
+                fac = 360. / header['EXPTIME']
+                mult_fac2 = mult_fac * fac
+            else:
+                mult_fac2 = mult_fac * 1.
             twi[:] = safe_division(twi, throughput)
-            spec = safe_division(spec1, throughput) * mult_fac
-            espec = safe_division(espec1, throughput) * mult_fac
+            spec = safe_division(spec1, throughput) * mult_fac2
+            espec = safe_division(espec1, throughput) * mult_fac2
             if nexposures == 3:
                 pos = amppos + dither_pattern[j]
             else:
