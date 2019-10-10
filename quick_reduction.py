@@ -1604,7 +1604,7 @@ def fit_astrometry(f, A1, thresh=10.):
     A = A1
     P = Polynomial2D(1)
     fitter = LevMarLSQFitter()
-    sel = (f['dist'] < thresh) * (f['Cgmag']<20.)
+    sel = (f['dist'] < thresh) * (f['Cgmag']<20.) * (f['Cgmag'] > 15.)
     log.info('Number of sources with %0.1f": %i' % (thresh, sel.sum()))
     fitr = fitter(P, f['fx'][sel], f['fy'][sel], f['RA'][sel])
     fitd = fitter(P, f['fx'][sel], f['fy'][sel], f['Dec'][sel])
