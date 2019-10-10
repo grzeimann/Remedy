@@ -1575,7 +1575,7 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords,
     Sources[:, 11] = ifuslot
     return Sources
 
-def fit_astrometry(f, A1, thresh=5.):
+def fit_astrometry(f, A1, thresh=10.):
     '''
     Fit astrometry using a linear fit to the conversion of focal plane x and y
     to RA as well as a linear fit to the conversion of focal plane x and y to
@@ -1604,8 +1604,8 @@ def fit_astrometry(f, A1, thresh=5.):
     A = A1
     P = Polynomial2D(1)
     fitter = LevMarLSQFitter()
-    sel = f['dist'] < thresh
-    log.info('Number of sources with 7": %i' % sel.sum())
+    sel = (f['dist'] < thresh) * (f['Cgmag']<20.)
+    log.info('Number of sources with %0.1f": %i' % (thresh, sel.sum()))
     fitr = fitter(P, f['fx'][sel], f['fy'][sel], f['RA'][sel])
     fitd = fitter(P, f['fx'][sel], f['fy'][sel], f['Dec'][sel])
     ra0 = A.ra0 * 1.
