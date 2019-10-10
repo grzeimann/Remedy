@@ -2232,7 +2232,7 @@ if objsel.sum():
 
 
 f, Total_sources, info, A = advanced_analysis(tfile, fn, scispectra, allifus,
-                                              pos, A, scale, ran, coords)
+                                              pos, A, scale, ran, coords, nexp)
 
 # =============================================================================
 # Detections
