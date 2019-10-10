@@ -2288,7 +2288,7 @@ for i in np.arange(len(E.coords)):
         GMag[i, 1] = -2.5 * np.log10(gmag) + 23.9
     else:
         GMag[i, 1] = np.nan
-    spec_list.append([mRA, mDec, GMag[i, 0], GMag[i, 1]] + list(specinfo))
+    spec_list.append([mRA[i], mDec[i], GMag[i, 0], GMag[i, 1]] + list(specinfo))
 
 try:
     plot_astrometry(f, A)
