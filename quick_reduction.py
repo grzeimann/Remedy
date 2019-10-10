@@ -2278,7 +2278,7 @@ GMag[:, 0] = f['Cgmag'][objsel]
 E.ra, E.dec = (RAFibers, DecFibers)
 E.data = scispectra
 E.error = errspectra
-E.mask = np.isfinite(scispectra[sel])
+E.mask = np.isfinite(scispectra)
 spec_list = []
 for i in np.arange(len(E.coords)):
     specinfo = E.get_spectrum_by_coord_index(i)
