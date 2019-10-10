@@ -1604,7 +1604,7 @@ def fit_astrometry(f, A1, thresh=10.):
     A = A1
     P = Polynomial2D(1)
     fitter = LevMarLSQFitter()
-    sel = (f['dist'] < thresh) * (f['Cgmag']<20.) * (f['Cgmag'] > 15.)
+    sel = (f['dist'] < thresh) * (f['Cgmag']<22.) * (f['Cgmag'] > 15.)
     log.info('Number of sources with %0.1f": %i' % (thresh, sel.sum()))
     fitr = fitter(P, f['fx'][sel], f['fy'][sel], f['RA'][sel])
     fitd = fitter(P, f['fx'][sel], f['fy'][sel], f['Dec'][sel])
@@ -2199,7 +2199,7 @@ E.psf = psf
 E.get_ADR_RAdec(A)
 objsel = (f['Cgmag'] < 21.) * (f['dist'] < 1.)
 
-if objsel.sum():
+if objsel.sum() and (nexp > 1):
     mRA, mDec = A.tp.wcs_pix2world(f['fx'][objsel], f['fy'][objsel], 1)
     E.coords = SkyCoord(mRA*units.deg, mDec*units.deg, frame='fk5')
     GMag = np.zeros((len(E.coords), nexp+1))
