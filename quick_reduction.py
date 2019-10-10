@@ -1569,6 +1569,7 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords,
     Sources[:, 7], Sources[:, 8] = (sources['xcentroid']*scale + ran[0] + ifux,
                                     sources['ycentroid']*scale + ran[2] + ifuy)
     Sources[:, 9], Sources[:, 10] = (RA-Sources[:,5], Dec-Sources[:, 6])
+    Sources[:, 11] = ifuslot
     return Sources
 
 def fit_astrometry(f, A1, thresh=5.):
@@ -1652,7 +1653,7 @@ def fit_astrometry(f, A1, thresh=5.):
     return A1
 
 
-def cofes_plots(ifunums, specnums, filename_array, outfile_name, vmin=-0.2,
+def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-0.2,
                 vmax=0.5):
     """
     filename_array is an array-like object that contains the filenames
@@ -1682,9 +1683,13 @@ def cofes_plots(ifunums, specnums, filename_array, outfile_name, vmin=-0.2,
                 f = filename_array[index[0]]
                 try:
                     data = f * 1.
+                    sel = fF['ifuslot'] == int(ifuname)
+                    
                     ax.imshow(data, vmin=vmin, vmax=vmax,
                               interpolation='nearest', origin='lower',
                               cmap=cmap)
+                    ax.scatter(fF['imagex'][sel], fF['imagey'][sel], color='g',
+                               marker='x', s=8)
                     ax.text(32.5, 32.5, 'V' + specnums[index[0]],
                             horizontalalignment='center',
                             verticalalignment='center', color='firebrick',
@@ -1800,7 +1805,7 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
     Total_sources = np.vstack(Total_sources)
     f = Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist',
                                       'Cgmag', 'RA', 'Dec', 'fx', 'fy', 'dra',
-                                      'ddec'])
+                                      'ddec', 'ifuslot'])
     # Fit astrometric offset
     for j in np.arange(1):
         A = fit_astrometry(f, A)
@@ -1813,7 +1818,7 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
         Total_sources = np.vstack(Total_sources)
         f = Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist',
                                           'Cgmag', 'RA', 'Dec', 'fx', 'fy', 'dra',
-                                          'ddec'])
+                                          'ddec', 'ifuslot'])
         f.write('sources.dat', format='ascii.fixed_width_two_line', overwrite=True)
 
     return f, Total_sources, info, A
@@ -2271,7 +2276,7 @@ for i in info:
     #F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
     #F.writeto(name, overwrite=True)
 outfile_name = '%s_%07d_recon.png' % (args.date, args.observation)
-cofes_plots(ifunums, specnums, filename_array, outfile_name)
+cofes_plots(ifunums, specnums, filename_array, outfile_name, f)
 
 
 # =============================================================================
