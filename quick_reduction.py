@@ -1853,7 +1853,8 @@ def plot_astrometry(f, A):
 
 def plot_photometry(GMag):
     plt.figure(figsize=(6, 6))
-    mean, median, std = sigma_clipped_stats((GMag[:, 0] - GMag[:, 1]),
+    sel = GMag[:, 0] < 21.
+    mean, median, std = sigma_clipped_stats((GMag[sel, 0] - GMag[sel, 1]),
                                             stdfunc=mad_std)
     log.info('The mean, median, and std for the mag offset is for %s_%07d: '
              '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean,
