@@ -1732,7 +1732,7 @@ def cofes_plots(ifunums, specnums, filename_array, outfile_name, vmin=-0.2,
 
 
 def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
-                      coords):
+                      coords, nexp):
     '''
     Parameters
     ----------
@@ -1763,6 +1763,10 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
     # Image scale and range
     scale = 0.75
     ran = [-23., 25., -23., 25.]
+    if nexp == 3:
+        seeing = 1.76
+    else:
+        seeing = 3.0
     
     for i, ui in enumerate(allifus):
         # Get the info for the given ifuslot
@@ -1776,7 +1780,7 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
         # Make g-band image
         image = make_photometric_image(P[:, 0], P[:, 1], data, filtg,
                                        M, ADRx, 0.*ADRx, nchunks=11,
-                                       ran=ran,  scale=scale)
+                                       ran=ran,  scale=scale, seeing=seeing)
         
         # Make full fits file with wcs info (using default header)
         mean, median, std = sigma_clipped_stats(image, sigma=3.0, stdfunc=mad_std)
@@ -2155,7 +2159,8 @@ coords = SkyCoord(raC*units.degree, decC*units.degree, frame='fk5')
 scale = 0.75
 ran = [-23., 25., -23., 25.]
 f, Total_sources, info, A = advanced_analysis(tfile, fn, scispectra, allifus,
-                                              pos, A, scale, ran, coords)
+                                              pos, A, scale, ran, coords,
+                                              nexp)
 
 
 # =============================================================================
