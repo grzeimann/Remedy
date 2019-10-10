@@ -29,7 +29,7 @@ from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.convolution import interpolate_replace_nans, Gaussian1DKernel
 from astropy.io import fits
 from astropy.modeling.models import Polynomial2D
-from astropy.modeling.fitting import LevMarLSQFitter
+from astropy.modeling.fitting import LevMarLSQFitter, FittingWithOutlierRemoval
 from astropy.stats import biweight_location, sigma_clip
 from astropy.stats import sigma_clipped_stats, mad_std
 from astropy.table import Table
@@ -1603,15 +1603,14 @@ def fit_astrometry(f, A1, thresh=10.):
     '''
     A = A1
     P = Polynomial2D(1)
-    fitter = LevMarLSQFitter()
-    
+    fitter = FittingWithOutlierRemoval(LevMarLSQFitter(), sigma_clip)
     sel = (f['dist'] < thresh) * (f['Cgmag']<22.) * (f['Cgmag'] > 15.)
     dr = np.cos(np.deg2rad(f['Dec']))*f['dra']*3600.
     dd = f['ddec']*3600.
     d = np.sqrt((dr[np.newaxis, :] - dr)**2 + (dd[np.newaxis, :] - dd)**2)
     nneigh = (d < 1.5).sum(axis=1)
     ind = np.argmax(nneigh)
-    sel = (d[ind, :] < 1.5) * sel
+    #sel = (d[ind, :] < 1.5) * sel
     log.info('Number of sources within 1.5" of max density: %i' % (sel.sum()))
     fitr = fitter(P, f['fx'][sel], f['fy'][sel], f['RA'][sel])
     fitd = fitter(P, f['fx'][sel], f['fy'][sel], f['Dec'][sel])
