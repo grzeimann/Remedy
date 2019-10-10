@@ -1829,7 +1829,7 @@ def plot_astrometry(f, A):
     cy = np.sin(t) * stdd + mediand
     plt.scatter(dr, dd, alpha=0.75, s=45, zorder=3)
     plt.text(-1.2, 1.2, r'$\Delta$ RA (") = %0.2f +/ %0.2f' % (medianr, stdr))
-    plt.text(-1.2, 1.05, r'$\Delta$ Dec (") = %0.2f +/ %0.2f' % (medianD, stdD))
+    plt.text(-1.2, 1.05, r'$\Delta$ Dec (") = %0.2f +/ %0.2f' % (mediand, stdd))
     plt.plot(cx, cy, 'r--', lw=1)
     plt.plot([0, 0], [-1.5, 1.5], 'k-', lw=1, alpha=0.5, zorder=1)
     plt.plot([-1.5, 1.5], [0, 0], 'k-', lw=1, alpha=0.5, zorder=1)
