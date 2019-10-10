@@ -836,7 +836,6 @@ def get_mask(scispectra, C1, ftf, Adj, nexp):
             log.info('%03d%s Amplifier marked bad.' % (allifus[idx], ampid))
             mask[ll:hl, :] = True
     mask = np.zeros(scispectra.shape, dtype=bool)
-    mask[badftf] = True
     return mask
 
 def power_law(x, c1, c2=.5, c3=.15, c4=1., sig=2.5):
