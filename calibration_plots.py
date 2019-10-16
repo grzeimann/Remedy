@@ -41,7 +41,7 @@ for i in np.arange(L):
 sns.set_context('talk')
 sns.set_style('whitegrid')
 plt.figure(figsize=(7, 6))
-jp = plt.scatter(B[:, 0], B[:, 1], color="firebrick", alpha=0.8, s=25)
+jp = plt.scatter(B[:, 0], B[:, 1], color="firebrick", alpha=0.8, s=8)
 plt.xlabel("Average Global Structure (e-)")
 plt.ylabel("Average Local Structure (e-)")
 plt.axis([-0.4, 1.6, -0.1, 1.1])
