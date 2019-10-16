@@ -31,6 +31,7 @@ L = len(t.root.Cals)
 
 B = np.zeros((L, 2))
 for i in np.arange(L):
+    print('Working on %i' % i+1)
     mdark = t.root.Cals.cols.masterdark[i]
     bl, bm = biweight(mdark, calc_std=True)
     B[i, 0] = bl
