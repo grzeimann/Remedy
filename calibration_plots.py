@@ -39,10 +39,10 @@ for i in np.arange(L):
     B[i, 1] = bm
 # Plot style
 sns.set_context('talk')
-sns.set_style('ticks')
+sns.set_style('whitegrid')
 plt.figure(figsize=(10, 6))
 jp = sns.jointplot(x=B[:, 0], y=B[:, 1], xlim=[-0.4, 1.6], ylim=[-0.1, 1.1],
-                   kind="hex", color="k").set_axis_labels("Average Structure Value", "Readnoise")
+                   color="firebrick").set_axis_labels("Average Global Structure (e-)", "Average Local Structure (e-)")
 ax = jp.ax_joint
 #MLx = MultipleLocator(0.5)
 #mLx = MultipleLocator(0.1)
