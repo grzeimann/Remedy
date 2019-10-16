@@ -33,26 +33,28 @@ B = np.zeros((L, 2))
 for i in np.arange(L):
     print('Working on %i' % (i+1))
     mdark = t.root.Cals.cols.masterdark[i]
-    bl, bm = biweight(mdark, calc_std=True)
+    bl = biweight(mdark)
+    bm = np.median(np.abs(np.diff(mdark, axis=1)))
     B[i, 0] = bl
     B[i, 1] = bm
 # Plot style
 sns.set_context('talk')
 sns.set_style('ticks')
 plt.figure(figsize=(10, 6))
-sns.jointplot(x=B[:, 0], y=B[:, 1], xlim=[-0.4, 1.6], ylim=[2.4, 4.6],
-              kind="hex", color="k").set_axis_labels("Average Structure Value", "Readnoise")
+jp = sns.jointplot(x=B[:, 0], y=B[:, 1], xlim=[-0.4, 1.6], ylim=[-1.1, 1.1],
+                   kind="hex", color="k").set_axis_labels("Average Structure Value", "Readnoise")
+ax = jp.axes
 MLx = MultipleLocator(0.5)
 mLx = MultipleLocator(0.1)
-MLy = MultipleLocator(1.0)
-mLy = MultipleLocator(0.2)
-plt.gca().xaxis.set_major_locator(MLx)
-plt.gca().yaxis.set_major_locator(MLy)
-plt.gca().xaxis.set_minor_locator(mLx)
-plt.gca().yaxis.set_minor_locator(mLy)
-plt.gca().tick_params(axis='x', which='minor', direction='in', bottom=True)
-plt.gca().tick_params(axis='x', which='major', direction='in', bottom=True)
-plt.gca().tick_params(axis='y', which='minor', direction='in', left=True)
-plt.gca().tick_params(axis='y', which='major', direction='in', left=True)
+MLy = MultipleLocator(0.5)
+mLy = MultipleLocator(0.1)
+ax.xaxis.set_major_locator(MLx)
+ax.yaxis.set_major_locator(MLy)
+ax.xaxis.set_minor_locator(mLx)
+ax.yaxis.set_minor_locator(mLy)
+ax.tick_params(axis='x', which='minor', direction='in', bottom=True)
+ax.tick_params(axis='x', which='major', direction='in', bottom=True)
+ax.tick_params(axis='y', which='minor', direction='in', left=True)
+ax.tick_params(axis='y', which='major', direction='in', left=True)
 plt.savefig('dark_hist_%s.png' % op.basename(filename[:-4]), dpi = 300)
 t.close()
