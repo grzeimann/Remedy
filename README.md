@@ -12,11 +12,11 @@
 [Examples](https://github.com/grzeimann/Remedy/blob/master/README.md#Examples)
 
 ## Overview
-Remedy is a quick reduction tool for VIRUS which reduces a single ifuslot at a time.  However, there is a manual option to use a second ifuslot as a sky frame when the target ifu does not have enough sky fibers itself.  The reduction should run quickly (~30s-1min) and produce a fits image of the collapse frame (for a specific wavelength range) and a datacube of the target ifu.  The datacube can be viewed with QFitsView (http://www.mpe.mpg.de/~ott/QFitsView/), and an inspection of the collapsed frame with DS9 can help orient the user (as astrometry information is included) to the pointing and potential objects of interest.  This is a beta version, but the aim is to have a multi-purpose tool for the HET to do "real-time" reductions of target VIRUS ifus.
+Remedy is a quick reduction tool for VIRUS which reduces a target IFU or all IFUs in a given observation.  The pipeline should run quickly (~6-10 min) and produce an H5 file of flux-calibrated spectra for each fiber, calibration data for each fiber, extracted bright continuum sources in the field (Pan-STARRS sources), a catalog of emission-line detected sources, and a datacube of the target ifu.  The datacube can be viewed with QFitsView (http://www.mpe.mpg.de/~ott/QFitsView/). 
 
 ## Running Remedy
 ### Download and Install
-Remedy is a library code that can be acquired simply with:
+Remedy is a code library that can be acquired simply with:
 ```
 cd WHEREVER
 git clone https://github.com/grzeimann/Remedy.git
@@ -25,33 +25,30 @@ git clone https://github.com/grzeimann/Remedy.git
 Remedy relies on a calibration file (HDF5 file format: https://www.hdfgroup.org/solutions/hdf5/) and an fplane file.  A default calibration file will be kept up to date by the creator, Greg Zeimann, and can be acquired here:
 ```
 cd WHEREVER/Remedy/CALS
-scp username@wrangler.tacc.utexas.edu:/work/03730/gregz/maverick/test_cal_20190112.h5 .
+scp username@wrangler.tacc.utexas.edu:/work/03730/gregz/maverick/output/general_calibration.h5 .
 ```
 
 If you want to create your own calibration file: 
 ```
-1) Log onto TACC
+1) Log onto Wrangler on TACC
 2) Get Remedy on TACC if you haven't already 
 3) Add the following to your ~/.bashrc file if you haven't already
         export PATH=/home/00115/gebhardt/anaconda2/bin:/work/03946/hetdex/maverick/bin:$PATH
 4) To create a new calibration file, run:
-        python Remedy/create_cal_hdf5.py -d 20190112 -o 27 -of test_cal_20190112.h5 -r "/work/03946/hetdex/maverick/red1/reductions"
+        python Remedy/build_calibration_h5file.py 20190822_20190828.h5 -r /work/03946/hetdex/maverick -i 047 -sd 20190822 -dl 7
 
-        In this case I choose the night 20190112, observation 27, and called it test_cal_20190112.h5
-        The night and observation were ones of quality reduction, most importantly with respect to wavelength and trace, which is all that is used
+        In this case I choose the night 20190822, and called it 20190822_20190828.h5
+        
 5) Copy calibration file to your desired Remedy/CALS folder
         cd WHEREVER/Remedy/CALS
-        scp username@wrangler.tacc.utexas.edu:/PATHONTACC/test_cal_20190112.h5 .
+        scp username@wrangler.tacc.utexas.edu:/PATH_ON_TACC/test_cal_20190112.h5 .
 ```
 
-If you need an up-to-date fplane file, simply run Jan Snigula's get_fplane.py, which is included with Remedy:
+To get an fplane file with all ifuslots, simply copy:
 ```
-python WHEREVER/Remedy/get_fplane.py
-OR
-python WHEREVER/Remedy/get_fplane.py 20190412
+cd WHEREVER/Remedy/CALS
+scp username@wrangler.tacc.utexas.edu:/work/03730/gregz/maverick/fplaneall.txt .
 ```
-
-A new fplane file will be created in the current directory in the format, fplane{DATE}.txt. 
 
 ### Setting up your Python environment
 To begin on TACC, point to the common python environment. In your home "~/.bashrc" file, add the following line at the bottom:
@@ -62,7 +59,7 @@ export PATH=/home/00115/gebhardt/anaconda2/bin:/work/03946/hetdex/maverick/bin:$
 ### Running the code
 An example call to reduce ifuslot 043 on 20190204 and obseravtion 17 using the ifuslot 047 for sky is shown below:
 ```
-python Remedy/quick_reduction.py 20190204 17 43 Remedy/CALS/test_cal_20190112.h5 --fplane_file fplane20190129.txt --rootdir /work/03946/hetdex/maverick --neighbor_dist 7
+python Remedy/quick_reduction.py 20190822 11 47 Remedy/CALS/20190822_20190828.h5 -nd 8 -fp Remedy/CALS/fplaneall.txt
 ```
 To run at the mountain, replace the "--rootdir" as appropriate, the "--fplane_file" as approriate, and the calibration file if needed.  The other arguments will be specific to the choice of ifuslot and if you want to use another ifu for sky.
 
@@ -104,6 +101,46 @@ optional arguments:
 ## Data Products
 
 To be filled later, but there are two products ... {DATE}_{OBS}_{IFUSLOT}.fits and {DATE}_{OBS}_{IFUSLOT}_cube.fits
+
+## About Remedy
+### Basic Reduction Step
+#### Bias Subtraction
+The bias level can be decomposed into a scalar offset and a 
+vector containing structure with the length of the data. The scalar
+offset changes with exposure especially in the sequence of exposures.
+We use the overscan region in frame of interest to obtain the scalar offset.
+We measure the scalar offset with a biweight location, excluding the first two columns
+of the overscan region due to potential ''bleeding'' from the data section.  
+
+There are two kinds of structure we've identified in a given VIRUS amplifier.
+The first is a weakly evolving large scale structure that is typically much less
+than the amplifier read noise, and is removed easily from a master frame built over the night
+or even month.  The second structure is on the pixel to pixel scale and is more akin to a 
+interference pattern.  This structure changes rapidly throughout the night and is not easily
+removed.  It is however only ~1 electron in amplitude and even less when average over a fiber
+in the trace direction.  As the only modelable structure is weakly evolving with time, we opt
+not to make a master bias frame on a night by night basis or even month by month basis and rather
+allow the master dark frame to capture the weakly evolving large scale structure and not make a
+master bias frame at all.
+
+#### Dark Subtraction
+The dark current in VIRUS amplifiers have $<$0.5 electrons in 360s exposures.
+In a given night, we take between 1 and 10 dark frames.  We thus build a master dark frame, which
+includes the dark current, large scale bias structure, and some small scale pixel to pixel 
+interference structure.  The master dark frame time window is a user input, and typically a period
+of 21 days.
+
+#### Fiber Trace
+The trace of the fibers or distortion map can be measured from high count observations
+like flat-field lamps or twilights.  For an individual fiber, we use the peak pixel and use the two neighboring
+pixels to define a quadratic function.  The peak of the quadratic function is then used as the 
+trace of the fiber for a given wavelength.  To smooth the individual measurements across wavelengths,
+we use a third order polynomial fit.
+
+We measure the trace from a master twilight taken over an input time range, typically 7 days.  The trace
+is quite stable.  The night to night drift is <~X.X pixels for an individual fiber and elastic in nature as
+it shifts around a stable location.  By averaging many nights, we essentially are measuring the trace for the 
+stable location and then for each observation we find a single shift to the new location.
 
 ## Examples
 
