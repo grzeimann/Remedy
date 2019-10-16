@@ -104,6 +104,7 @@ To be filled later, but there are two products ... {DATE}_{OBS}_{IFUSLOT}.fits a
 
 ## About Remedy
 ### Basic Reduction Step
+#### Bias Subtraction
 The bias level can be decomposed into a scalar offset and a 
 vector containing structure with the length of the data. The scalar
 offset changes with exposure especially in the sequence of exposures.
@@ -122,11 +123,24 @@ not to make a master bias frame on a night by night basis or even month by month
 allow the master dark frame to capture the weakly evolving large scale structure and not make a
 master bias frame at all.
 
+#### Dark Subtraction
 The dark current in VIRUS amplifiers have $<$0.5 electrons in 360s exposures.
 In a given night, we take between 1 and 10 dark frames.  We thus build a master dark frame, which
 includes the dark current, large scale bias structure, and some small scale pixel to pixel 
 interference structure.  The master dark frame time window is a user input, and typically a period
 of 21 days.
+
+#### Fiber Trace
+The trace of the fibers or distortion map can be measured from high count observations
+like flat-field lamps or twilights.  For an individual fiber, we use the peak pixel and use the two neighboring
+pixels to define a quadratic function.  The peak of the quadratic function is then used as the 
+trace of the fiber for a given wavelength.  To smooth the individual measurements across wavelengths,
+we use a third order polynomial fit.
+
+We measure the trace from a master twilight taken over an input time range, typically 7 days.  The trace
+is quite stable.  The night to night drift is <~X.X pixels for an individual fiber and elastic in nature as
+it shifts around a stable location.  By averaging many nights, we essentially are measuring the trace for the 
+stable location and then for each observation we find a single shift to the new location.
 
 ## Examples
 
