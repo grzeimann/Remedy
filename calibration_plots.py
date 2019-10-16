@@ -43,7 +43,7 @@ sns.set_style('ticks')
 plt.figure(figsize=(10, 6))
 jp = sns.jointplot(x=B[:, 0], y=B[:, 1], xlim=[-0.4, 1.6], ylim=[-1.1, 1.1],
                    kind="hex", color="k").set_axis_labels("Average Structure Value", "Readnoise")
-ax = jp.axes
+ax = jp.axes[0,0]
 MLx = MultipleLocator(0.5)
 mLx = MultipleLocator(0.1)
 MLy = MultipleLocator(0.5)
