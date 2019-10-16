@@ -9,6 +9,7 @@ Created on Wed Oct 16 09:40:02 2019
 import matplotlib
 matplotlib.use("agg")
 import sys
+import os.path as op
 import numpy as np
 from tables import open_file
 from math_utils import biweight
@@ -52,5 +53,5 @@ plt.gca().tick_params(axis='x', which='minor', direction='in', bottom=True)
 plt.gca().tick_params(axis='x', which='major', direction='in', bottom=True)
 plt.gca().tick_params(axis='y', which='minor', direction='in', left=True)
 plt.gca().tick_params(axis='y', which='major', direction='in', left=True)
-plt.savefig('dark_hist_%s.png' % filename[:-4], dpi = 300)
+plt.savefig('dark_hist_%s.png' % op.basename(filename[:-4]), dpi = 300)
 t.close()
