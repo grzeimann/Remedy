@@ -124,7 +124,7 @@ allow the master dark frame to capture the weakly evolving large scale structure
 master bias frame at all.
 
 #### Dark Subtraction
-The dark current in VIRUS amplifiers have $<$0.5 electrons in 360s exposures.
+The dark current in VIRUS amplifiers have <0.5 electrons in 360s exposures.
 In a given night, we take between 1 and 10 dark frames.  We thus build a master dark frame, which
 includes the dark current, large scale bias structure, and some small scale pixel to pixel 
 interference structure.  The master dark frame time window is a user input, and typically a period
