@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from distutils.dir_util import mkpath
 from fiber_utils import base_reduction, get_trace, get_spectra
 from fiber_utils import get_powerlaw, get_ifucenfile, get_wave, get_pixelmask
+from fiber_utils import measure_contrast
 from input_utils import setup_parser, set_daterange, setup_logging
 from math_utils import biweight
 
@@ -294,6 +295,10 @@ for ifuslot_key in ifuslots:
                     fits.PrimaryHDU(_info[0]).writeto('testtwi.fits', overwrite=True)
                     sys.exit(1)
                 twi = get_spectra(_info[0], trace)
+                cm, cl, ch = measure_contrast(_info[0], twi, trace)
+                args.log.info('Contrast 16, 50, and 84th percentiles for'
+                              '%s %s: %0.2f, %0.2f, %0.2f' %
+                              (ifuslot_key, amp, cl, cm, ch))
                 args.log.info('Getting powerlaw for %03d %s' %
                               (int(ifuslot), amp))
                 plaw = get_powerlaw(_info[0], trace, twi, amp)
