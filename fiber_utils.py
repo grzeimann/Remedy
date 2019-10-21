@@ -784,4 +784,59 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale,
             
             
     return cube, errcube, origcube, origerrcube, L, K
+
+def measure_contrast(image, spec, trace, wave, def_wave, xmin=0,
+                          xmax=1032):
+    ''' Measure the fiber profile for an image
     
+    Parameters
+    ----------
+    image : 2d numpy array
+        reduced image without scatter light or background counts
+    spec : 2d numpy array
+        fiber spectra from an aperture method for normalization
+    trace : 2d numpy array
+        fiber trace
+    wave : 2d numpy array
+        fiber wavelength
+    def_wave : 1d numpy array
+        standard wavelength of the spec array
+        
+    Returns
+    -------
+    init : interp1d model
+        interpolation model to build 1d fiber profile for any give fiber
+    '''
+    yind, xind = np.indices(image.shape)
+    
+    contrast = []
+    I = np.arange(2, 112, 4)
+    for fibert, fibers in zip(trace[I], spec[I]):
+        ospec = fibers
+        indl = int(np.max([0, np.min(fibert)-10.]))
+        indh = int(np.min([image.shape[0], np.max(fibert)+10.]))
+        foff = yind[indl:indh, xmin:xmax] - fibert[np.newaxis, xmin:xmax]
+        V = image[indl:indh, xmin:xmax] / ospec[np.newaxis, xmin:xmax]
+        sel = np.abs(foff) <= 6.
+        xI = xind[indl:indh, xmin:xmax]
+        xI = xI[sel]
+        ind_chunks = np.array_split(np.argsort(xI), 10)
+        x = foff[sel]
+        y = V[sel]
+        for inds in ind_chunks:
+            inorder = np.argsort(x)
+            xbin = np.array([np.median(chunk) for chunk in np.array_split(x[inorder], 25)])
+            ybin = np.array([np.median(chunk) for chunk in np.array_split(y[inorder], 25)])
+            peak_loc, peaks = find_peaks(ybin, thresh=0.4)
+            if len(peak_loc) != 1:
+                continue
+            peak_loc = np.interp(peak_loc, np.arange(len(xbin)), xbin)
+            peak = np.interp(peak_loc, xbin, ybin)
+            valley_loc, valley = find_peaks(1. - ybin, thresh=0.3)
+            valley_loc = np.interp(valley_loc, np.arange(len(xbin)), xbin)
+            if len(valley_loc) != 2:
+                continue
+            valleys = np.interp(valley_loc, xbin, ybin)
+            valley = np.mean(valleys)
+            contrast.append((peak - valley*2.) / (peak + valley*2.))
+    return np.percentile(contrast, 50), np.percentile(contrast, 16), np.percentile(contrast, 84)
