@@ -786,7 +786,7 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale,
     return cube, errcube, origcube, origerrcube, L, K
 
 def measure_contrast(image, spec, trace, xmin=0,
-                          xmax=1032):
+                          xmax=1032, low_per=5, high_per=95):
     ''' Measure the fiber profile for an image
     
     Parameters
@@ -839,4 +839,4 @@ def measure_contrast(image, spec, trace, xmin=0,
             valleys = np.interp(valley_loc, xbin, ybin)
             valley = np.mean(valleys)
             contrast.append((peak - valley*2.) / (peak + valley*2.))
-    return np.percentile(contrast, 50), np.percentile(contrast, 16), np.percentile(contrast, 84)
+    return np.percentile(contrast, 50), np.percentile(contrast, low_per), np.percentile(contrast, high_per)
