@@ -785,7 +785,7 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale,
             
     return cube, errcube, origcube, origerrcube, L, K
 
-def measure_contrast(image, spec, trace, wave, def_wave, xmin=0,
+def measure_contrast(image, spec, trace, xmin=0,
                           xmax=1032):
     ''' Measure the fiber profile for an image
     
