@@ -32,6 +32,8 @@ for tarfolder in tarfolders:
             b = fits.open(T.extractfile(a))
             Target = b[0].header['OBJECT']
             exptime = b[0].header['EXPTIME']
-            print('%s: %s  %s  %0.1f' % (tarfolder, name[-8:-5], Target, exptime))
+            prog = b[0].header['QPROG']
+            print('%s: %s  %s  %s %0.1f' % (tarfolder, name[-8:-5], 
+                                            Target, prog, exptime))
             flag = False
     T.close()
