@@ -839,4 +839,6 @@ def measure_contrast(image, spec, trace, xmin=0,
             valleys = np.interp(valley_loc, xbin, ybin)
             valley = np.mean(valleys)
             contrast.append((peak - valley*2.) / (peak + valley*2.))
+    if not len(contrast):
+        return None, None, None
     return np.percentile(contrast, 50), np.percentile(contrast, low_per), np.percentile(contrast, high_per)
