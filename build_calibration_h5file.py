@@ -296,9 +296,10 @@ for ifuslot_key in ifuslots:
                     sys.exit(1)
                 twi = get_spectra(_info[0], trace)
                 cm, cl, ch = measure_contrast(_info[0], twi, trace)
-                args.log.info('Contrast 5th, 50th, and 95th percentiles for '
-                              '%s %s: %0.2f, %0.2f, %0.2f' %
-                              (ifuslot_key, amp, cl, cm, ch))
+                if cm is not None:
+                    args.log.info('Contrast 5th, 50th, and 95th percentiles for '
+                                  '%s %s: %0.2f, %0.2f, %0.2f' %
+                                  (ifuslot_key, amp, cl, cm, ch))
                 args.log.info('Getting powerlaw for %03d %s' %
                               (int(ifuslot), amp))
                 plaw = get_powerlaw(_info[0], trace, twi, amp)
