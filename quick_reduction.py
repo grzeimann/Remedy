@@ -1728,8 +1728,12 @@ def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-0.2,
                 ax = plt.subplot(rows, cols, i*cols+j)
                 ax.set_xticks([])
                 ax.set_yticks([])
-                if ((i==0 and j==1) or (i==9 and j==1) or
-                    (i==0 and j==10) or (i==9 and j==10)):
+                if (((i==0 or i==1 or i==2 or i==7 or i==8 or i==9) and j==1) or
+                    ((i==0 or i==1 or i==2 or i==7 or i==8 or i==9) and j==10) or
+                    ((i==0 or i==9) and j==2) or 
+                    ((i==0 or i==9) and j==9) or
+                    ((i==4 or i==5 or i==6) and j==5) or
+                    ((i==4 or i==5 or i==6) and j==6)):
                     ax.axis('off')
                 pos1 = ax.get_position()
                 plt.text(pos1.x0-0.01, pos1.y0+0.015, name,
@@ -2234,10 +2238,10 @@ if objsel.sum() and (nexp > 1):
         exp_ratio[i] = mult_offset[i] / mult_offset[0]
         sel = (np.array(inds / 112, dtype=int) % nexp) == i
         if np.isfinite(exp_ratio[i]):
-            scispectra[sel] = scispectra[sel] / exp_ratio[i]
-            errspectra[sel] = errspectra[sel] / exp_ratio[i]
+            scispectra[sel] = scispectra[sel] * exp_ratio[i]
+            errspectra[sel] = errspectra[sel] * exp_ratio[i]
         log.info('Spectroscopic ratio for exposure %i to exposure 1: %0.2f' %
-                 (i+1, exp_ratio[i]))
+                 (i+1, 1 / exp_ratio[i]))
 
 
 f, Total_sources, info, A = advanced_analysis(tfile, fn, scispectra, allifus,
