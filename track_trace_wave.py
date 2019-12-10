@@ -210,7 +210,25 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
           timedelta(days=(d2-d1).days / 2.))
     avgdate = '%04d%02d%02dT%02d%02d%02d' % (d4.year, d4.month, d4.day,
                                              d4.hour, d4.minute, d4.second)
-    return masterbias, masterstd, avgdate, bia_list[0][1], bia_list[0][4], bia_list[0][5], bia_list
+    return masterbias, masterstd, avgdate, bia_list[0][1], bia_list[0][4], bia_list[0][5]
+
+def get_datetime_from_string(datestr):
+    datelist, timelist = datestr.split('T')
+    d = datetime(int(datelist[0:4]), int(datelist[4:6]), int(datelist[6:8]),
+                         int(timelist[0:2]), int(timelist[2:4]),
+                         int(timelist[4:].split('.')[0]))
+    return d
+
+def group_lamp_exposures(file_list):
+    datestr = [op.basename(itm).split('_')[0] for itm in file_list]
+    datetime_list = [get_datetime_from_string(ds) for ds in datestr]
+    MJD = Time(datetime_list).mjd
+    start_ind = np.where(np.diff(MJD) > 1. / 24.)[0]
+    start_ind = np.hstack([0, start_ind + 1, len(MJD)+1])
+    groups = []
+    for i in np.arange(len(start_ind)-1):
+        groups.append(file_list[kind][start_ind[i]:start_ind[i+1]])
+    return groups
 
 parser = setup_parser()
 parser.add_argument('outfilename', type=str,
@@ -282,48 +300,23 @@ for ifuslot_key in ifuslots:
                 except:
                     args.log.error('Trace Failed.')
                     continue
-                for I in _info[-1]:
-                    if np.mean(I[0]) < 1000.:
-                        args.log.warning('Twi for %s %s below 1000 cnts on average.' %
-                                         (ifuslot_key, amp))
-                        continue
-                    try:
-                        trace_i, ref = get_trace(I[0], specid, ifuSlot, ifuid,
-                                                 amp, _info[2][:8], dirname)
-                    except:
-                        args.log.error('Trace Failed.')
-                        continue
-                    
-                    toff = biweight(trace - trace_i, axis=1)
-                    T.append([toff, I[3]])
-                BL, RMS = biweight([t[0] for t in T], axis=0, calc_std=True)
-                RMSt = biweight(RMS)
-                args.log.info('Trace RMS for %s %s is: %0.2f' %
-                              (ifuslot_key, amp, RMSt))
             if kind == 'cmp':
-                W = []
-                args.log.info('Getting wavelength for %03d %s' %
+                groups = group_lamp_exposures(filename_dict[kind])
+                args.log.info('Getting trace, wavelength shift for %03d %s' %
                               (int(ifuslot), amp))
                 if np.all(trace == 0.):
                     continue
-                cmp = get_spectra(_info[0], trace)
-                cmp[~np.isfinite(cmp)] = 0.0
-                try:
-                    wave = get_wave(cmp, trace, T_array)
-                    if wave is None:
-                        args.log.error('Wavelength Failed for %s %s.' %
-                                       (ifuslot_key, amp))
-                except:
-                    args.log.error('Wavelength Failed for %s %s.' %
-                                       (ifuslot_key, amp))
-                for I in _info[-1]:
-                    cmp_i = get_spectra(I[0], trace)
-                    cmp_i[~np.isfinite(cmp_i)] = 0.0
-                    shift, error, diffphase = register_translation(cmp, cmp_i, 100)
-                    W.append([shift[1], I[3]])
-                BL, RMSw = biweight([w[0] for w in W], calc_std=True)
-                args.log.info('Wavelength RMS for %s %s is: %0.2f' %
-                              (ifuslot_key, amp, RMSw))
+                W = []
+                for group in groups:
+                    _info_small = build_master_frame(filename_dict[kind],
+                                                     ifuslot, amp, kind,
+                                       args.log, args.folder, specid, ifuid,
+                                       contid)
+                    shift, error, diffphase = register_translation(_info[0], _info_small[0], 100)
+                    W.append([shift, _info_small[2]])
+                BL, RMS = biweight([w[0] for w in W], axis=0, calc_std=True)
+                args.log.info('Trace and wavelength RMS for %s %s is: %0.2f %0.2f' %
+                              (ifuslot_key, amp, RMS[0], RMS[1]))
                 
                 
                 
