@@ -176,7 +176,7 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
                          int(timelist[2].split('.')[0]))
             bia_list.append([I, header['SPECID'], header['OBJECT'], d,
                              header['IFUID'], header['CONTID'],
-                             header['AMBTEMP']]])
+                             header['AMBTEMP']])
         except:
             log.warning('Could not load %s' % fn)
 
