@@ -307,6 +307,7 @@ for ifuslot_key in ifuslots:
                 if np.all(trace == 0.):
                     continue
                 cmp = get_spectra(_info[0], trace)
+                cmp[~np.isfinite(cmp)] = 0.0
                 try:
                     wave = get_wave(cmp, trace, T_array)
                     if wave is None:
@@ -317,6 +318,7 @@ for ifuslot_key in ifuslots:
                                        (ifuslot_key, amp))
                 for I in _info[-1]:
                     cmp_i = get_spectra(I[0], trace)
+                    cmp_i[~np.isfinite(cmp_i)] = 0.0
                     shift, error, diffphase = register_translation(cmp, cmp_i)
                     W.append([shift[1], I[3]])
                 BL, RMSw = biweight([w[0] for w in W], calc_std=True)
