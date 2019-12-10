@@ -314,17 +314,23 @@ for ifuslot_key in ifuslots:
                                                      ifuslot, amp, kind,
                                        args.log, args.folder, specid, ifuid,
                                        contid)
+                    if _info is None:
+                        continue
                     shift, error, diffphase = register_translation(_info[0], _info_small[0], 100)
                     W.append([shift, _info_small[-2], _info_small[-1]])
-                BL, RMS = biweight([w[0] for w in W], axis=0, calc_std=True)
-                timE = Time([w[1] for w in W]).mjd
-                temp = np.array([w[2] for w in W])
-                A = np.array([w[0] for w in W])
-                T = Table([timE, temp, A[:, 0], A[:, 1]], names=['mjd', 'temp', 'trace', 'wave'])
-                T.write('%s_%s.dat' % (ifuslot_key.replace('S/N ', ''), amp), 
-                        format='ascii.fixed_width_two_line')
-                args.log.info('Trace and wavelength RMS for %s %s is: %0.2f %0.2f' %
-                              (ifuslot_key.replace('S/N ', ''), amp, RMS[0], RMS[1]))
+                try:
+                    BL, RMS = biweight([w[0] for w in W], axis=0, calc_std=True)
+                    timE = Time([w[1] for w in W]).mjd
+                    temp = np.array([w[2] for w in W])
+                    A = np.array([w[0] for w in W])
+                    T = Table([timE, temp, A[:, 0], A[:, 1]], names=['mjd', 'temp', 'trace', 'wave'])
+                    T.write('%s_%s.dat' % (ifuslot_key.replace('S/N ', ''), amp), 
+                            format='ascii.fixed_width_two_line')
+                    args.log.info('Trace and wavelength RMS for %s %s is: %0.2f %0.2f' %
+                                  (ifuslot_key.replace('S/N ', ''), amp, RMS[0], RMS[1]))
+                except:
+                    args.log.warning('Trace and wavelength RMS for %s %s failed' %
+                                  (ifuslot_key.replace('S/N ', ''), amp))
                 
                 
                 
