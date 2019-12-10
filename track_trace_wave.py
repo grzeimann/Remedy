@@ -175,7 +175,8 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
                          int(timelist[0]), int(timelist[1]),
                          int(timelist[2].split('.')[0]))
             bia_list.append([I, header['SPECID'], header['OBJECT'], d,
-                             header['IFUID'], header['CONTID']])
+                             header['IFUID'], header['CONTID'],
+                             header['AMBTEMP']]])
         except:
             log.warning('Could not load %s' % fn)
 
@@ -210,7 +211,8 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
           timedelta(days=(d2-d1).days / 2.))
     avgdate = '%04d%02d%02dT%02d%02d%02d' % (d4.year, d4.month, d4.day,
                                              d4.hour, d4.minute, d4.second)
-    return masterbias, masterstd, avgdate, bia_list[0][1], bia_list[0][4], bia_list[0][5], d4
+    d5 = np.median([b[-1] for b in bia_list])
+    return masterbias, masterstd, avgdate, bia_list[0][1], bia_list[0][4], bia_list[0][5], d4, d5
 
 def get_datetime_from_string(datestr):
     datelist, timelist = datestr.split('T')
@@ -313,11 +315,12 @@ for ifuslot_key in ifuslots:
                                        args.log, args.folder, specid, ifuid,
                                        contid)
                     shift, error, diffphase = register_translation(_info[0], _info_small[0], 100)
-                    W.append([shift, _info_small[-1]])
+                    W.append([shift, _info_small[-2], _info_small[-1]])
                 BL, RMS = biweight([w[0] for w in W], axis=0, calc_std=True)
                 timE = Time([w[1] for w in W]).mjd
+                temp = np.array([w[2] for w in W])
                 A = np.array([w[0] for w in W])
-                T = Table([timE, A[:, 0], A[:, 1]], names=['mjd', 'trace', 'wave'])
+                T = Table([timE, temp, A[:, 0], A[:, 1]], names=['mjd', 'temp', 'trace', 'wave'])
                 T.write('%s_%s.dat' % (ifuslot_key.replace('S/N ', ''), amp), 
                         format='ascii.fixed_width_two_line')
                 args.log.info('Trace and wavelength RMS for %s %s is: %0.2f %0.2f' %
