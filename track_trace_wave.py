@@ -227,7 +227,7 @@ def group_lamp_exposures(file_list):
     start_ind = np.hstack([0, start_ind + 1, len(MJD)+1])
     groups = []
     for i in np.arange(len(start_ind)-1):
-        groups.append(file_list[kind][start_ind[i]:start_ind[i+1]])
+        groups.append(file_list[start_ind[i]:start_ind[i+1]])
     return groups
 
 parser = setup_parser()
