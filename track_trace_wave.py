@@ -318,9 +318,8 @@ for ifuslot_key in ifuslots:
                 timE = Time([w[1] for w in W]).mjd
                 A = np.array([w[0] for w in W])
                 T = Table([timE, A[:, 0], A[:, 1]], names=['mjd', 'trace', 'wave'])
-                T.write('%s_%s.dat' % (ifuslot_key, amp), 
-                        format='ascii.fixed_width_two_line',
-                        overwrite=True)
+                T.write('%s_%s.dat' % (ifuslot_key.replace('S/N ', ''), amp), 
+                        format='ascii.fixed_width_two_line')
                 args.log.info('Trace and wavelength RMS for %s %s is: %0.2f %0.2f' %
                               (ifuslot_key.replace('S/N ', ''), amp, RMS[0], RMS[1]))
                 
