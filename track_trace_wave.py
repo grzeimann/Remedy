@@ -210,7 +210,7 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
           timedelta(days=(d2-d1).days / 2.))
     avgdate = '%04d%02d%02dT%02d%02d%02d' % (d4.year, d4.month, d4.day,
                                              d4.hour, d4.minute, d4.second)
-    return masterbias, masterstd, d4, bia_list[0][1], bia_list[0][4], bia_list[0][5]
+    return masterbias, masterstd, avgdate, bia_list[0][1], bia_list[0][4], bia_list[0][5], d4
 
 def get_datetime_from_string(datestr):
     datelist, timelist = datestr.split('T')
@@ -313,7 +313,7 @@ for ifuslot_key in ifuslots:
                                        args.log, args.folder, specid, ifuid,
                                        contid)
                     shift, error, diffphase = register_translation(_info[0], _info_small[0], 100)
-                    W.append([shift, _info_small[2]])
+                    W.append([shift, _info_small[-1]])
                 BL, RMS = biweight([w[0] for w in W], axis=0, calc_std=True)
                 timE = Time([w[1] for w in W]).mjd
                 A = np.array([w[0] for w in W])
