@@ -223,7 +223,7 @@ def group_lamp_exposures(file_list):
     datestr = [op.basename(itm).split('_')[0] for itm in file_list]
     datetime_list = [get_datetime_from_string(ds) for ds in datestr]
     MJD = Time(datetime_list).mjd
-    start_ind = np.where(np.diff(MJD) > 1. / 24.)[0]
+    start_ind = np.where(np.diff(MJD) > 2. / 24.)[0]
     start_ind = np.hstack([0, start_ind + 1, len(MJD)+1])
     groups = []
     for i in np.arange(len(start_ind)-1):
