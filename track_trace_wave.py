@@ -314,7 +314,7 @@ for ifuslot_key in ifuslots:
                                                      ifuslot, amp, kind,
                                        args.log, args.folder, specid, ifuid,
                                        contid)
-                    if _info is None:
+                    if _info_small is None:
                         continue
                     shift, error, diffphase = register_translation(_info[0], _info_small[0], 100)
                     W.append([shift, _info_small[-2], _info_small[-1]])
