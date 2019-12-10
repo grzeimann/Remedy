@@ -184,6 +184,7 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
         log.warning('No %s frames found for date range given' % kind)
         return None
 
+    log.info('Number of frames used for master: %i' % len(bia_list))
     if kind != 'cmp':
         big_array = np.array([v[0] for v in bia_list])
         masterbias = np.median(big_array, axis=0)
