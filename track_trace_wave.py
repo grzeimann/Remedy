@@ -319,8 +319,7 @@ for ifuslot_key in ifuslots:
                 for I in _info[-1]:
                     cmp_i = get_spectra(I[0], trace)
                     cmp_i[~np.isfinite(cmp_i)] = 0.0
-                    shift, error, diffphase = register_translation(cmp, cmp_i)
-                    print(shift, error)
+                    shift, error, diffphase = register_translation(cmp, cmp_i, 100)
                     W.append([shift[1], I[3]])
                 BL, RMSw = biweight([w[0] for w in W], calc_std=True)
                 args.log.info('Wavelength RMS for %s %s is: %0.2f' %
