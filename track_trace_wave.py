@@ -308,7 +308,7 @@ for ifuslot_key in ifuslots:
                     continue
                 W = []
                 for group in groups:
-                    _info_small = build_master_frame(filename_dict[kind],
+                    _info_small = build_master_frame(group,
                                                      ifuslot, amp, kind,
                                        args.log, args.folder, specid, ifuid,
                                        contid)
