@@ -125,6 +125,11 @@ parser.add_argument("-s", "--simulate",
                     help='''Simulate source''',
                     action="count", default=0)
 
+parser.add_argument("-la", "--limit_adj",
+                    help='''Limit Adjustment''',
+                    action="count", default=0)
+
+
 parser.add_argument("-sx", "--source_x",
                     help='''x-position for spectrum to add in cube''',
                     type=float, default=0.0)
@@ -2062,6 +2067,8 @@ log.info('Number of exposures: %i' % nexp)
 log.info('Getting Fiber to Fiber Correction')
 
 scispectra, Adj = get_fiber_to_fiber_adj(scispectra, ftf, nexp)
+if args.limit_adj:
+    Adj[np.abs(Adj - 1.) > 0.1] = 1.0
 process = psutil.Process(os.getpid())
 log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))    
 scispectra = safe_division(scispectra, ftf * Adj)
