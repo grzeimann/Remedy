@@ -1560,7 +1560,6 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords,
     Sources = np.zeros((len(sources), 12))
     Sources[:, 0], Sources[:, 1] = (sources['xcentroid'], sources['ycentroid'])
     Sources[:, 2] = gmags
-    print(Sources, scale, ran)
     RA, Dec = A.get_ifupos_ra_dec('%03d' % ifuslot,
                                   Sources[:, 0]*scale + ran[0],
                                   Sources[:, 1]*scale + ran[2])
