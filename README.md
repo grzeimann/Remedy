@@ -105,7 +105,8 @@ To be filled later, but there are two products ... {DATE}_{OBS}_{IFUSLOT}.fits a
 ## About Remedy
 The primary goals of the VIRUS data processing pipeline, Remedy, are to produce flux-calibrated fiber spectra, data cubes,
 and extracted continuum and emissin line sources. Remedy also tracks bad fiber spectra either due to regions of the CCD 
-with low QE, issues within the IFU spectrograph amplifiers, or ``bleeding`` effects of bright continuum sources.  
+with low QE, issues within the IFU spectrograph amplifiers, or ``bleeding`` effects of bright continuum sources. 
+
 We begin by describing the basic CCD processing tasks and then discuss the more advanced steps.
 
 ### Basic Reduction Steps
@@ -145,7 +146,7 @@ From the master dark frame we look for hot pixels and low level charge traps to 
 in processing.  We first subtract the median value in each column from the master dark to take out the
 large scale columnar pattern. We then subtract the median value in each row to similarly remove low
 level readout pattern.  Finally, we apply a sigma clipping algorithm to identify 5-sigma outliers and
-mask all of these pixels.  These are mostly hot pixels and the base of low level charge traps.
+mask all of these pixels.  Outliers are mostly hot pixels and the base of low level charge traps.
 
 #### Fiber Trace
 The trace of the fibers or distortion map can be measured from high count observations
@@ -167,7 +168,31 @@ of the wavelength of the bright lines to solve for the wavelength for each fiber
 stable wavelength solution, but like the fiber trace, typical shifts of <~0.2 pixels occur due to
 changes in the ambient temperature.  We currently do not adjust for these wavelength shifts.
 
+#### Scattered Light - Spectrograph
+Due to imperfections in the mirrors within each spectrograph, light from the fiber cables is scattered on the CCD creating a background
+that needs to be accounted for and subtracted.  The scattered light can be modeled as a powerlaw in which a
+monochromatic intensity for a given fiber has a profile that falls off proportional to 1 / pixel distance.  
+We find that when we add up light in the central core of fibers and compare that to the total light in the CCD, 
+roughly 3-4% of the incident fiber light is scattered into this smoother background.  
+We model this background light in the master twilight frames by first creating a power-law model for the scattered light
+and then normalize that model to the observed master frame.  We then model the scattered light in the science frame by scaling the
+background model as a function of wavelength to account for differences between the smoothed twilight incident spectrum 
+and the smoothed average observed science spectrum.  We finally subtract this background model and consider the light lost
+due to the system rather than trying to account for it in post-processing.
+
 ### Advanced Reduction Steps
+
+#### Fiber Extraction
+
+#### Sky Subtraction
+
+#### Source Extraction
+
+#### Astrometric Calibration
+
+#### Flux Calibration
+
+
 
 
 ## Examples
