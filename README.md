@@ -115,6 +115,9 @@ The bias level of an amplifier can be decomposed into a scalar offset and a vect
 
 There are two kinds of structure we've identified in a given VIRUS amplifier. The first is a weakly evolving large scale structure that is typically much less than the amplifier read noise, and is removed easily from a master frame built over the night or even month.  The second structure is on the pixel to pixel scale and is more akin to a  interference pattern.  This structure changes rapidly throughout the night and is not easily removed.  It is however only ~1 electron in amplitude and even less when average over a fiber in the trace direction.  As the only modelable structure is weakly evolving with time, we opt not to make a master bias frame on a night by night basis or even month by month basis and rather allow the master dark frame to capture the weakly evolving large scale structure and not make a master bias frame at all.
 
+#### Gain Multiplication
+The initial units of the amplifier images are ADUs.  We convert to electrons using the gain from the header.  The gain was calculated in the laboratory prior to delivery at the mountain.
+
 #### Dark Subtraction
 The dark current in VIRUS amplifiers have <0.5 electrons in 360s exposures. In a given night, we take between 1 and 10 dark frames.  We thus build a master dark frame, which includes the dark current, large scale bias structure, and some small scale pixel to pixel  interference structure.  The master dark frame time window is a user input, and typically a period of 21 days.
 
@@ -132,9 +135,14 @@ The wavelength solution for each fiber is obtained from Hg and Cd arc lamps.  We
 #### Scattered Light - Spectrograph
 Due to imperfections in the mirrors within each spectrograph, light from the fiber cables is scattered on the CCD creating a background that needs to be accounted for and subtracted.  The scattered light can be modeled as a powerlaw in which a monochromatic intensity for a given fiber has a profile that falls off proportional to 1 / pixel distance.   We find that when we add up light in the central core of fibers and compare that to the total light in the CCD,  roughly 3-4% of the incident fiber light is scattered into this smoother background.  We model this background light in the master twilight frames by first creating a power-law model for the scattered light and then normalize that model to the observed master frame.  We then model the scattered light in the science frame by scaling the background model as a function of wavelength to account for differences between the smoothed twilight incident spectrum and the smoothed average observed science spectrum.  We finally subtract this background model and consider the light lost due to the system rather than trying to account for it in post-processing.
 
+#### Error Propagation
+The error value for each pixel is calculated as the propagation of the variance from the readnoise gathered from the header and the poisson error from the number of e- in each pixel.  However, we do not make any corrections for the low count regime as the observed count is not the correct value to use for evaluating the associated counting error.  
+
 ### Advanced Reduction Steps
 
 #### Fiber Extraction
+We extract fiber spectra from both the science frames as well as the master twilight frame.  We do so by taking the central 5 pixels, +/- 2.5 pixels about the trace.  The outer pixels are given linear weights for the fraction of the pixel that is within 2.5 of the trace.  We then sum up the light at each column for both the science frame and master twilight.  We also calculate a normalized chi2 by comparing the science pixel values normalized by their sum to the master twilight pixel values normalized by their sum as well.  The normalized chi2 gives us a metric by which to flag cosmics and bad columns.  We propagate the error for the spectrum in quadrature using the appropriate weight if the pixel is an outer pixel.
+
 
 #### Sky Subtraction
 
