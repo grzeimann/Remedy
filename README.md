@@ -103,82 +103,34 @@ optional arguments:
 To be filled later, but there are two products ... {DATE}_{OBS}_{IFUSLOT}.fits and {DATE}_{OBS}_{IFUSLOT}_cube.fits
 
 ## About Remedy
-The primary goals of the VIRUS data processing pipeline, Remedy, are to produce flux-calibrated fiber spectra, data cubes,
-and extracted continuum and emissin line sources. Remedy also tracks bad fiber spectra either due to regions of the CCD 
-with low QE, issues within the IFU spectrograph amplifiers, or ``bleeding`` effects of bright continuum sources. 
+The primary goals of the VIRUS data processing pipeline, Remedy, are to produce flux-calibrated fiber spectra, data cubes, and extracted continuum and emissin line sources. Remedy also tracks bad fiber spectra either due to regions of the CCD  with low QE, issues within the IFU spectrograph amplifiers, or ``bleeding`` effects of bright continuum sources. 
 
 We begin by describing the basic CCD processing tasks and then discuss the more advanced steps.
 
 ### Basic Reduction Steps
-VIRUS, at full capacity, is composed of 78 individual IFUs and each IFU is connected to a single 
-spectrograph with two CCDs and four amplifiers.  Each of the amplifiers, 312 in all, has its own bias structure and
-dark current.  
+VIRUS, at full capacity, is composed of 78 individual IFUs and each IFU is connected to a single spectrograph with two CCDs and four amplifiers.  Each of the amplifiers, 312 in all, has its own bias structure and dark current.  
 
 #### Bias Subtraction
-The bias level of an amplifier can be decomposed into a scalar offset and a 
-vector containing structure over the 1032x1032 pixel frame. The scalar
-offset changes with exposure especially in the sequence of exposures.
-We use the overscan region in frame of interest to obtain the scalar offset.
-We measure the scalar offset with a biweight estimator, excluding the first two columns
-of the overscan region due to potential ''bleeding'' from the data section.  Typical
-scalar offsets are in the range of 1000.
+The bias level of an amplifier can be decomposed into a scalar offset and a vector containing structure over the 1032x1032 pixel frame. The scalar offset changes with exposure especially in the sequence of exposures. We use the overscan region in frame of interest to obtain the scalar offset. We measure the scalar offset with a biweight estimator, excluding the first two columns of the overscan region due to potential ''bleeding'' from the data section.  Typical scalar offsets are in the range of 1000.
 
-There are two kinds of structure we've identified in a given VIRUS amplifier.
-The first is a weakly evolving large scale structure that is typically much less
-than the amplifier read noise, and is removed easily from a master frame built over the night
-or even month.  The second structure is on the pixel to pixel scale and is more akin to a 
-interference pattern.  This structure changes rapidly throughout the night and is not easily
-removed.  It is however only ~1 electron in amplitude and even less when average over a fiber
-in the trace direction.  As the only modelable structure is weakly evolving with time, we opt
-not to make a master bias frame on a night by night basis or even month by month basis and rather
-allow the master dark frame to capture the weakly evolving large scale structure and not make a
-master bias frame at all.
+There are two kinds of structure we've identified in a given VIRUS amplifier. The first is a weakly evolving large scale structure that is typically much less than the amplifier read noise, and is removed easily from a master frame built over the night or even month.  The second structure is on the pixel to pixel scale and is more akin to a  interference pattern.  This structure changes rapidly throughout the night and is not easily removed.  It is however only ~1 electron in amplitude and even less when average over a fiber in the trace direction.  As the only modelable structure is weakly evolving with time, we opt not to make a master bias frame on a night by night basis or even month by month basis and rather allow the master dark frame to capture the weakly evolving large scale structure and not make a master bias frame at all.
 
 #### Dark Subtraction
-The dark current in VIRUS amplifiers have <0.5 electrons in 360s exposures.
-In a given night, we take between 1 and 10 dark frames.  We thus build a master dark frame, which
-includes the dark current, large scale bias structure, and some small scale pixel to pixel 
-interference structure.  The master dark frame time window is a user input, and typically a period
-of 21 days.
+The dark current in VIRUS amplifiers have <0.5 electrons in 360s exposures. In a given night, we take between 1 and 10 dark frames.  We thus build a master dark frame, which includes the dark current, large scale bias structure, and some small scale pixel to pixel  interference structure.  The master dark frame time window is a user input, and typically a period of 21 days.
 
 #### Pixel Mask
-From the master dark frame we look for hot pixels and low level charge traps to be masked out later
-in processing.  We first subtract the median value in each column from the master dark to take out the
-large scale columnar pattern. We then subtract the median value in each row to similarly remove low
-level readout pattern.  Finally, we apply a sigma clipping algorithm to identify 5-sigma outliers and
-mask all of these pixels.  Outliers are mostly hot pixels and the base of low level charge traps.
+From the master dark frame we look for hot pixels and low level charge traps to be masked out later in processing.  We first subtract the median value in each column from the master dark to take out the large scale columnar pattern. We then subtract the median value in each row to similarly remove low level readout pattern.  Finally, we apply a sigma clipping algorithm to identify 5-sigma outliers and mask all of these pixels.  Outliers are mostly hot pixels and the base of low level charge traps.
 
 #### Fiber Trace
-The trace of the fibers or distortion map can be measured from high count observations
-like flat-field lamps or twilights.  For an individual fiber, we use the peak pixel and use the two neighboring
-pixels to define a quadratic function.  The peak of the quadratic function is then used as the 
-trace of the fiber for a given column.  To smooth the individual measurements across columns,
-we use a third order polynomial fit.
+The trace of the fibers or distortion map can be measured from high count observations like flat-field lamps or twilights.  For an individual fiber, we use the peak pixel and use the two neighboring pixels to define a quadratic function.  The peak of the quadratic function is then used as the  trace of the fiber for a given column.  To smooth the individual measurements across columns, we use a third order polynomial fit.
 
-We measure the trace from a master twilight taken over an input time range, typically 7 days.  The trace
-is quite stable.  The night to night drift, driven primarily by the ambient temperature,
-is <~0.2 pixels for an individual fiber and elastic in nature as it shifts around a stable location.
-By averaging many nights, we essentially are measuring the trace for the 
-stable location and then for each observation we find a single shift to the new location.
+We measure the trace from a master twilight taken over an input time range, typically 7 days.  The trace is quite stable.  The night to night drift, driven primarily by the ambient temperature, is <~0.2 pixels for an individual fiber and elastic in nature as it shifts around a stable location. By averaging many nights, we essentially are measuring the trace for the  stable location and then for each observation we find a single shift to the new location.
 
 #### Fiber Wavelength
-The wavelength solution for each fiber is obtained from Hg and Cd arc lamps.  We create a master arc
-over an input time range, typically 7 days, and use an peak finding algorithm with a priori knowledge 
-of the wavelength of the bright lines to solve for the wavelength for each fiber. This creates a 
-stable wavelength solution, but like the fiber trace, typical shifts of <~0.2 pixels occur due to
-changes in the ambient temperature.  We currently do not adjust for these wavelength shifts.
+The wavelength solution for each fiber is obtained from Hg and Cd arc lamps.  We create a master arc over an input time range, typically 7 days, and use an peak finding algorithm with a priori knowledge  of the wavelength of the bright lines to solve for the wavelength for each fiber. This creates a  stable wavelength solution, but like the fiber trace, typical shifts of <~0.2 pixels occur due to changes in the ambient temperature.  We currently do not adjust for these wavelength shifts.
 
 #### Scattered Light - Spectrograph
-Due to imperfections in the mirrors within each spectrograph, light from the fiber cables is scattered on the CCD creating a background
-that needs to be accounted for and subtracted.  The scattered light can be modeled as a powerlaw in which a
-monochromatic intensity for a given fiber has a profile that falls off proportional to 1 / pixel distance.  
-We find that when we add up light in the central core of fibers and compare that to the total light in the CCD, 
-roughly 3-4% of the incident fiber light is scattered into this smoother background.  
-We model this background light in the master twilight frames by first creating a power-law model for the scattered light
-and then normalize that model to the observed master frame.  We then model the scattered light in the science frame by scaling the
-background model as a function of wavelength to account for differences between the smoothed twilight incident spectrum 
-and the smoothed average observed science spectrum.  We finally subtract this background model and consider the light lost
-due to the system rather than trying to account for it in post-processing.
+Due to imperfections in the mirrors within each spectrograph, light from the fiber cables is scattered on the CCD creating a background that needs to be accounted for and subtracted.  The scattered light can be modeled as a powerlaw in which a monochromatic intensity for a given fiber has a profile that falls off proportional to 1 / pixel distance.   We find that when we add up light in the central core of fibers and compare that to the total light in the CCD,  roughly 3-4% of the incident fiber light is scattered into this smoother background.  We model this background light in the master twilight frames by first creating a power-law model for the scattered light and then normalize that model to the observed master frame.  We then model the scattered light in the science frame by scaling the background model as a function of wavelength to account for differences between the smoothed twilight incident spectrum and the smoothed average observed science spectrum.  We finally subtract this background model and consider the light lost due to the system rather than trying to account for it in post-processing.
 
 ### Advanced Reduction Steps
 
