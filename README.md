@@ -141,10 +141,16 @@ The error value for each pixel is calculated as the propagation of the variance 
 ### Advanced Reduction Steps
 
 #### Fiber Extraction
-We extract fiber spectra from both the science frames as well as the master twilight frame.  We do so by taking the central 5 pixels, +/- 2.5 pixels about the trace.  The outer pixels are given linear weights for the fraction of the pixel that is within 2.5 of the trace.  We then sum up the light at each column for both the science frame and master twilight.  We also calculate a normalized chi2 by comparing the science pixel values normalized by their sum to the master twilight pixel values normalized by their sum as well.  The normalized chi2 gives us a metric by which to flag cosmics and bad columns.  We propagate the error for the spectrum in quadrature using the appropriate weight if the pixel is an outer pixel.
+We extract fiber spectra from both the science frames as well as the master twilight frame.  We do so by taking the central 5 pixels, +/- 2.5 pixels about the trace.  The outer pixels are given linear weights for the fraction of the pixel that is within 2.5 of the trace.  We then sum up the light at each column for both the science frame and master twilight.  We also calculate a normalized chi2 by comparing the science pixel values normalized by their sum to the master twilight pixel values normalized by their sum as well.  The normalized chi2 gives us a metric by which to flag cosmics and bad columns.  We propagate the error for the spectrum in quadrature using the appropriate weight if the pixel is an outer pixel. Lastly, we linearly interpolate all extracted spectra (and errors) to a common wavelength grid.
 
+#### Fiber Normalization
+Fiber normalization relative thoughput of each fiber compared to average.  The variations occur from CCD QE differences, fiber throughput differences, and spectrograph throughput differences.  We use the master twilight frame to evaluate the fiber normalization.  We make the assumption that averaging over many twilights the illumination across out 22' FoV is uniform and the only variation is due to the fiber normalization.  Using the extracted fiber spectra from the master twilight we build our fiber to fiber corrections.  At the HET, the illumination of the FoV depends on the track of the observation and can vary by up to 10%.  To correct the fiber to fiber normalization to our current observations we perform two steps: 1. for each amplifier we exclude real sources and use the sky and an assumption that it should be uniform across fibers to find a normalization correction in 11 bins of wavelength, 2. we interpolate those wavelength bins for each fiber to find the smooth fiber to fiber correction for our science observation.  This correction runs into issues if the field is heavily crowded.  To avoid such issues, fiber normalization adjustments beyond the physical limit of 10% are excluded and set to 1.  We flag fibers with such large adjustments to be excluded later when identify stars for flux and astrometric calibration.
+
+#### Total Masking
 
 #### Sky Subtraction
+
+With the fiber normalizations made, we build a single sky spectrum for each exposure using the biweight estimator.  We then subtract the single sky spectrum from each fiber.
 
 #### Source Extraction
 
