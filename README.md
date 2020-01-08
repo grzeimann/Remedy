@@ -161,12 +161,15 @@ Earlier, we discussed the error propagation from readnoise and poisson counting 
 We astrometrically calibrate our VIRUS observations to Pan-STARRS (Chambers et al. 2016) Data Release 2.  We go IFU by IFU, collapse the sky-subtraced spectra, interpolate onto a uniform grid, detect point sources in the collapsed image, and match the detections to the Pan-STARRS catalog.  We then fit for a shift and rotation from the initial VIRUS astrometry given by the telescope.  The typical shift is less than 5" and the rotation is <~0.1 degrees.
 
 #### Source Extraction
+The goal of our source extraction is a high signal to noise spectrum without introducing large systematic errors in the relative flux calibration.  To accomplish the former we use an optimal extraction method.  However, VIRUS spectra include two complications: an undersampled spatial point spread function and differential atmospheric refraction.  VIRUS fibers are 1.5" in diameter and the typical seeing of the HET is roughly the same.  This means that up to 60-70% of the light from a source can be in a single fiber, however the weight for each fiber can change quickly with slight changes in the assumed position of the source for a given spatial point spread function.  Thus, high quality astrometry, appropriately assumed spread function, and an accurate model of the change of position as a function of wavelength from differential atmospheric refraction are required.
 
+Luckily, since we have so many units covering a large area on sky, we typically have >20 stars to use to model both the spatial point spread function as well as the differential atmospheric refraction.  Simultaneously, we can model the normalization between the three exposures that comprise a single observation.  The mirror illumination at the HET depends on the track location, which constantly changes over an exposure.  Thus the amount of light collected for each of the three exposures is likely different and needs to be normalized to the average illumination.  We model the normalization, the spatial point spread function, and the differential atmospheric refraction in an iterative approach with convergence after just 2 or 3 iterations.
 
 #### Flux Calibration
+For flux calibration, we use a pre-computed throughput curve from the HETDEX collaboration (Gebhardt et al. 2020), but for applicability to a given observation we must take into account the conditions of that observation.  We use the stars in the field to find the normalization (transparency) for the given shot.  After applying the standard throughput curve we convolve the initially calibrated spectra with a Pan-STARRS g' filter and find the biweight estimated offset between the VIRUS g' magnitude and the Pan-STARRS g' magnitude.  That offset is the normalization we apply to the standard througphput curve and gives us our final flux calibration.
 
-
-
+#### Data Cubes
+A full FoV data cube would be quite large and sparse due to the 1/4.5 fill factor of the VIRUS IFUs.  Instead, we make a data cube for any given IFU.  We linearly interpolate at any given wavelength to go from the 1344 fibers on sky to a uniform grid.  We take into account differential atmmospheric refraction as function of wavelength, which amounts to a change in position for the fibers of roughly 1" across 3500-5500A.
 
 ## Examples
 
