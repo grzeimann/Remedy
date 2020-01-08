@@ -147,7 +147,7 @@ def queryTESS_IC(ra, dec, radius):
 
 def panstarrs_query(ra_deg, dec_deg, rad_deg, mindet=1,
                     maxsources=30000,
-                    server=('https://catalogs.mast.stsci.edu/api/v0.1/panstarrs/dr1/stack.votable')):
+                    server=('https://catalogs.mast.stsci.edu/api/v0.1/panstarrs/dr2/stack.votable')):
     """
     Query Pan-STARRS DR1 @ MAST
     parameters: ra_deg, dec_deg, rad_deg: RA, Dec, field
