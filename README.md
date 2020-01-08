@@ -154,9 +154,14 @@ Finally, we flag an entire fiber if more than 20\% of the fiber is flagged alrea
 #### Sky Subtraction
 With the fiber normalizations made, we build a single sky spectrum for each exposure using the biweight estimator.  We then subtract the single sky spectrum from each fiber.
 
-#### Source Extraction
+#### Spectral Error Normalization
+Earlier, we discussed the error propagation from readnoise and poisson counting errors to the error in the extracted spectrum.  However, in the process of rectifying the extracted spectra we correlated noise between spectral columns in the rectified phase space.  Instead of keeping a large co-variance matrix for each spectrum, we instead merely re-normalize our error spectra so that the biweight midvariance of our sky-subtracted spectra divided by the error spectra has a sigma equal to 1.  The correction factor is typically 0.8 and is a single scalar for all spectra in an observation.
 
 #### Astrometric Calibration
+We astrometrically calibrate our VIRUS observations to Pan-STARRS (Chambers et al. 2016) Data Release 2.  We go IFU by IFU, collapse the sky-subtraced spectra, interpolate onto a uniform grid, detect point sources in the collapsed image, and match the detections to the Pan-STARRS catalog.  We then fit for a shift and rotation from the initial VIRUS astrometry given by the telescope.  The typical shift is less than 5" and the rotation is <~0.1 degrees.
+
+#### Source Extraction
+
 
 #### Flux Calibration
 
