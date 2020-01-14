@@ -1051,6 +1051,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
     filenames = fnmatch.filter(scinames, fnames_glob)
     nexposures = len(filenames)
     N = len(ifuloop) * nexposures * 112
+    ExP = np.zeros((N,))
     p = np.zeros((N, 2))
     t = np.zeros((N, len(def_wave)))
     s = np.zeros((N, len(def_wave)))
@@ -1111,6 +1112,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
                 mult_fac2 = mult_fac * fac
             else:
                 mult_fac2 = mult_fac * 1.
+            ExP[j] = header['EXPTIME']
             twi[:] = safe_division(twi, throughput)
             spec = safe_division(spec1, throughput) * mult_fac2
             espec = safe_division(espec1, throughput) * mult_fac2
@@ -1143,7 +1145,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
     _i = np.vstack(_i)
     tableh5.flush()
     tableh5 = None
-    return p, t, s, e, fn, scitarfile, _i, c1, intm
+    return p, t, s, e, filenames[0], scitarfile, _i, c1, intm, ExP
 
 
 def make_cube(xloc, yloc, data, Dx, Dy, ftf, scale, ran,
@@ -1379,7 +1381,7 @@ def estimate_sky(data):
     init_sky = np.nanmedian(data[skyfibers], axis=0)
     return init_sky
 
-def get_mirror_illumination(fn=None, default=51.4e4):
+def get_mirror_illumination_throughput(fn=None, default=51.4e4, default_t=1.):
     ''' Use hetillum from illum_lib to calculate mirror illumination (cm^2) '''
     log.info('Getting mirror illumination')
     try:
@@ -1392,14 +1394,17 @@ def get_mirror_illumination(fn=None, default=51.4e4):
                              ' -x "[%0.4f,%0.4f,%0.4f]" "[%0.4f,%0.4f]" 256' %
                                       (x, y, p, 0.042, 0.014)).read().split('\n')[0])
         area = mirror_illum * default
+        transpar = F[0].header['TRANSPAR']
     except:
         log.info('Using default mirror illumination value')
         area = default
+        transpar = default_t
     log.info('Mirror illumination: %0.2f m^2' % (area/1e4))
-    return area
+    log.info('Througphut: %0.2f' % transpar)
+    return area, transpar
 
 
-def get_mirror_illumination_guider(fn, exptime, default=51.4e4,
+def get_mirror_illumination_guider(fn, exptime, default=51.4e4, default_t=1.,
                                    path='/work/03946/hetdex/maverick'):
     try:
         M = []
@@ -1429,18 +1434,20 @@ def get_mirror_illumination_guider(fn, exptime, default=51.4e4,
                 final_list.append(t)
         for fn in final_list:
             fobj = T.extractfile(T.getmember(fn))
-            M.append(get_mirror_illumination(fobj))
+            M.append(get_mirror_illumination_throughput(fobj))
         M = np.array(M)
-        sel = M != 51.4e4
+        sel = M[:, 0] != 51.4e4
         if sel.sum() > 0.:
-            area = np.mean(M[sel])
+            area = np.mean(M[sel, 0])
+            transpar = np.mean(M[sel, 1])
         else:
             area = 51.4e4
+            transpar = 1.
         log.info('Final Mirror illumination: %0.2f m^2' % (area/1e4))
-        return area
+        return area, transpar
     except: 
         log.info('Using default mirror illumination: %0.2f m^2' % (default/1e4))
-        return default
+        return default, default_t
 
 def make_photometric_image(x, y, data, filtg, mask, Dx, Dy,
                            nchunks=25, ran=[-23, 25, -23, 25], scale=0.75,
@@ -2035,7 +2042,7 @@ allifus = np.hstack(allifus)
 tableh5 = h5spec.create_table(h5spec.root, 'Cals', Cals, 
                             "Cal Information")
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
-pos, twispectra, scispectra, errspectra, fn, tfile, _I, C1, intm = reduce_ifuslot(ifuloop,
+pos, twispectra, scispectra, errspectra, fn, tfile, _I, C1, intm, ExP = reduce_ifuslot(ifuloop,
                                                                         h5table, tableh5)
 
 _I = np.hstack(_I)
@@ -2204,51 +2211,73 @@ RAFibers, DecFibers = [np.hstack(x) for x in [RAFibers, DecFibers]]
 # =============================================================================
 # Get Normalization
 # =============================================================================
-E = Extract()
-tophat = E.tophat_psf(3., 10.5, 0.25)
-moffat = E.moffat_psf(1.75, 10.5, 0.25)
-newpsf = tophat[0]*moffat[0]
-newpsf /= newpsf.sum()
-apcor = np.max(newpsf) / np.max(moffat[0])
-log.info('Aperture correction factor: %0.2f' % apcor)
-psf = [newpsf, moffat[1], moffat[2]]
-E.psf = psf
-E.get_ADR_RAdec(A)
-objsel = (f['Cgmag'] < 21.) * (f['dist'] < 1.)
-
-if objsel.sum() and (nexp > 1):
-    mRA, mDec = A.tp.wcs_pix2world(f['fx'][objsel], f['fy'][objsel], 1)
-    E.coords = SkyCoord(mRA*units.deg, mDec*units.deg, frame='fk5')
-    GMag = np.zeros((len(E.coords), nexp+1))
-    GMag[:, 0] = f['Cgmag'][objsel]
-    for k in np.arange(nexp):
-        sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
-        E.ra, E.dec = (RAFibers[sel], DecFibers[sel])
-        E.data = scispectra[sel]
-        E.error = errspectra[sel]
-        E.mask = np.isfinite(scispectra[sel])
-        for i in np.arange(len(E.coords)):
-            specinfo = E.get_spectrum_by_coord_index(i)
-            gmask = np.isfinite(specinfo[0]) * (specinfo[2] > (0.7 / 3.))
-            if gmask.sum() > 50.:
-                gmag = np.dot(specinfo[0][gmask], filtg[gmask]) / np.sum(filtg[gmask])
-                GMag[i, k+1] = -2.5 * np.log10(gmag) + 23.9
-            else:
-                GMag[i, k+1] = np.nan
-    mult_offset = np.ones((nexp,))
-    for i in np.arange(nexp):
-        mult_offset[i] = 10**(-0.4 * (biweight(GMag[:, 0] - GMag[:, i+1])))
-        log.info('Multiplicative offset for exposure %i to Catalog: %0.2f' %
-                 (i+1, mult_offset[i]))
-    exp_ratio = np.ones((nexp,))
-    for i in np.arange(1, nexp):
-        exp_ratio[i] = mult_offset[i] / mult_offset[0]
-        sel = (np.array(inds / 112, dtype=int) % nexp) == i
-        if np.isfinite(exp_ratio[i]):
-            scispectra[sel] = scispectra[sel] * exp_ratio[i]
-            errspectra[sel] = errspectra[sel] * exp_ratio[i]
-        log.info('Spectroscopic ratio for exposure %i to exposure 1: %0.2f' %
-                 (i+1, 1 / exp_ratio[i]))
+gratio = np.zeros((nexp,))
+for i in np.arange(1, nexp+1):
+    millum, transpar = get_mirror_illumination_guider(fn.replace('exp01', 'exp%02d' % i), ExP[i-1])
+    gratio[i-1] = millum * transpar
+gratio = gratio / gratio[0]
+for i in np.arange(1, nexp):
+    sel = (np.array(inds / 112, dtype=int) % nexp) == i
+    scispectra[sel] = scispectra[sel] / gratio[i]
+    errspectra[sel] = errspectra[sel] / gratio[i]
+    log.info('Ratio for exposure %i to exposure 1: %0.2f' %
+             (i+1, gratio[i]))
+#E = Extract()
+#tophat = E.tophat_psf(3., 10.5, 0.25)
+#moffat = E.moffat_psf(1.75, 10.5, 0.25)
+#newpsf = tophat[0]*moffat[0]
+#newpsf /= newpsf.sum()
+#apcor = np.max(newpsf) / np.max(moffat[0])
+#log.info('Aperture correction factor: %0.2f' % apcor)
+#psf = [newpsf, moffat[1], moffat[2]]
+#E.psf = psf
+#E.get_ADR_RAdec(A)
+#objsel = (f['Cgmag'] < 21.) * (f['dist'] < 1.)
+#Nstars = objsel.sum()
+#mRA, mDec = A.tp.wcs_pix2world(f['fx'][objsel], f['fy'][objsel], 1)
+#E.coords = SkyCoord(mRA*units.deg, mDec*units.deg, frame='fk5')
+#E.ra, E.dec = (RAFibers, DecFibers)
+#E.data = scispectra
+#E.error = errspectra
+#E.mask = np.isfinite(scispectra)
+#
+#
+#
+#objsel = (f['Cgmag'] < 21.) * (f['dist'] < 1.)
+#
+#if objsel.sum() and (nexp > 1):
+#    mRA, mDec = A.tp.wcs_pix2world(f['fx'][objsel], f['fy'][objsel], 1)
+#    E.coords = SkyCoord(mRA*units.deg, mDec*units.deg, frame='fk5')
+#    GMag = np.zeros((len(E.coords), nexp+1))
+#    GMag[:, 0] = f['Cgmag'][objsel]
+#    for k in np.arange(nexp):
+#        sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
+#        E.ra, E.dec = (RAFibers[sel], DecFibers[sel])
+#        E.data = scispectra[sel]
+#        E.error = errspectra[sel]
+#        E.mask = np.isfinite(scispectra[sel])
+#        for i in np.arange(len(E.coords)):
+#            specinfo = E.get_spectrum_by_coord_index(i)
+#            gmask = np.isfinite(specinfo[0]) * (specinfo[2] > (0.7 / 3.))
+#            if gmask.sum() > 50.:
+#                gmag = np.dot(specinfo[0][gmask], filtg[gmask]) / np.sum(filtg[gmask])
+#                GMag[i, k+1] = -2.5 * np.log10(gmag) + 23.9
+#            else:
+#                GMag[i, k+1] = np.nan
+#    mult_offset = np.ones((nexp,))
+#    for i in np.arange(nexp):
+#        mult_offset[i] = 10**(-0.4 * (biweight(GMag[:, 0] - GMag[:, i+1])))
+#        log.info('Multiplicative offset for exposure %i to Catalog: %0.2f' %
+#                 (i+1, mult_offset[i]))
+#    exp_ratio = np.ones((nexp,))
+#    for i in np.arange(1, nexp):
+#        exp_ratio[i] = mult_offset[i] / mult_offset[0]
+#        sel = (np.array(inds / 112, dtype=int) % nexp) == i
+#        if np.isfinite(exp_ratio[i]):
+#            scispectra[sel] = scispectra[sel] * exp_ratio[i]
+#            errspectra[sel] = errspectra[sel] * exp_ratio[i]
+#        log.info('Spectroscopic ratio for exposure %i to exposure 1: %0.2f' %
+#                 (i+1, 1 / exp_ratio[i]))
 
 
 f, Total_sources, info, A = advanced_analysis(tfile, fn, scispectra, allifus,
