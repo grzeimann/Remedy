@@ -340,8 +340,8 @@ def get_spectra(array_flt, array_trace, npix=5):
     spec = np.zeros((array_trace.shape[0], array_trace.shape[1]))
     N = array_flt.shape[0]
     x = np.arange(array_flt.shape[1])
-    LB = int(npix/2)
-    HB = -LB + npix
+    LB = int((npix+1)/2)
+    HB = -LB + npix + 1
     for fiber in np.arange(array_trace.shape[0]):
         if np.round(array_trace[fiber]).min() < LB:
             continue
@@ -349,7 +349,13 @@ def get_spectra(array_flt, array_trace, npix=5):
             continue
         indv = np.round(array_trace[fiber]).astype(int)
         for j in np.arange(-LB, HB):
-            spec[fiber] += array_flt[indv+j, x] / npix
+            if j == -LB:
+                w = indv + j + 1 - (array_trace[fiber] - npix/2.)
+            elif j == HB-1:
+                w = (npix/2. + array_trace[fiber]) - (indv + j) 
+            else:
+                w = 1.
+            spec[fiber] += array_flt[indv+j, x] * w
     return spec
 
 
