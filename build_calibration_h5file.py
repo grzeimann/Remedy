@@ -186,7 +186,7 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
         big_array = np.array([v[0] for v in bia_list])
         masterbias = np.median(big_array, axis=0)
         if kind == 'drk':
-            masterstd = mad_std(big_array, axis=0)
+            masterstd = np.std(big_array, axis=0)
         else:
             masterstd = np.std(big_array, axis=0)
     else:
