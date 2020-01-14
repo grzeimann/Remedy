@@ -305,7 +305,10 @@ for ifuslot_key in ifuslots:
                                   (ifuslot_key, amp, cl, cm, ch))
                 args.log.info('Getting powerlaw for %03d %s' %
                               (int(ifuslot), amp))
-                plaw = get_powerlaw(_info[0], trace, twi, amp)
+                try:
+                    plaw = get_powerlaw(_info[0], trace, twi, amp)
+                except:
+                    args.log.warning('Powerlaw failed for %s' % ifuslot_key)
             if kind == 'cmp':
                 args.log.info('Getting wavelength for %03d %s' %
                               (int(ifuslot), amp))
