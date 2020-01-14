@@ -2212,7 +2212,7 @@ RAFibers, DecFibers = [np.hstack(x) for x in [RAFibers, DecFibers]]
 # =============================================================================
 # Get Normalization
 # =============================================================================
-gratio = np.zeros((nexp,))
+gratio = np.ones((nexp,))
 for i in np.arange(1, nexp+1):
     millum, transpar = get_mirror_illumination_guider(fns[i-1], ExP[i-1])
     gratio[i-1] = millum * transpar
