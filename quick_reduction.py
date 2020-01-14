@@ -64,7 +64,7 @@ amps = ['LL', 'LU', 'RL', 'RU']
 badifuslots = np.array([])
 
 # Default dither pattern for 3 exposures
-dither_pattern = np.array([[0., 0.], [1.27, -0.73], [1.27, 0.73]])
+dither_pattern = np.array([[0., 0.], [1.215, -0.70], [1.215, 0.70]])
 
 # Rectified wavelength
 def_wave = np.linspace(3470., 5540., 1036)
