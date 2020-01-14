@@ -1145,7 +1145,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
     _i = np.vstack(_i)
     tableh5.flush()
     tableh5 = None
-    return p, t, s, e, filenames[0], scitarfile, _i, c1, intm, ExP
+    return p, t, s, e, filenames, scitarfile, _i, c1, intm, ExP
 
 
 def make_cube(xloc, yloc, data, Dx, Dy, ftf, scale, ran,
@@ -2042,9 +2042,10 @@ allifus = np.hstack(allifus)
 tableh5 = h5spec.create_table(h5spec.root, 'Cals', Cals, 
                             "Cal Information")
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
-pos, twispectra, scispectra, errspectra, fn, tfile, _I, C1, intm, ExP = reduce_ifuslot(ifuloop,
+pos, twispectra, scispectra, errspectra, fns, tfile, _I, C1, intm, ExP = reduce_ifuslot(ifuloop,
                                                                         h5table, tableh5)
 
+fn = fns[0]
 _I = np.hstack(_I)
 h5file.close()
 h5file = None
@@ -2213,14 +2214,14 @@ RAFibers, DecFibers = [np.hstack(x) for x in [RAFibers, DecFibers]]
 # =============================================================================
 gratio = np.zeros((nexp,))
 for i in np.arange(1, nexp+1):
-    millum, transpar = get_mirror_illumination_guider(fn.replace('exp01', 'exp%02d' % i), ExP[i-1])
+    millum, transpar = get_mirror_illumination_guider(fns[i-1], ExP[i-1])
     gratio[i-1] = millum * transpar
 gratio = gratio / gratio[0]
 for i in np.arange(1, nexp):
     sel = (np.array(inds / 112, dtype=int) % nexp) == i
     scispectra[sel] = scispectra[sel] / gratio[i]
     errspectra[sel] = errspectra[sel] / gratio[i]
-    log.info('Ratio for exposure %i to exposure 1: %0.2f' %
+    log.info('Guider ratio for exposure %i to exposure 1: %0.2f' %
              (i+1, gratio[i]))
 #E = Extract()
 #tophat = E.tophat_psf(3., 10.5, 0.25)
