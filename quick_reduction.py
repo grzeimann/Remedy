@@ -2215,6 +2215,8 @@ RAFibers, DecFibers = [np.hstack(x) for x in [RAFibers, DecFibers]]
 gratio = np.ones((nexp,))
 for i in np.arange(1, nexp+1):
     millum, transpar = get_mirror_illumination_guider(fns[i-1], ExP[i-1])
+    log.info('Mirror Illumination and Transparency for exposure %i'
+             ': %0.2f, %0.2f' % (i, millum/1e4, transpar))
     gratio[i-1] = millum * transpar
 gratio = gratio / gratio[0]
 for i in np.arange(1, nexp):
