@@ -173,6 +173,14 @@ class Astrometry:
         # remember to flip x,y
         return self.tp.wcs_pix2world(ifu.y + x, ifu.x + y, 1)
 
+    def get_ifupos_from_ra_dec(self, ifuslot, ra, dec):
+        ''' Fplane functionality required for this '''
+        if self.fplane is None or not pyhetdex_flag:
+            return None
+        ifu = self.fplane.by_ifuslot(ifuslot)
+        # remember to flip x,y
+        return self.tp.wcs_pix2world(ifu.y + x, ifu.x + y, 1)
+
     def get_ifuslot_projection(self, ifuslot, imscale, crx, cry):
         ''' Fplane functionality required for this '''
         if self.fplane is None or not pyhetdex_flag:
