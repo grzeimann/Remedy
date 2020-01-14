@@ -215,6 +215,9 @@ parser.add_argument('outfilename', type=str,
 parser.add_argument("-f", "--folder", help='''Output folder''', type=str,
                     default='output')
 
+parser.add_argument("-dd", "--dark_days", help='''Extra days +/- for darks''', type=int,
+                    default=7)
+
 parser.add_argument("-i", "--ifuslot",  help='''IFUSLOT''', type=str,
                     default='047')
 
@@ -231,7 +234,7 @@ tarname_dict = {}
 for kind in kinds:
     args.log.info('Getting file names for %s' % kind)
     if kind == 'drk':
-        daterange = expand_date_range(args.daterange, 7)
+        daterange = expand_date_range(args.daterange, args.dark_days)
     else:
         daterange = list(args.daterange)
     filename_dict[kind] = get_filenames(args, daterange, kind)
