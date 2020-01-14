@@ -293,22 +293,20 @@ for ifuslot_key in ifuslots:
                 try:
                     trace, ref = get_trace(_info[0], specid, ifuSlot, ifuid,
                                            amp, _info[2][:8], dirname)
+                    twi = get_spectra(_info[0], trace)
+                    cm, cl, ch = measure_contrast(_info[0], twi, trace)
+                    if cm is not None:
+                        args.log.info('Contrast 5th, 50th, and 95th percentiles for '
+                                      '%s %s: %0.2f, %0.2f, %0.2f' %
+                                      (ifuslot_key, amp, cl, cm, ch))
+                    args.log.info('Getting powerlaw for %03d %s' %
+                                  (int(ifuslot), amp))
+                    try:
+                        plaw = get_powerlaw(_info[0], trace, twi, amp)
+                    except:
+                        args.log.warning('Powerlaw failed for %s' % ifuslot_key)
                 except:
                     args.log.error('Trace Failed.')
-                    fits.PrimaryHDU(_info[0]).writeto('testtwi.fits', overwrite=True)
-                    sys.exit(1)
-                twi = get_spectra(_info[0], trace)
-                cm, cl, ch = measure_contrast(_info[0], twi, trace)
-                if cm is not None:
-                    args.log.info('Contrast 5th, 50th, and 95th percentiles for '
-                                  '%s %s: %0.2f, %0.2f, %0.2f' %
-                                  (ifuslot_key, amp, cl, cm, ch))
-                args.log.info('Getting powerlaw for %03d %s' %
-                              (int(ifuslot), amp))
-                try:
-                    plaw = get_powerlaw(_info[0], trace, twi, amp)
-                except:
-                    args.log.warning('Powerlaw failed for %s' % ifuslot_key)
             if kind == 'cmp':
                 args.log.info('Getting wavelength for %03d %s' %
                               (int(ifuslot), amp))
