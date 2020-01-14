@@ -2045,6 +2045,7 @@ log.info('Reducing ifuslot: %03d' % args.ifuslot)
 pos, twispectra, scispectra, errspectra, fns, tfile, _I, C1, intm, ExP = reduce_ifuslot(ifuloop,
                                                                         h5table, tableh5)
 
+print(fns)
 fn = fns[0]
 _I = np.hstack(_I)
 h5file.close()
