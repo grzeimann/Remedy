@@ -1086,6 +1086,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         twi = get_twi_spectra(masterflt, trace, wave, def_wave)
         log.info('Getting powerlaw for mastertwi for %s%s' % (ifuslot, amp))
         plaw = get_powerlaw(masterflt, trace, twi, amp)
+        
         masterflt[:] = masterflt - plaw
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
         fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
@@ -1101,7 +1102,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             plawS = get_powerlaw(sciimage, trace, sciS, amp)
 
             sciimage[:] = sciimage - plawS
-            twi, spec1, espec1, plaw1, mdark1, chi21 = get_spectra(sciimage, scierror, masterflt, sci_plaw, masterdark,
+            twi, spec1, espec1, plaw1, mdark1, chi21 = get_spectra(sciimage, scierror, masterflt, plawS, masterdark,
                                              trace, wave, def_wave, pixelmask)
             if j==0:
                 try:
@@ -2036,7 +2037,6 @@ for ifuslot in ifuslotn:
 ifuloop = np.array(np.hstack(sel1), dtype=int)
 nslots = len(ifuloop) / 4
 allifus = np.hstack(allifus)
-
 
 
 # =============================================================================
