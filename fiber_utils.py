@@ -833,12 +833,13 @@ def measure_contrast(image, spec, trace, xmin=0,
             inorder = np.argsort(x)
             xbin = np.array([np.median(chunk) for chunk in np.array_split(x[inorder], 25)])
             ybin = np.array([np.median(chunk) for chunk in np.array_split(y[inorder], 25)])
-            peak_loc, peaks = find_peaks(ybin, thresh=0.4)
+            gpeak = np.nanmax(ybin)
+            peak_loc, peaks = find_peaks(ybin, thresh=gpeak*0.8)
             if len(peak_loc) != 1:
                 continue
             peak_loc = np.interp(peak_loc, np.arange(len(xbin)), xbin)
             peak = np.interp(peak_loc, xbin, ybin)
-            valley_loc, valley = find_peaks(1. - ybin, thresh=0.3)
+            valley_loc, valley = find_peaks(gpeak - ybin, thresh=gpeak*0.5)
             valley_loc = np.interp(valley_loc, np.arange(len(xbin)), xbin)
             if len(valley_loc) != 2:
                 continue
