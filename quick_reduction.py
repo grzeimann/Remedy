@@ -1067,6 +1067,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         wave = h5table[ind]['wavelength']
         trace = h5table[ind]['trace']
         readnoise = h5table[ind]['readnoise']
+        masterflt = h5table[ind]['mastertwi']
         try:
             masterdark = h5table[ind]['masterdark']
             pixelmask = h5table[ind]['pixelmask']
@@ -1079,10 +1080,6 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
                        format='ascii.fixed_width_two_line')
         throughput = np.array([T['throughput']]*112)
         
-        fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'twi')
-        twibase = fnmatch.filter(twinames, fnames_glob)
-        log.info('Making mastertwi for %s%s' % (ifuslot, amp))
-        masterflt = get_mastertwi(twibase, 0.0, twitarfile)
         twi = get_twi_spectra(masterflt, trace, wave, def_wave)
         log.info('Getting powerlaw for mastertwi for %s%s' % (ifuslot, amp))
         plaw = get_powerlaw(masterflt, trace, twi, amp)
@@ -1102,8 +1099,9 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             plawS = get_powerlaw(sciimage, trace, sciS, amp)
 
             sciimage[:] = sciimage - plawS
-            twi, spec1, espec1, plaw1, mdark1, chi21 = get_spectra(sciimage, scierror, masterflt, plawS, masterdark,
-                                             trace, wave, def_wave, pixelmask)
+            twi, spec1, espec1, plaw1, mdark1, chi21 = get_spectra(sciimage, 
+                                        scierror, masterflt, plawS, masterdark,
+                                        trace, wave, def_wave, pixelmask)
             if j==0:
                 try:
                     intpm, shifts = measure_fiber_profile(masterflt, twi, trace, wave, def_wave)
