@@ -184,12 +184,14 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
         return None
 
     if kind != 'cmp':
-        big_array = np.array([v[0] for v in bia_list])
-        masterbias = np.median(big_array, axis=0)
-        if kind == 'drk':
-            masterstd = np.std(big_array, axis=0)
+        if kind != 'twi':
+            big_array = np.array([v[0] for v in bia_list])
+            masterbias = np.median(big_array, axis=0)
         else:
-            masterstd = np.std(big_array, axis=0)
+            big_array = np.array([v[0] for v in bia_list 
+                          if (np.mean(v[0])>1000.) and (np.mean(v[0])<50000.)])
+            masterbias = np.median([v[0] for v in bia_list]) 
+        masterstd = np.std(big_array, axis=0)
     else:
         masterbias = np.zeros(bia_list[0][0].shape)
         masterstd = np.zeros(bia_list[0][0].shape)
@@ -289,10 +291,6 @@ for ifuslot_key in ifuslots:
 
                 args.log.info('Getting trace for %s %s' %
                               (ifuslot_key, amp))
-                if np.mean(_info[0]) < 1000.:
-                    args.log.warning('Twi for %s %s below 1000 cnts on average.' %
-                                     (ifuslot_key, amp))
-                    break
                 try:
                     trace, ref = get_trace(_info[0], specid, ifuSlot, ifuid,
                                            amp, _info[2][:8], dirname)
@@ -309,7 +307,8 @@ for ifuslot_key in ifuslots:
                     except:
                         args.log.warning('Powerlaw failed for %s' % ifuslot_key)
                 except:
-                    args.log.error('Trace Failed.')
+                    args.log.error('Trace Failed for %s %s.' %
+                                       (ifuslot_key, amp))
             if kind == 'cmp':
                 args.log.info('Getting wavelength for %03d %s' %
                               (int(ifuslot), amp))
