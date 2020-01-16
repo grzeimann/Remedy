@@ -183,16 +183,7 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
         log.warning('No %s frames found for date range given' % kind)
         return None
 
-    if kind != 'cmp':
-        if kind != 'twi':
-            big_array = np.array([v[0] for v in bia_list])
-            masterbias = np.median(big_array, axis=0)
-        else:
-            big_array = np.array([v[0] for v in bia_list 
-                          if (np.mean(v[0])>1000.) and (np.mean(v[0])<50000.)])
-            masterbias = np.median([v[0] for v in bia_list]) 
-        masterstd = np.std(big_array, axis=0)
-    else:
+    if kind == 'cmp':
         masterbias = np.zeros(bia_list[0][0].shape)
         masterstd = np.zeros(bia_list[0][0].shape)
 
@@ -203,7 +194,17 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
             masterst = np.std(big_array, axis=0)
             masterbias += masterim
             masterstd += masterst / len(objnames)
+    if kind == 'drk':
+        big_array = np.array([v[0] for v in bia_list])
+        masterbias = np.median(big_array, axis=0)
+        masterstd = np.std(big_array, axis=0)
+    if kind == 'twi':
+        big_array = np.array([v[0] for v in bia_list 
+                      if ((np.mean(v[0])>1000.) and (np.mean(v[0])<50000.))])
+        masterbias = np.median([v[0] for v in bia_list]) 
+        masterstd = np.std(big_array, axis=0)
 
+    log.info('Number of frames for %s: %i' % (kind, len(big_array)))
     d1 = bia_list[0][3]
     d2 = bia_list[-1][3]
     d4 = (d1 + timedelta(seconds=(d2-d1).seconds / 2.) +
@@ -295,20 +296,20 @@ for ifuslot_key in ifuslots:
                     trace, ref = get_trace(_info[0], specid, ifuSlot, ifuid,
                                            amp, _info[2][:8], dirname)
                     twi = get_spectra(_info[0], trace)
+                except:
+                    args.log.error('Trace Failed for %s %s.' %
+                                       (ifuslot_key, amp))
+                try:
                     cm, cl, ch = measure_contrast(_info[0], twi, trace)
                     if cm is not None:
                         args.log.info('Contrast 5th, 50th, and 95th percentiles for '
                                       '%s %s: %0.2f, %0.2f, %0.2f' %
                                       (ifuslot_key, amp, cl, cm, ch))
-                    args.log.info('Getting powerlaw for %03d %s' %
-                                  (int(ifuslot), amp))
-                    try:
-                        plaw = get_powerlaw(_info[0], trace, twi, amp)
-                    except:
-                        args.log.warning('Powerlaw failed for %s' % ifuslot_key)
                 except:
-                    args.log.error('Trace Failed for %s %s.' %
+                    args.log.error('Contrast Failed for %s %s.' %
                                        (ifuslot_key, amp))
+                args.log.info('Getting powerlaw for %03d %s' %
+                              (int(ifuslot), amp))
             if kind == 'cmp':
                 args.log.info('Getting wavelength for %03d %s' %
                               (int(ifuslot), amp))
