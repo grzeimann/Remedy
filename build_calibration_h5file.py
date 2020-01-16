@@ -199,8 +199,7 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
         masterbias = np.median(big_array, axis=0)
         masterstd = np.std(big_array, axis=0)
     if kind == 'twi':
-        big_array = np.array([v[0] for v in bia_list 
-                      if ((np.mean(v[0])>1000.) and (np.mean(v[0])<50000.))])
+        big_array = np.array([v[0] for v in bia_list])
         masterbias = np.median([v[0] for v in bia_list]) 
         masterstd = np.std(big_array, axis=0)
 
