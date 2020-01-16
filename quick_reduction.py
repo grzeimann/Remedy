@@ -1095,12 +1095,12 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             div = safe_division(sciimage, masterflt)
             ratio = savgol_filter(np.median(div, axis=0), 351, 3)
             sci_plaw = plaw * ratio[np.newaxis, :]
-            sciS = get_twi_spectra(sciimage, trace, wave, def_wave)
-            plawS = get_powerlaw(sciimage, trace, sciS, amp)
+            #sciS = get_twi_spectra(sciimage, trace, wave, def_wave)
+            #plawS = get_powerlaw(sciimage, trace, sciS, amp)
 
-            sciimage[:] = sciimage - plawS
+            sciimage[:] = sciimage - sci_plaw
             twi, spec1, espec1, plaw1, mdark1, chi21 = get_spectra(sciimage, 
-                                        scierror, masterflt, plawS, masterdark,
+                                        scierror, masterflt, sci_plaw, masterdark,
                                         trace, wave, def_wave, pixelmask)
             if j==0:
                 try:
