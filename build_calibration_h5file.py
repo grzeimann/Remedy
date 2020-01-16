@@ -309,8 +309,6 @@ for ifuslot_key in ifuslots:
                 except:
                     args.log.error('Contrast Failed for %s %s.' %
                                        (ifuslot_key, amp))
-                args.log.info('Getting powerlaw for %03d %s' %
-                              (int(ifuslot), amp))
             if kind == 'cmp':
                 args.log.info('Getting wavelength for %03d %s' %
                               (int(ifuslot), amp))
