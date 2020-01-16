@@ -45,12 +45,13 @@ class VIRUSImage(tb.IsDescription):
     amp = tb.StringCol(2)
     readnoise = tb.Float32Col()
     pixelmask = tb.Int32Col((1032, 1032))
-    powerlaw = tb.Float32Col((1032, 1032))
+    mastertwi = tb.Float32Col((1032, 1032))
 
 
 
 def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
-                           amp, readnoise, pixelmask, masterdark, plaw, contid):
+                           amp, readnoise, pixelmask, masterdark, mastertwi,
+                           contid):
     row['wavelength'] = wave * 1.
     row['trace'] = trace * 1.
     row['ifupos'] = ifupos * 1.
@@ -61,7 +62,7 @@ def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
     row['readnoise'] = readnoise
     row['pixelmask'] = pixelmask
     row['masterdark'] = masterdark
-    row['powerlaw'] = plaw
+    row['mastertwi'] = mastertwi
     row['amp'] = amp
     row.append()
     return True
@@ -257,9 +258,9 @@ for ifuslot_key in ifuslots:
     for amp in ['LL', 'LU', 'RL', 'RU']:
         row = imagetable.row
         masterdark = np.zeros((1032, 1032))
+        mastertwi = np.zeros((1032, 1032))
         wave = np.zeros((112, 1032))
         trace = np.zeros((112, 1032))
-        plaw = np.zeros((1032, 1032))
         readnoise = 3.
         pixelmask = np.zeros((1032, 1032))
         for kind in kinds:
@@ -284,6 +285,8 @@ for ifuslot_key in ifuslots:
                 pixelmask = get_pixelmask(masterdark)
             if kind == 'twi':
                 ifupos = get_ifucenfile(dirname, ifuid, amp)
+                mastertwi = _info[0] * 1.
+
                 args.log.info('Getting trace for %s %s' %
                               (ifuslot_key, amp))
                 if np.mean(_info[0]) < 1000.:
@@ -323,6 +326,6 @@ for ifuslot_key in ifuslots:
                 
         success = append_fibers_to_table(row, wave, trace, ifupos, ifuslot,
                                          ifuid, specid, amp, readnoise,
-                                         pixelmask, masterdark, plaw, contid)
+                                         pixelmask, masterdark, mastertwi, contid)
         if success:
             imagetable.flush()
