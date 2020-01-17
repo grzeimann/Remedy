@@ -450,9 +450,8 @@ def find_peaks(y, thresh=10.):
 
 def get_wave_single(y, T_array, order=3, thresh=5., dthresh=25.):
     mask, cont = identify_sky_pixels(y, kernel=1.5)
-    bl, bm = biweight(y - cont, calc_std=True)
-    thr = bm * thresh
-    loc, peaks = find_peaks(y - cont, thresh=thr)
+    thresh = 0.01 * np.max((y - cont)[30:-30])
+    loc, peaks = find_peaks(y - cont, thresh=thresh)
     x = np.arange(len(y))
     dw = T_array[-1] - T_array[0]
     dx = loc[-1] - loc[0]
@@ -480,8 +479,7 @@ def get_wave(spec, trace, T_array, res_lim=1., order=3):
         for j in xi:
             try:
                 S = np.nanmedian(spec[j-2:j+3], axis=0)
-                wave, res = get_wave_single(S, T_array, order=order,
-                                            thresh=thresh)
+                wave, res = get_wave_single(S, T_array, order=order)
                 w[j] = wave
                 r[j] = res
             except:
