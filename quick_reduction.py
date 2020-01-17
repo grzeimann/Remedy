@@ -683,9 +683,10 @@ def get_spectra_quick(array_sci, array_err, array_flt, plaw, mdark, array_trace,
             chi2[:, j+3, 0] = array_sci[indv+j, x] * w
             chi2[:, j+3, 1] = array_flt[indv+j, x] * w
             chi2[:, j+3, 2] = array_err[indv+j, x] * w
-        chi2a = ((chi2[:, :, 0] - chi2[:, :, 1] * (sw / tw)[:, np.newaxis]) /
-                 chi2[:, :, 2])
-        chi2a = np.sum(chi2a**2, axis=1) * 1. / (6.)
+        norm = chi2[:, :, 0].sum(axis=1) / chi2[:, :, 1].sum(axis=1)
+        num = (chi2[:, :, 0] - chi2[:, :, 1] * norm[:, np.newaxis])**2
+        denom = (chi2[:, :, 2] + 0.01*chi2[:, :, 0].sum(axis=1)[:, np.newaxis])**2
+        chi2a = 1. / (1. + 5.) * np.sum(num / denom, axis=1)
         ew = np.sqrt(ew)
         twi_spectrum[fiber] = np.interp(def_wave, wave[fiber], tw / dw,
                                         left=0.0, right=0.0)
