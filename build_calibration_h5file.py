@@ -246,7 +246,7 @@ for kind in kinds:
     if kind == 'twi':
         ifuslots = get_unique_ifuslots(tarname_dict[kind])
 
-args.log.info('Number of unique ifuslots: %i' % len(ifuslots))
+args.log.info('Number of unique ifuslot zipcodes: %i' % len(ifuslots))
 
 fileh = tb.open_file(op.join(args.folder, args.outfilename), 'w')
 imagetable = fileh.create_table(fileh.root, 'Cals', VIRUSImage,
@@ -318,7 +318,7 @@ for ifuslot_key in ifuslots:
                 try:
                     wave = get_wave(cmp, trace, T_array)
                     args.log.info('Min/Max wavelength for %03d %s: %0.2f, %0.2f' %
-                              (int(ifuslot), amp, np.min(wave, np.max(wave))))
+                              (int(ifuslot), amp, np.min(wave), np.max(wave)))
                     if wave is None:
                         wave = np.zeros((112, 1032))
                         args.log.error('Wavelength Failed for %s %s.' %
