@@ -1040,7 +1040,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
     _i, intm = ([], [])
     
     # Calibration factors to convert electrons to uJy
-    mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.92
+    mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.65
     mult_fac *= 1e29 * def_wave**2 / 3e18
     # Check if tarred
 
