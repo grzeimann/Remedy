@@ -2164,13 +2164,13 @@ for i in np.arange(1, nexp+1):
     millum, transpar = get_mirror_illumination_guider(fns[i-1], ExP[i-1])
     log.info('Mirror Illumination and Transparency for exposure %i'
              ': %0.2f, %0.2f' % (i, millum/1e4, transpar))
-    gratio[i-1] = millum * transpar
-gratio = gratio / gratio[0]
-for i in np.arange(1, nexp):
+    gratio[i-1] = (millum * transpar) /  5e5
+
+for i in np.arange(0, nexp):
     sel = (np.array(inds / 112, dtype=int) % nexp) == i
-    scispectra[sel] = scispectra[sel] * gratio[i]
-    errspectra[sel] = errspectra[sel] * gratio[i]
-    log.info('Guider ratio for exposure %i to exposure 1: %0.2f' %
+    scispectra[sel] = scispectra[sel] / gratio[i]
+    errspectra[sel] = errspectra[sel] / gratio[i]
+    log.info('Guider ratio for exposure %i to 50m^2: %0.2f' %
              (i+1, gratio[i]))
 
 # =============================================================================
