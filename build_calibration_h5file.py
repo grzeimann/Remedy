@@ -36,6 +36,7 @@ def get_script_path():
 class VIRUSImage(tb.IsDescription):
     wavelength = tb.Float32Col((112, 1032))
     trace = tb.Float32Col((112, 1032))
+    lampspec = tb.Float32Col((112, 1032))
     masterdark = tb.Float32Col((1032, 1032))
     ifupos = tb.Float32Col((112, 2))
     ifuslot = tb.Int32Col()
@@ -51,7 +52,7 @@ class VIRUSImage(tb.IsDescription):
 
 def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
                            amp, readnoise, pixelmask, masterdark, mastertwi,
-                           mastercmp, contid):
+                           mastercmp, lampspec, contid):
     row['wavelength'] = wave * 1.
     row['trace'] = trace * 1.
     row['ifupos'] = ifupos * 1.
@@ -64,6 +65,7 @@ def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
     row['masterdark'] = masterdark
     row['mastertwi'] = mastertwi
     row['mastercmp'] = mastercmp
+    row['lampspec'] = lampspec
     row['amp'] = amp
     row.append()
     return True
@@ -330,6 +332,7 @@ for ifuslot_key in ifuslots:
         success = append_fibers_to_table(row, wave, trace, ifupos, ifuslot,
                                          ifuid, specid, amp, readnoise,
                                          pixelmask, masterdark, mastertwi, 
-                                         mastercmp, contid)
+                                         mastercmp, cmp, contid)
         if success:
             imagetable.flush()
+    sys.exit(1)
