@@ -335,4 +335,3 @@ for ifuslot_key in ifuslots:
                                          mastercmp, cmp, contid)
         if success:
             imagetable.flush()
-    sys.exit(1)
