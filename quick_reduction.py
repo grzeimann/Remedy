@@ -1390,8 +1390,6 @@ def get_mirror_illumination_throughput(fn=None, default=51.4e4, default_t=1.):
         F = fits.open(fn)
         names = ['RHO_STRT', 'THE_STRT', 'PHI_STRT', 'X_STRT', 'Y_STRT']
         r, t, p, x, y = [F[0].header[name] for name in names]
-        log.info('Rho, Theta, Phi, X, Y: %0.4f, %0.4f, %0.4f, %0.4f, %0.4f' %
-                 (r, t, p, x, y))
         mirror_illum = float(os.popen('/work/03946/hetdex/hdr1/software/illum_lib/hetillum -p'
                              ' -x "[%0.4f,%0.4f,%0.4f]" "[%0.4f,%0.4f]" 256' %
                                       (x, y, p, 0.042, 0.014)).read().split('\n')[0])
@@ -1401,8 +1399,8 @@ def get_mirror_illumination_throughput(fn=None, default=51.4e4, default_t=1.):
         log.info('Using default mirror illumination value')
         area = default
         transpar = default_t
-    log.info('Mirror illumination: %0.2f m^2' % (area/1e4))
-    log.info('Througphut: %0.2f' % transpar)
+    #log.info('Mirror illumination: %0.2f m^2' % (area/1e4))
+    #log.info('Througphut: %0.2f' % transpar)
     return area, transpar
 
 
@@ -1440,8 +1438,9 @@ def get_mirror_illumination_guider(fn, exptime, default=51.4e4, default_t=1.,
         M = np.array(M)
         sel = M[:, 0] != 51.4e4
         if sel.sum() > 0.:
+            m, md, s = sigma_clipped_stats(M[sel, 1])
             area = np.median(M[sel, 0])
-            transpar = np.median(M[sel, 1])
+            transpar = md
         else:
             area = 51.4e4
             transpar = 1.
@@ -2159,6 +2158,23 @@ for i in np.arange(1, nexp):
              (i+1, exp_ratio_sky[i]))
 
 # =============================================================================
+# Get Normalization
+# =============================================================================
+gratio = np.ones((nexp,))
+for i in np.arange(1, nexp+1):
+    millum, transpar = get_mirror_illumination_guider(fns[i-1], ExP[i-1])
+    log.info('Mirror Illumination and Transparency for exposure %i'
+             ': %0.2f, %0.2f' % (i, millum/1e4, transpar))
+    gratio[i-1] = millum * transpar
+gratio = gratio / gratio[0]
+for i in np.arange(1, nexp):
+    sel = (np.array(inds / 112, dtype=int) % nexp) == i
+    scispectra[sel] = scispectra[sel] / gratio[i]
+    errspectra[sel] = errspectra[sel] / gratio[i]
+    log.info('Guider ratio for exposure %i to exposure 1: %0.2f' %
+             (i+1, gratio[i]))
+
+# =============================================================================
 # Build astrometry class
 # =============================================================================
 ra, dec, pa = get_ra_dec_from_header(tfile, fn)
@@ -2210,22 +2226,7 @@ for i, _info in enumerate(info):
     DecFibers.append(dec)
 RAFibers, DecFibers = [np.hstack(x) for x in [RAFibers, DecFibers]]
 
-# =============================================================================
-# Get Normalization
-# =============================================================================
-gratio = np.ones((nexp,))
-for i in np.arange(1, nexp+1):
-    millum, transpar = get_mirror_illumination_guider(fns[i-1], ExP[i-1])
-    log.info('Mirror Illumination and Transparency for exposure %i'
-             ': %0.2f, %0.2f' % (i, millum/1e4, transpar))
-    gratio[i-1] = millum * transpar
-gratio = gratio / gratio[0]
-for i in np.arange(1, nexp):
-    sel = (np.array(inds / 112, dtype=int) % nexp) == i
-    scispectra[sel] = scispectra[sel] / gratio[i]
-    errspectra[sel] = errspectra[sel] / gratio[i]
-    log.info('Guider ratio for exposure %i to exposure 1: %0.2f' %
-             (i+1, gratio[i]))
+
 #E = Extract()
 #tophat = E.tophat_psf(3., 10.5, 0.25)
 #moffat = E.moffat_psf(1.75, 10.5, 0.25)
