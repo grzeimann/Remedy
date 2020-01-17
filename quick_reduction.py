@@ -616,7 +616,7 @@ def get_twi_spectra(array_flt, array_trace, wave, def_wave):
     return twi_spectrum
 
 
-def get_spectra(array_sci, array_err, array_flt, plaw, mdark, array_trace, wave, def_wave,
+def get_spectra_quick(array_sci, array_err, array_flt, plaw, mdark, array_trace, wave, def_wave,
                 pixelmask):
     '''
     Extract spectra by dividing the flat field and averaging the central
@@ -1039,7 +1039,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
     _i, intm = ([], [])
     
     # Calibration factors to convert electrons to uJy
-    mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.7
+    mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.92
     mult_fac *= 1e29 * def_wave**2 / 3e18
     # Check if tarred
 
@@ -1099,7 +1099,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             #plawS = get_powerlaw(sciimage, trace, sciS, amp)
 
             sciimage[:] = sciimage - sci_plaw
-            twi, spec1, espec1, plaw1, mdark1, chi21 = get_spectra(sciimage, 
+            twi, spec1, espec1, plaw1, mdark1, chi21 = get_spectra_quick(sciimage, 
                                         scierror, masterflt, sci_plaw, masterdark,
                                         trace, wave, def_wave, pixelmask)
             if j==0:
@@ -1440,8 +1440,8 @@ def get_mirror_illumination_guider(fn, exptime, default=51.4e4, default_t=1.,
         M = np.array(M)
         sel = M[:, 0] != 51.4e4
         if sel.sum() > 0.:
-            area = np.mean(M[sel, 0])
-            transpar = np.mean(M[sel, 1])
+            area = np.median(M[sel, 0])
+            transpar = np.median(M[sel, 1])
         else:
             area = 51.4e4
             transpar = 1.
