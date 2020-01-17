@@ -356,7 +356,7 @@ def get_spectra(array_flt, array_trace, npix=5):
             else:
                 w = 1.
             spec[fiber] += array_flt[indv+j, x] * w
-    return spec
+    return spec / npix
 
 
 def get_ifucenfile(folder, ifuid, amp):
