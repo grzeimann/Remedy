@@ -1386,7 +1386,6 @@ def estimate_sky(data):
 
 def get_mirror_illumination_throughput(fn=None, default=51.4e4, default_t=1.):
     ''' Use hetillum from illum_lib to calculate mirror illumination (cm^2) '''
-    log.info('Getting mirror illumination')
     try:
         F = fits.open(fn)
         names = ['RHO_STRT', 'THE_STRT', 'PHI_STRT', 'X_STRT', 'Y_STRT']
@@ -1445,7 +1444,6 @@ def get_mirror_illumination_guider(fn, exptime, default=51.4e4, default_t=1.,
         else:
             area = 51.4e4
             transpar = 1.
-        log.info('Final Mirror illumination: %0.2f m^2' % (area/1e4))
         return area, transpar
     except: 
         log.info('Using default mirror illumination: %0.2f m^2' % (default/1e4))
