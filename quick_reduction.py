@@ -2168,8 +2168,8 @@ for i in np.arange(1, nexp+1):
 gratio = gratio / gratio[0]
 for i in np.arange(1, nexp):
     sel = (np.array(inds / 112, dtype=int) % nexp) == i
-    scispectra[sel] = scispectra[sel] / gratio[i]
-    errspectra[sel] = errspectra[sel] / gratio[i]
+    scispectra[sel] = scispectra[sel] * gratio[i]
+    errspectra[sel] = errspectra[sel] * gratio[i]
     log.info('Guider ratio for exposure %i to exposure 1: %0.2f' %
              (i+1, gratio[i]))
 
