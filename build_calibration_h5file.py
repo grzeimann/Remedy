@@ -319,12 +319,12 @@ for ifuslot_key in ifuslots:
                 mastercmp = _info[0] * 1.
                 try:
                     wave = get_wave(cmp, trace, T_array)
-                    args.log.info('Min/Max wavelength for %03d %s: %0.2f, %0.2f' %
-                              (int(ifuslot), amp, np.min(wave), np.max(wave)))
                     if wave is None:
                         wave = np.zeros((112, 1032))
                         args.log.error('Wavelength Failed for %s %s.' %
                                        (ifuslot_key, amp))
+                    args.log.info('Min/Max wavelength for %03d %s: %0.2f, %0.2f' %
+                              (int(ifuslot), amp, np.min(wave), np.max(wave)))
                 except:
                     args.log.error('Wavelength Failed for %s %s.' %
                                        (ifuslot_key, amp))
