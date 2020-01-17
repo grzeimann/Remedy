@@ -214,7 +214,11 @@ class Extract:
         yl, yh = (0. - boxsize / 2., 0. + boxsize / 2. + scale)
         x, y = (np.arange(xl, xh, scale), np.arange(yl, yh, scale))
         xgrid, ygrid = np.meshgrid(x, y)
-        zarray = np.array([M(xgrid, ygrid), xgrid, ygrid])
+        Z = self.moffat_psf_integration(xgrid.ravel(), ygrid.ravel(),
+                                        seeing, boxsize=boxsize+1.5,
+                                        alpha=alpha)
+        Z = np.reshape(Z, xgrid.shape)
+        zarray = np.array([Z, xgrid, ygrid])
         zarray[0] /= zarray[0].sum()
         return zarray
     
