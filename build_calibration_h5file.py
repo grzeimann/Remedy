@@ -46,12 +46,12 @@ class VIRUSImage(tb.IsDescription):
     readnoise = tb.Float32Col()
     pixelmask = tb.Int32Col((1032, 1032))
     mastertwi = tb.Float32Col((1032, 1032))
-
+    mastercmp = tb.Float32Col((1032, 1032))
 
 
 def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
                            amp, readnoise, pixelmask, masterdark, mastertwi,
-                           contid):
+                           mastercmp, contid):
     row['wavelength'] = wave * 1.
     row['trace'] = trace * 1.
     row['ifupos'] = ifupos * 1.
@@ -63,6 +63,7 @@ def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
     row['pixelmask'] = pixelmask
     row['masterdark'] = masterdark
     row['mastertwi'] = mastertwi
+    row['mastercmp'] = mastercmp
     row['amp'] = amp
     row.append()
     return True
@@ -313,8 +314,11 @@ for ifuslot_key in ifuslots:
                 args.log.info('Getting wavelength for %03d %s' %
                               (int(ifuslot), amp))
                 cmp = get_spectra(_info[0], trace)
+                mastercmp = _info[0] * 1.
                 try:
                     wave = get_wave(cmp, trace, T_array)
+                    args.log.info('Min/Max wavelength for %03d %s: %0.2f, %0.2f' %
+                              (int(ifuslot), amp, np.min(wave, np.max(wave))))
                     if wave is None:
                         wave = np.zeros((112, 1032))
                         args.log.error('Wavelength Failed for %s %s.' %
@@ -325,6 +329,7 @@ for ifuslot_key in ifuslots:
                 
         success = append_fibers_to_table(row, wave, trace, ifupos, ifuslot,
                                          ifuid, specid, amp, readnoise,
-                                         pixelmask, masterdark, mastertwi, contid)
+                                         pixelmask, masterdark, mastertwi, 
+                                         mastercmp, contid)
         if success:
             imagetable.flush()
