@@ -41,6 +41,7 @@ from fiber_utils import build_model_image, detect_sources
 from input_utils import setup_logging
 from math_utils import biweight
 from photutils import DAOStarFinder, aperture_photometry, CircularAperture
+from photutils import centroid_com
 from scipy.interpolate import griddata, interp1d, interp2d
 from scipy.signal import savgol_filter
 from tables import open_file, IsDescription, Float32Col, StringCol, Int32Col
@@ -2226,67 +2227,6 @@ for i, _info in enumerate(info):
 RAFibers, DecFibers = [np.hstack(x) for x in [RAFibers, DecFibers]]
 
 
-#E = Extract()
-#tophat = E.tophat_psf(3., 10.5, 0.25)
-#moffat = E.moffat_psf(1.75, 10.5, 0.25)
-#newpsf = tophat[0]*moffat[0]
-#newpsf /= newpsf.sum()
-#apcor = np.max(newpsf) / np.max(moffat[0])
-#log.info('Aperture correction factor: %0.2f' % apcor)
-#psf = [newpsf, moffat[1], moffat[2]]
-#E.psf = psf
-#E.get_ADR_RAdec(A)
-#objsel = (f['Cgmag'] < 21.) * (f['dist'] < 1.)
-#Nstars = objsel.sum()
-#mRA, mDec = A.tp.wcs_pix2world(f['fx'][objsel], f['fy'][objsel], 1)
-#E.coords = SkyCoord(mRA*units.deg, mDec*units.deg, frame='fk5')
-#E.ra, E.dec = (RAFibers, DecFibers)
-#E.data = scispectra
-#E.error = errspectra
-#E.mask = np.isfinite(scispectra)
-#
-#
-#
-#objsel = (f['Cgmag'] < 21.) * (f['dist'] < 1.)
-#
-#if objsel.sum() and (nexp > 1):
-#    mRA, mDec = A.tp.wcs_pix2world(f['fx'][objsel], f['fy'][objsel], 1)
-#    E.coords = SkyCoord(mRA*units.deg, mDec*units.deg, frame='fk5')
-#    GMag = np.zeros((len(E.coords), nexp+1))
-#    GMag[:, 0] = f['Cgmag'][objsel]
-#    for k in np.arange(nexp):
-#        sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
-#        E.ra, E.dec = (RAFibers[sel], DecFibers[sel])
-#        E.data = scispectra[sel]
-#        E.error = errspectra[sel]
-#        E.mask = np.isfinite(scispectra[sel])
-#        for i in np.arange(len(E.coords)):
-#            specinfo = E.get_spectrum_by_coord_index(i)
-#            gmask = np.isfinite(specinfo[0]) * (specinfo[2] > (0.7 / 3.))
-#            if gmask.sum() > 50.:
-#                gmag = np.dot(specinfo[0][gmask], filtg[gmask]) / np.sum(filtg[gmask])
-#                GMag[i, k+1] = -2.5 * np.log10(gmag) + 23.9
-#            else:
-#                GMag[i, k+1] = np.nan
-#    mult_offset = np.ones((nexp,))
-#    for i in np.arange(nexp):
-#        mult_offset[i] = 10**(-0.4 * (biweight(GMag[:, 0] - GMag[:, i+1])))
-#        log.info('Multiplicative offset for exposure %i to Catalog: %0.2f' %
-#                 (i+1, mult_offset[i]))
-#    exp_ratio = np.ones((nexp,))
-#    for i in np.arange(1, nexp):
-#        exp_ratio[i] = mult_offset[i] / mult_offset[0]
-#        sel = (np.array(inds / 112, dtype=int) % nexp) == i
-#        if np.isfinite(exp_ratio[i]):
-#            scispectra[sel] = scispectra[sel] * exp_ratio[i]
-#            errspectra[sel] = errspectra[sel] * exp_ratio[i]
-#        log.info('Spectroscopic ratio for exposure %i to exposure 1: %0.2f' %
-#                 (i+1, 1 / exp_ratio[i]))
-
-
-f, Total_sources, info, A = advanced_analysis(tfile, fn, scispectra, allifus,
-                                              pos, A, scale, ran, coords, nexp)
-
 # =============================================================================
 # Detections
 # =============================================================================
@@ -2343,7 +2283,9 @@ newpsf /= newpsf.sum()
 psf = [newpsf, moffat[1], moffat[2]]
 E.psf = psf
 E.get_ADR_RAdec(A)
-objsel = (f['Cgmag'] < 22.) * (f['dist'] < 1.)
+objsel = (f['Cgmag'] < 19.) * (f['dist'] < 1.)
+log.info('Extracting %i Bright Sources for PSF' % objsel.sum())
+
 mRA, mDec = A.tp.wcs_pix2world(f['fx'][objsel], f['fy'][objsel], 1)
 E.coords = SkyCoord(mRA*units.deg, mDec*units.deg, frame='fk5')
 GMag = np.ones((len(E.coords), 2)) * np.nan
@@ -2362,6 +2304,47 @@ for i in np.arange(len(E.coords)):
     else:
         GMag[i, 1] = np.nan
     spec_list.append([mRA[i], mDec[i], GMag[i, 0], GMag[i, 1]] + list(specinfo))
+    
+X, Y, Z = [np.zeros((len(spec_list), 11)) for k in np.arange(3)]
+nwave = np.array([np.mean(xi) for xi in np.array_split(def_wave, 11)])
+seeing_array = np.linspace(1.0, 2.5, 151)
+R = np.linspace(0, 5, 501)
+Profile = np.zeros((len(seeing_array), len(R)))
+for i, seeing in enumerate(seeing_array):
+    Profile[i] = E.moffat_psf_integration(R, 0.*R, seeing)
+
+chi2norm = np.zeros((len(spec_list), len(seeing_array)))
+stats = np.zeros((len(spec_list),))
+for i, ind in enumerate(spec_list):
+    im = ind[7]
+    for j, ima in enumerate(im):
+        x, y = centroid_com(ima)
+        X[i, j] = x*0.5 - 5.
+        Y[i, j] = y*0.5 - 5.
+        Z[i, j] = j
+    spec_package = ind[10]
+    d = np.sqrt(spec_package[0]**2 + spec_package[1]**2)
+    fitsel = d <= 3.
+    goodsel = spec_package[4]
+    B = spec_package[2] * 1.
+    E = spec_package[3] * 1.
+    M = np.array(fitsel*goodsel, dtype=float)
+    
+    for j, seeing in enumerate(seeing_array): 
+        model = np.interp(d, R, Profile[j], right=0.0)
+        norm = (np.sum(model * B / E**2 * M, axis=0) /
+                np.sum(model**2 * M / E**2, axis=0))
+        EP = np.sqrt(E**2 + (model*norm[np.newaxis, :] * 0.02)**2)
+        chi2 = np.sum((B - model*norm[np.newaxis, :])**2 / EP**2 * M)
+        chi2norm[i, j] = chi2 / (M.sum())
+    best_seeing = seeing_array(np.argmin(chi2norm[i]))
+    log.info('Best seeing for source %i: %0.2f, chi2=%0.2f' %
+             (i+1, best_seeing, np.min(chi2norm[i])))
+
+E.ADRra = E.ADRra + np.interp(def_wave, nwave,
+                              np.median(X, axis=0)-np.median(X))
+E.ADRdec = E.ADRdec + np.interp(def_wave, nwave,
+                                np.median(Y, axis=0)-np.median(Y))
 
 try:
     plot_astrometry(f, A)
