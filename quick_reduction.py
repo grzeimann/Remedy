@@ -2327,14 +2327,14 @@ for i, ind in enumerate(spec_list):
     fitsel = d <= 3.
     goodsel = spec_package[4]
     B = spec_package[2] * 1.
-    E = spec_package[3] * 1.
+    Ee = spec_package[3] * 1.
     M = np.array(fitsel*goodsel, dtype=float)
     
     for j, seeing in enumerate(seeing_array): 
         model = np.interp(d, R, Profile[j], right=0.0)
-        norm = (np.nansum(model * B / E**2 * M, axis=0) /
-                np.nansum(model**2 * M / E**2, axis=0))
-        EP = np.sqrt(E**2 + (model*norm[np.newaxis, :] * 0.02)**2)
+        norm = (np.nansum(model * B / Ee**2 * M, axis=0) /
+                np.nansum(model**2 * M / Ee**2, axis=0))
+        EP = np.sqrt(Ee**2 + (model*norm[np.newaxis, :] * 0.02)**2)
         chi2 = np.sum((B - model*norm[np.newaxis, :])**2 / EP**2 * M)
         chi2norm[i, j] = chi2 / (M.sum())
     best_seeing = seeing_array[np.argmin(chi2norm[i])]
