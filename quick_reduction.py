@@ -2337,7 +2337,7 @@ for i, ind in enumerate(spec_list):
         EP = np.sqrt(E**2 + (model*norm[np.newaxis, :] * 0.02)**2)
         chi2 = np.sum((B - model*norm[np.newaxis, :])**2 / EP**2 * M)
         chi2norm[i, j] = chi2 / (M.sum())
-    best_seeing = seeing_array(np.argmin(chi2norm[i]))
+    best_seeing = seeing_array[np.argmin(chi2norm[i])]
     log.info('Best seeing for source %i: %0.2f, chi2=%0.2f' %
              (i+1, best_seeing, np.min(chi2norm[i])))
 
