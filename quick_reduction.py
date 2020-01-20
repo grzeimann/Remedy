@@ -2332,8 +2332,8 @@ for i, ind in enumerate(spec_list):
     
     for j, seeing in enumerate(seeing_array): 
         model = np.interp(d, R, Profile[j], right=0.0)
-        norm = (np.sum(model * B / E**2 * M, axis=0) /
-                np.sum(model**2 * M / E**2, axis=0))
+        norm = (np.nansum(model * B / E**2 * M, axis=0) /
+                np.nansum(model**2 * M / E**2, axis=0))
         EP = np.sqrt(E**2 + (model*norm[np.newaxis, :] * 0.02)**2)
         chi2 = np.sum((B - model*norm[np.newaxis, :])**2 / EP**2 * M)
         chi2norm[i, j] = chi2 / (M.sum())
