@@ -219,7 +219,6 @@ class Extract:
                                         alpha=alpha)
         Z = np.reshape(Z, xgrid.shape)
         zarray = np.array([Z, xgrid, ygrid])
-        zarray[0] /= zarray[0].sum()
         return zarray
     
     def moffat_psf_integration(self, xloc, yloc, seeing, boxsize=14.,
@@ -263,7 +262,7 @@ class Extract:
         return V
         
 
-    def make_collapsed_image(self, xc, yc, xloc, yloc, data, mask,
+    def make_collapsed_image(self, xc, yc, xloc, yloc, data, error, mask,
                              scale=0.25, seeing_fac=1.8, boxsize=4.,
                              wrange=[3470, 5540], nchunks=11,
                              convolve_image=False,
@@ -284,7 +283,9 @@ class Extract:
         yloc: numpy array
             The ifu y-coordinate for each fiber
         data: numpy 2d array
-            The calibrated spectra for each fiber
+            The calibrated spectrum for each fiber
+        error: numpy 2d array
+            The calibrated error spectrum for each fiber
         mask: numpy 2d array
             The good fiber wavelengths to be used in collapsed frame
         scale: float
@@ -335,18 +336,15 @@ class Extract:
             self.log.warning('interp_kind must be "linear" or "cubic"')
             self.log.warning('Using "linear" for interp_kind')
             interp_kind='linear'
-        DataKeep = [[], [], [], []]
-        for chunk, mchunk in zip(np.array_split(data[:, sel], nchunks, axis=1),
-                                 np.array_split(mask[:,sel], nchunks, axis=1)):
+        for chunk, echunk, mchunk in zip(
+                                np.array_split(data[:, sel], nchunks, axis=1),
+                                np.array_split(error[:, sel], nchunks, axis=1),
+                                np.array_split(mask[:,sel], nchunks, axis=1)):
             marray = np.ma.array(chunk, mask=mchunk<1e-8)
             image = np.ma.median(marray, axis=1)
             image = image / np.ma.sum(image)
             S[:, 0] = xloc - self.ADRra[ichunk[cnt]]
             S[:, 1] = yloc - self.ADRdec[ichunk[cnt]]
-            DataKeep[0].append(S[~image.mask, 0]-xloc)
-            DataKeep[1].append(S[~image.mask, 1]-yloc)
-            DataKeep[2].append(image.data[~image.mask])
-            DataKeep[3].append(wchunk[cnt]*np.ones(DataKeep[2][-1].shape))
             cnt += 1
             try:
                 grid_z = (griddata(S[~image.mask], image.data[~image.mask],
@@ -357,10 +355,11 @@ class Extract:
             if convolve_image:
                 grid_z = convolve(grid_z, G)
             image_list.append(grid_z)
+        DataKeep = [np.hstack(DK) for DK in DataKeep]
         image = np.array(image_list)
         image[np.isnan(image)] = 0.0
         zarray = np.array([image, xgrid-xc, ygrid-yc])
-        return zarray, DataKeep
+        return zarray
 
     def get_psf_curve_of_growth(self, psf):
         '''
@@ -487,7 +486,7 @@ class Extract:
         # Only use wavelengths with enough weight to avoid large noise spikes
         w = np.sum(mask * weights, axis=0)
         bad = w < 0.05
-        for i in np.arange(1, 4):
+        for i in np.arange(1, 2):
             bad[i:] += bad[:-i]
             bad[:-i] += bad[i:]
         spectrum[bad] = np.nan
@@ -576,9 +575,14 @@ class Extract:
         weights = self.build_weights(0., 0., rafibers, decfibers, self.psf)
         result = self.get_spectrum(data, error, mask, weights)
         spectrum, spectrum_error, mweight = [res for res in result]
-        image_array, DK = self.make_collapsed_image(0., 0., rafibers, decfibers,
-                                                data, mask, seeing_fac=1.5,
+        spec_package = [rafibers[:, np.newaxis]-self.ADRra, 
+                        decfibers[:, np.newaxis]-self.ADRdec,
+                        data, error, mask]
+        image_array = self.make_collapsed_image(0., 0., rafibers, decfibers,
+                                                data, error, mask, 
+                                                seeing_fac=1.5,
                                                 scale=0.5, boxsize=10.,
                                                 convolve_image=True)
         image, xgrid, ygrid = image_array
-        return spectrum, spectrum_error, mweight, image, xgrid, ygrid, DK
+        return (spectrum, spectrum_error, mweight, image, xgrid, ygrid, 
+               spec_package)
