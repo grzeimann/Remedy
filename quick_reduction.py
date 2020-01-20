@@ -1385,7 +1385,8 @@ def estimate_sky(data):
     init_sky = np.nanmedian(data[skyfibers], axis=0)
     return init_sky
 
-def get_mirror_illumination_throughput(fn=None, default=51.4e4, default_t=1.):
+def get_mirror_illumination_throughput(fn=None, default=51.4e4, default_t=1.,
+                                       default_iq=1.8):
     ''' Use hetillum from illum_lib to calculate mirror illumination (cm^2) '''
     try:
         F = fits.open(fn)
@@ -1396,16 +1397,19 @@ def get_mirror_illumination_throughput(fn=None, default=51.4e4, default_t=1.):
                                       (x, y, p, 0.042, 0.014)).read().split('\n')[0])
         area = mirror_illum * default
         transpar = F[0].header['TRANSPAR']
+        iq = F[0].header['IQ']
     except:
         log.info('Using default mirror illumination value')
         area = default
         transpar = default_t
+        iq = default_iq
     #log.info('Mirror illumination: %0.2f m^2' % (area/1e4))
     #log.info('Througphut: %0.2f' % transpar)
-    return area, transpar
+    return area, transpar, iq
 
 
 def get_mirror_illumination_guider(fn, exptime, default=51.4e4, default_t=1.,
+                                   default_iq=1.8,
                                    path='/work/03946/hetdex/maverick'):
     try:
         M = []
@@ -1442,13 +1446,16 @@ def get_mirror_illumination_guider(fn, exptime, default=51.4e4, default_t=1.,
             m, md, s = sigma_clipped_stats(M[sel, 1])
             area = np.median(M[sel, 0])
             transpar = md
+            m, md, s = sigma_clipped_stats(M[sel, 2])
+            iq = md
         else:
             area = 51.4e4
             transpar = 1.
-        return area, transpar
+            iq = 1.8
+        return area, transpar, iq
     except: 
         log.info('Using default mirror illumination: %0.2f m^2' % (default/1e4))
-        return default, default_t
+        return default, default_t, default_iq
 
 def make_photometric_image(x, y, data, filtg, mask, Dx, Dy,
                            nchunks=25, ran=[-23, 25, -23, 25], scale=0.75,
@@ -2162,9 +2169,9 @@ for i in np.arange(1, nexp):
 # =============================================================================
 gratio = np.ones((nexp,))
 for i in np.arange(1, nexp+1):
-    millum, transpar = get_mirror_illumination_guider(fns[i-1], ExP[i-1])
-    log.info('Mirror Illumination and Transparency for exposure %i'
-             ': %0.2f, %0.2f' % (i, millum/1e4, transpar))
+    millum, transpar, iq = get_mirror_illumination_guider(fns[i-1], ExP[i-1])
+    log.info('Mirror Illumination, Transparency, and seeing for exposure %i'
+             ': %0.2f, %0.2f, %0.2f' % (i, millum/1e4, transpar, iq))
     gratio[i-1] = (millum * transpar) /  5e5
 
 for i in np.arange(0, nexp):
