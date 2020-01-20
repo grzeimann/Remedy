@@ -1041,7 +1041,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
     _i, intm = ([], [])
     
     # Calibration factors to convert electrons to uJy
-    mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.65
+    mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.75
     mult_fac *= 1e29 * def_wave**2 / 3e18
     # Check if tarred
 
@@ -2335,7 +2335,7 @@ for i, ind in enumerate(spec_list):
         norm = (np.nansum(model * B / Ee**2 * M, axis=0) /
                 np.nansum(model**2 * M / Ee**2, axis=0))
         EP = np.sqrt(Ee**2 + (model*norm[np.newaxis, :] * 0.02)**2)
-        chi2 = np.sum((B - model*norm[np.newaxis, :])**2 / EP**2 * M)
+        chi2 = np.nansum((B - model*norm[np.newaxis, :])**2 / EP**2 * M)
         chi2norm[i, j] = chi2 / (M.sum())
     best_seeing = seeing_array[np.argmin(chi2norm[i])]
     log.info('Best seeing for source %i: %0.2f, chi2=%0.2f' %
