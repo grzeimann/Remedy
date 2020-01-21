@@ -2169,11 +2169,13 @@ for i in np.arange(1, nexp):
 # Get Normalization
 # =============================================================================
 gratio = np.ones((nexp,))
+gseeing = np.ones((nexp,))
 for i in np.arange(1, nexp+1):
     millum, transpar, iq = get_mirror_illumination_guider(fns[i-1], ExP[i-1])
     log.info('Mirror Illumination, Transparency, and seeing for exposure %i'
              ': %0.2f, %0.2f, %0.2f' % (i, millum/1e4, transpar, iq))
     gratio[i-1] = (millum * transpar) /  5e5
+    gseeing[i-1] = iq
 
 for i in np.arange(0, nexp):
     sel = (np.array(inds / 112, dtype=int) % nexp) == i
@@ -2285,7 +2287,7 @@ cofes_plots(ifunums, specnums, filename_array, outfile_name, f)
 
 E = Extract()
 tophat = E.tophat_psf(3., 10.5, 0.25)
-moffat = E.moffat_psf(1.75, 10.5, 0.25)
+moffat = E.moffat_psf(np.median(gseeing), 10.5, 0.25)
 newpsf = tophat[0]*moffat[0]
 newpsf /= newpsf.sum()
 psf = [newpsf, moffat[1], moffat[2]]
