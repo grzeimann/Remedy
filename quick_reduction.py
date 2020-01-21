@@ -2318,7 +2318,7 @@ for i in np.arange(len(E.coords)):
     
 X, Y, Z = [np.zeros((len(spec_list), 11)) for k in np.arange(3)]
 nwave = np.array([np.mean(xi) for xi in np.array_split(def_wave, 11)])
-seeing_array = np.linspace(gseeing-0.3, gseeing+0.3, 61)
+seeing_array = np.linspace(np.median(gseeing)-0.3, np.median(gseeing)+0.3, 61)
 R = np.linspace(0, 7, 701)
 Profile = np.zeros((len(seeing_array), len(R)))
 for i, seeing in enumerate(seeing_array):
