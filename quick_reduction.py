@@ -2360,11 +2360,8 @@ E.ADRra = E.ADRra + np.interp(def_wave, nwave,
 E.ADRdec = E.ADRdec + np.interp(def_wave, nwave,
                                 np.median(Y, axis=0)-np.median(Y))
 
-try:
-    othersel, colors = plot_photometry(GMag, stats)
-    plot_astrometry(f, A, np.where(objsel)[0][othersel], colors)
-except:
-    log.info('Gonna skip these plots')
+othersel, colors = plot_photometry(GMag, stats)
+plot_astrometry(f, A, np.where(objsel)[0][othersel], colors)
 
 table = h5spec.create_table(h5spec.root, 'CatSpectra', CatSpectra, 
                             "Spectral Extraction Information")
