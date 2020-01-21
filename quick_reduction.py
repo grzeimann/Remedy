@@ -1892,7 +1892,7 @@ def plot_astrometry(f, A):
     plt.gca().yaxis.set_minor_locator(mly)
     plt.savefig('astrometry_%s_%07d.png'  % (args.date, args.observation), dpi=300)
 
-def plot_photometry(GMag):
+def plot_photometry(GMag, stats):
     plt.figure(figsize=(6, 6))
     sel = GMag[:, 0] < 21.
     mean, median, std = sigma_clipped_stats((GMag[sel, 0] - GMag[sel, 1]),
@@ -1914,7 +1914,8 @@ def plot_photometry(GMag):
     plt.gca().yaxis.set_major_locator(MLy)
     plt.gca().xaxis.set_minor_locator(ml)
     plt.gca().yaxis.set_minor_locator(mly)
-    plt.scatter(GMag[:, 0], GMag[:, 0] - GMag[:, 1] - median, alpha=0.75, s=75, zorder=3)
+    plt.scatter(GMag[:, 0], GMag[:, 0] - GMag[:, 1] - median, c=stats,
+                alpha=0.75, s=75, zorder=3, vmin=0, vmax=5)
     plt.plot([13, 22], [0, 0], 'k-', lw=1, alpha=0.5, zorder=1)
     plt.plot([13, 22], [std, std], 'r--', lw=1)
     plt.plot([13, 22], [-std, -std], 'r--', lw=1)
@@ -2347,7 +2348,7 @@ for i, ind in enumerate(spec_list):
     best_seeing = seeing_array[np.argmin(chi2norm[i])]
     log.info('Best seeing for source %i: %0.2f, chi2=%0.2f' %
              (i+1, best_seeing, np.min(chi2norm[i])))
-
+    stats[i] = np.min(chi2norm[i])
 E.ADRra = E.ADRra + np.interp(def_wave, nwave,
                               np.median(X, axis=0)-np.median(X))
 E.ADRdec = E.ADRdec + np.interp(def_wave, nwave,
@@ -2355,7 +2356,7 @@ E.ADRdec = E.ADRdec + np.interp(def_wave, nwave,
 
 try:
     plot_astrometry(f, A)
-    plot_photometry(GMag)
+    plot_photometry(GMag, stats)
 except:
     log.info('Gonna skip these plots')
 
