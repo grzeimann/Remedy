@@ -1894,7 +1894,7 @@ def plot_astrometry(f, A):
 
 def plot_photometry(GMag, stats):
     plt.figure(figsize=(6, 6))
-    sel = GMag[:, 0] < 21.
+    sel = (GMag[:, 0] < 21.) * (stats < 5.)
     mean, median, std = sigma_clipped_stats((GMag[sel, 0] - GMag[sel, 1]),
                                             stdfunc=mad_std)
     log.info('The mean, median, and std for the mag offset is for %s_%07d: '
@@ -1916,6 +1916,7 @@ def plot_photometry(GMag, stats):
     plt.gca().yaxis.set_minor_locator(mly)
     plt.scatter(GMag[:, 0], GMag[:, 0] - GMag[:, 1] - median, c=stats,
                 alpha=0.75, s=75, zorder=3, vmin=0, vmax=5)
+    plt.colorbar()
     plt.plot([13, 22], [0, 0], 'k-', lw=1, alpha=0.5, zorder=1)
     plt.plot([13, 22], [std, std], 'r--', lw=1)
     plt.plot([13, 22], [-std, -std], 'r--', lw=1)
@@ -2293,7 +2294,7 @@ newpsf /= newpsf.sum()
 psf = [newpsf, moffat[1], moffat[2]]
 E.psf = psf
 E.get_ADR_RAdec(A)
-objsel = (f['Cgmag'] < 20.) * (f['dist'] < 1.)
+objsel = (f['Cgmag'] < 21.) * (f['dist'] < 1.)
 log.info('Extracting %i Bright Sources for PSF' % objsel.sum())
 
 mRA, mDec = A.tp.wcs_pix2world(f['fx'][objsel], f['fy'][objsel], 1)
