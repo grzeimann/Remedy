@@ -1870,7 +1870,7 @@ def plot_astrometry(f, A, sel, colors):
     cx = np.cos(t) * stdr + medianr
     cy = np.sin(t) * stdd + mediand
     plt.scatter(dr, dd, c=colors, alpha=0.75, s=45, zorder=3, vmin=-0.3,
-                vmax=0.3)
+                vmax=0.3, cmap=matplotlib.cm.get_cmap('coolwarm'))
     plt.colorbar()
     plt.text(-1.2, 1.2, r'$\Delta$ RA (") = %0.2f +/ %0.2f' % (medianr, stdr))
     plt.text(-1.2, 1.05, r'$\Delta$ Dec (") = %0.2f +/ %0.2f' % (mediand, stdd))
