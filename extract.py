@@ -416,8 +416,8 @@ class Extract:
         for i in np.arange(len(self.wave)):
             S[:, 0] = ifux - self.ADRra[i] - xc
             S[:, 1] = ifuy - self.ADRdec[i] - yc
-            weights[:, i] = I(S[:, 0], S[:, 1]) * area / scale**2
-
+            weights[:, i] = I(S[:, 0], S[:, 1])
+        self.log.info('Total weight is: %0.2f' % np.median(np.sum(weights, axis=0)))
         return weights
     
     def build_weights_no_ADR(self, xc, yc, ifux, ifuy, psf):
