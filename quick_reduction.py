@@ -1809,7 +1809,6 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
     
     for i, ui in enumerate(allifus):
         # Get the info for the given ifuslot
-        log.info('Making collapsed frame for %03d' % ui)
         N = 448 * nexp
         data = scispectra[N*i:(i+1)*N]
         M = ~np.isfinite(data)
@@ -1825,7 +1824,7 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
         mean, median, std = sigma_clipped_stats(image, sigma=3.0, stdfunc=mad_std)
         daofind = DAOStarFinder(fwhm=4.0, threshold=7. * std, exclude_border=True) 
         sources = daofind(image)
-        log.info('Found %i sources' % len(sources))
+        log.info('Found %i sources in %03d' % (len(sources), ui))
         
         # Keep certain info for new loops
         info.append([image, fn, name, ui, tfile, sources])
@@ -2293,7 +2292,7 @@ E = Extract()
 tophat = E.tophat_psf(3., 10.5, 0.1)
 moffat = E.moffat_psf(np.median(gseeing), 10.5, 0.1)
 newpsf = tophat[0] * moffat[0] / np.max(tophat[0])
-psf = [newpsf, moffat[1], moffat[2]]
+psf = [moffat[0], moffat[1], moffat[2], ]
 E.psf = psf
 E.get_ADR_RAdec(A)
 objsel = (f['Cgmag'] < 21.) * (f['dist'] < 1.)
