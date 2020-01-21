@@ -2290,7 +2290,7 @@ newpsf /= newpsf.sum()
 psf = [newpsf, moffat[1], moffat[2]]
 E.psf = psf
 E.get_ADR_RAdec(A)
-objsel = (f['Cgmag'] < 19.) * (f['dist'] < 1.)
+objsel = (f['Cgmag'] < 20.) * (f['dist'] < 1.)
 log.info('Extracting %i Bright Sources for PSF' % objsel.sum())
 
 mRA, mDec = A.tp.wcs_pix2world(f['fx'][objsel], f['fy'][objsel], 1)
