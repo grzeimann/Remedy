@@ -1093,7 +1093,13 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         for j, fn in enumerate(filenames):
             sciimage, scierror, header = base_reduction(fn, tfile=scitarfile,
                                                 rdnoise=readnoise, get_header=True)
-            sciimage[:] = sciimage - masterdark
+            if header['EXPTIME'] > 0.:
+                fac = 360. / header['EXPTIME']
+                mult_fac2 = mult_fac * fac
+            else:
+                mult_fac2 = mult_fac * 1.
+                fac = 1.
+            sciimage[:] = sciimage - masterdark / fac
             div = safe_division(sciimage, masterflt)
             ratio = savgol_filter(np.median(div, axis=0), 351, 3)
             sci_plaw = plaw * ratio[np.newaxis, :]
@@ -1111,11 +1117,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
                 except:
                     intpm = None
                     log.warning('modeling images failed')
-            if header['EXPTIME'] > 0.:
-                fac = 360. / header['EXPTIME']
-                mult_fac2 = mult_fac * fac
-            else:
-                mult_fac2 = mult_fac * 1.
+            
             ExP[j] = header['EXPTIME']
             twi[:] = safe_division(twi, throughput)
             spec = safe_division(spec1, throughput) * mult_fac2
@@ -1856,7 +1858,7 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
     return f, Total_sources, info, A
 
 def plot_astrometry(f, A, sel, colors):
-    log.info('Number of sources for astrometry": %i' % sel.sum())
+    log.info('Number of sources for astrometry": %i' % len(sel))
     mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
     plt.figure(figsize=(6, 6))
     plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
