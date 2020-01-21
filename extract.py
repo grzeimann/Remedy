@@ -411,8 +411,6 @@ class Extract:
         I = LinearNDInterpolator(T, psf[0].ravel(),
                                  fill_value=0.0)
         weights = np.zeros((len(ifux), len(self.wave)))
-        scale = np.abs(psf[1][0, 1] - psf[1][0, 0])
-        area = 0.75**2 * np.pi
         for i in np.arange(len(self.wave)):
             S[:, 0] = ifux - self.ADRra[i] - xc
             S[:, 1] = ifuy - self.ADRdec[i] - yc
