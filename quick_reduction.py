@@ -1855,9 +1855,8 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
 
     return f, Total_sources, info, A
 
-def plot_astrometry(f, A):
-    sel = f['dist'] < 2.5
-    log.info('Number of sources within 2.5": %i' % sel.sum())
+def plot_astrometry(f, A, sel, colors):
+    log.info('Number of sources for astrometry": %i' % sel.sum())
     mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
     plt.figure(figsize=(6, 6))
     plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
@@ -1868,7 +1867,9 @@ def plot_astrometry(f, A):
     t = np.linspace(0, np.pi * 2., 361)
     cx = np.cos(t) * stdr + medianr
     cy = np.sin(t) * stdd + mediand
-    plt.scatter(dr, dd, alpha=0.75, s=45, zorder=3)
+    plt.scatter(dr, dd, c=colors, alpha=0.75, s=45, zorder=3, vmin=-0.3,
+                vmax=0.3)
+    plt.colorbar()
     plt.text(-1.2, 1.2, r'$\Delta$ RA (") = %0.2f +/ %0.2f' % (medianr, stdr))
     plt.text(-1.2, 1.05, r'$\Delta$ Dec (") = %0.2f +/ %0.2f' % (mediand, stdd))
     plt.plot(cx, cy, 'r--', lw=1)
@@ -1926,6 +1927,7 @@ def plot_photometry(GMag, stats):
     plt.xlabel("Pan-STARRS g' (AB mag)", fontsize=16, labelpad=10)
     plt.ylabel("Pan-STARRS g' - VIRUS g' + Cor", fontsize=16, labelpad=10)
     plt.savefig('mag_offset_%s_%07d.png'  % (args.date, args.observation), dpi=300)
+    return sel, GMag[:, 0] - GMag[:, 1] - median
 
 # =============================================================================
 # MAIN SCRIPT
@@ -2358,8 +2360,9 @@ E.ADRdec = E.ADRdec + np.interp(def_wave, nwave,
                                 np.median(Y, axis=0)-np.median(Y))
 
 try:
-    plot_astrometry(f, A)
-    plot_photometry(GMag, stats)
+    othersel, colors = plot_photometry(GMag, stats)
+    plot_astrometry(f, A, np.where(objsel)[0][othersel], colors)
+    
 except:
     log.info('Gonna skip these plots')
 
