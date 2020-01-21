@@ -1684,8 +1684,8 @@ def fit_astrometry(f, A1, thresh=10.):
     return A1
 
 
-def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-0.2,
-                vmax=0.5):
+def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-0.5,
+                vmax=1.5):
     """
     filename_array is an array-like object that contains the filenames
     of fits files to plot. The output plot will be the shape of the input array.
@@ -2363,7 +2363,6 @@ E.ADRdec = E.ADRdec + np.interp(def_wave, nwave,
 try:
     othersel, colors = plot_photometry(GMag, stats)
     plot_astrometry(f, A, np.where(objsel)[0][othersel], colors)
-    
 except:
     log.info('Gonna skip these plots')
 
