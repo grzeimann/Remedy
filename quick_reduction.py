@@ -1099,7 +1099,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             else:
                 mult_fac2 = mult_fac * 1.
                 fac = 1.
-            sciimage[:] = sciimage - masterdark / fac
+            sciimage[:] = sciimage - masterdark
             div = safe_division(sciimage, masterflt)
             ratio = savgol_filter(np.median(div, axis=0), 351, 3)
             sci_plaw = plaw * ratio[np.newaxis, :]
