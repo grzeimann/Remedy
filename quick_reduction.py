@@ -2318,8 +2318,8 @@ for i in np.arange(len(E.coords)):
     
 X, Y, Z = [np.zeros((len(spec_list), 11)) for k in np.arange(3)]
 nwave = np.array([np.mean(xi) for xi in np.array_split(def_wave, 11)])
-seeing_array = np.linspace(1.0, 3.5, 251)
-R = np.linspace(0, 5, 501)
+seeing_array = np.linspace(gseeing-0.3, gseeing+0.3, 61)
+R = np.linspace(0, 7, 701)
 Profile = np.zeros((len(seeing_array), len(R)))
 for i, seeing in enumerate(seeing_array):
     Profile[i] = E.moffat_psf_integration(R, 0.*R, seeing)
@@ -2345,7 +2345,7 @@ for i, ind in enumerate(spec_list):
         model = np.interp(d, R, Profile[j], right=0.0)
         norm = (np.nansum(model * B / Ee**2 * M, axis=0) /
                 np.nansum(model**2 * M / Ee**2, axis=0))
-        EP = np.sqrt(Ee**2 + (model*norm[np.newaxis, :] * 0.02)**2)
+        EP = np.sqrt(Ee**2 + (0.03*norm[np.newaxis, :])**2)
         chi2 = np.nansum((B - model*norm[np.newaxis, :])**2 / EP**2 * M)
         chi2norm[i, j] = chi2 / (M.sum())
     best_seeing = seeing_array[np.argmin(chi2norm[i])]
