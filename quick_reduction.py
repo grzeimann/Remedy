@@ -2345,7 +2345,7 @@ for i, ind in enumerate(spec_list):
         model = np.interp(d, R, Profile[j], right=0.0)
         norm = (np.nansum(model * B / Ee**2 * M, axis=0) /
                 np.nansum(model**2 * M / Ee**2, axis=0))
-        EP = np.sqrt(Ee**2 + (0.15*model*norm[np.newaxis, :])**2)
+        EP = np.sqrt(Ee**2 + (0.10*model*norm[np.newaxis, :])**2)
         chi2 = np.nansum((B - model*norm[np.newaxis, :])**2 / EP**2 * M)
         chi2norm[i, j] = chi2 / (M.sum())
     best_seeing = seeing_array[np.argmin(chi2norm[i])]
