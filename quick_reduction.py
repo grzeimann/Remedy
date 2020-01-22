@@ -2100,8 +2100,8 @@ errspectra = safe_division(errspectra, ftf * Adj)
 log.info('Masking bad pixels/fibers/amps')
 
 mask = get_mask(scispectra, C1, ftf, Adj, nexp)
-#scispectra[mask] = np.nan
-#errspectra[mask] = np.nan
+scispectra[mask] = np.nan
+errspectra[mask] = np.nan
 
 # =============================================================================
 # Sky Subtraction
