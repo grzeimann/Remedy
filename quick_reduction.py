@@ -1398,8 +1398,8 @@ def get_mirror_illumination_throughput(fn=None, default=51.4e4, default_t=1.,
                              ' -x "[%0.4f,%0.4f,%0.4f]" "[%0.4f,%0.4f]" 256' %
                                       (x, y, p, 0.042, 0.014)).read().split('\n')[0])
         area = mirror_illum * default
-        transpar = F[0].header['TRANSPAR']
-        iq = F[0].header['IQ']
+        transpar = np.min([np.max([F[0].header['TRANSPAR'], 0.0]), 1.05])
+        iq = np.min([np.max([F[0].header['IQ'], 0.5]), 4.0])
     except:
         log.info('Using default mirror illumination value')
         area = default
