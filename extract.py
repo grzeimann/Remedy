@@ -570,8 +570,10 @@ class Extract:
         self.log.info('Extracting %i' % ind)
         rafibers, decfibers, data, error, mask = info_result
         d = np.sqrt(rafibers**2 + decfibers**2)
-        mask_extract = mask * (d <= 3.0)[:, np.newaxis]
+        mask_extract = mask
         weights = self.build_weights(0., 0., rafibers, decfibers, self.psf)
+        norm = np.sum(weights, axis=0)
+        weights = weights / norm[np.newaxis, :]
         result = self.get_spectrum(data, error, mask_extract, weights)
         spectrum, spectrum_error, mweight = [res for res in result]
         spec_package = [rafibers[:, np.newaxis]-self.ADRra, 
@@ -583,5 +585,5 @@ class Extract:
                                                 scale=0.5, boxsize=10.,
                                                 convolve_image=True)
         image, xgrid, ygrid = image_array
-        return (spectrum, spectrum_error, mweight, image, xgrid, ygrid, 
+        return (spectrum / norm, spectrum_error / norm, mweight, image, xgrid, ygrid, 
                spec_package)
