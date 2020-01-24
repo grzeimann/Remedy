@@ -2281,7 +2281,8 @@ for i in info:
     #F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
     #F.writeto(name, overwrite=True)
 outfile_name = '%s_%07d_recon.png' % (args.date, args.observation)
-cofes_plots(ifunums, specnums, filename_array, outfile_name, f)
+objsel = (f['Cgmag'] < 21.) * (f['dist'] < 1.)
+cofes_plots(ifunums, specnums, filename_array, outfile_name, f[objsel])
 
 
 # =============================================================================
@@ -2295,7 +2296,6 @@ newpsf = tophat[0] * moffat[0] / np.max(tophat[0])
 psf = [newpsf, moffat[1], moffat[2], ]
 E.psf = psf
 E.get_ADR_RAdec(A)
-objsel = (f['Cgmag'] < 21.) * (f['dist'] < 1.)
 log.info('Extracting %i Bright Sources for PSF' % objsel.sum())
 
 mRA, mDec = A.tp.wcs_pix2world(f['fx'][objsel], f['fy'][objsel], 1)
