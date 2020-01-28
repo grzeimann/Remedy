@@ -1894,9 +1894,9 @@ def plot_astrometry(f, A, sel, colors):
     plt.gca().yaxis.set_minor_locator(mly)
     plt.savefig('astrometry_%s_%07d.png'  % (args.date, args.observation), dpi=300)
 
-def plot_photometry(GMag, stats):
+def plot_photometry(GMag, stats, vmin=1., vmax=4.):
     plt.figure(figsize=(6, 6))
-    sel = (GMag[:, 0] < 21.) * (stats < 5.)
+    sel = (GMag[:, 0] < 21.) * (stats[:, 0] < 5.)
     mean, median, std = sigma_clipped_stats((GMag[sel, 0] - GMag[sel, 1]),
                                             stdfunc=mad_std)
     log.info('The mean, median, and std for the mag offset is for %s_%07d: '
@@ -1916,8 +1916,8 @@ def plot_photometry(GMag, stats):
     plt.gca().yaxis.set_major_locator(MLy)
     plt.gca().xaxis.set_minor_locator(ml)
     plt.gca().yaxis.set_minor_locator(mly)
-    plt.scatter(GMag[:, 0], GMag[:, 0] - GMag[:, 1] - median, c=stats,
-                alpha=0.75, s=75, zorder=3, vmin=0, vmax=5)
+    plt.scatter(GMag[:, 0], GMag[:, 0] - GMag[:, 1] - median, c=stats[:, 1],
+                alpha=0.75, s=75, zorder=3, vmin=vmin, vmax=vmax)
     plt.colorbar()
     plt.plot([13, 22], [0, 0], 'k-', lw=1, alpha=0.5, zorder=1)
     plt.plot([13, 22], [std, std], 'r--', lw=1)
@@ -2326,7 +2326,7 @@ for i, seeing in enumerate(seeing_array):
     Profile[i] = E.moffat_psf_integration(R, 0.*R, seeing)
 
 chi2norm = np.zeros((len(spec_list), len(seeing_array)))
-stats = np.zeros((len(spec_list),))
+stats = np.zeros((len(spec_list), 2))
 for i, ind in enumerate(spec_list):
     im = ind[7]
     for j, ima in enumerate(im):
@@ -2352,13 +2352,16 @@ for i, ind in enumerate(spec_list):
     best_seeing = seeing_array[np.argmin(chi2norm[i])]
     log.info('Best seeing for source %i: %0.2f, chi2=%0.2f' %
              (i+1, best_seeing, np.min(chi2norm[i])))
-    stats[i] = np.min(chi2norm[i])
+    stats[i, 0] = np.min(chi2norm[i])
+    stats[i, 1] = best_seeing
+
 E.ADRra = E.ADRra + np.interp(def_wave, nwave,
                               np.median(X, axis=0)-np.median(X))
 E.ADRdec = E.ADRdec + np.interp(def_wave, nwave,
                                 np.median(Y, axis=0)-np.median(Y))
 
-othersel, colors = plot_photometry(GMag, stats)
+othersel, colors = plot_photometry(GMag, stats, vmin=seeing_array.min(),
+                                   vmax=seeing_array.max())
 plot_astrometry(f, A, np.where(objsel)[0], colors)
 
 table = h5spec.create_table(h5spec.root, 'CatSpectra', CatSpectra, 
