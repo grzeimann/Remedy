@@ -1896,17 +1896,20 @@ def plot_astrometry(f, A, sel, colors):
 
 def plot_photometry(GMag, stats, vmin=1., vmax=4.):
     plt.figure(figsize=(6, 6))
-    mean, median, std = sigma_clipped_stats(stats[:, 1], stdfunc=mad_std)
-    log.info('The mean, median, and std for the best seeing for %s_%07d: '
-             '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean,
-                                      median, std))
-    sel = ((GMag[:, 0] < 21.) * (stats[:, 0] < 5.) *
-           (np.abs((stats[:, 1]-median)) < 2 * std))
-    mean, median, std = sigma_clipped_stats((GMag[sel, 0] - GMag[sel, 1]),
-                                            stdfunc=mad_std)
-    log.info('The mean, median, and std for the mag offset is for %s_%07d: '
-             '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean,
-                                      median, std))
+    isel = np.ones(stats[:, 0].shape, dtype=bool)
+    for i in np.arange(2):
+        mean, median, std = sigma_clipped_stats(stats[isel, 1], stdfunc=mad_std)
+        log.info('The mean, median, and std for the best seeing for %s_%07d: '
+                 '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean,
+                                          median, std))
+        sel = ((GMag[:, 0] < 21.) * (stats[:, 0] < 5.) *
+               (np.abs((stats[:, 1]-median)) < 2 * std))
+        mean, median, std = sigma_clipped_stats((GMag[sel, 0] - GMag[sel, 1]),
+                                                stdfunc=mad_std)
+        log.info('The mean, median, and std for the mag offset is for %s_%07d: '
+                 '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean,
+                                          median, std))
+        isel = (np.abs(GMag[:, 0] - GMag[:, 1] - median) < 2 * std ) * sel
     plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
     plt.gca().tick_params(axis='both', which='both', direction='in')
     plt.gca().tick_params(axis='y', which='both', left=True, right=True)
