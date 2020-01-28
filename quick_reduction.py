@@ -1875,7 +1875,6 @@ def plot_astrometry(f, A, sel, colors):
     cx = np.cos(t) * stdr + medianr
     cy = np.sin(t) * stdd + mediand
     plt.scatter(dr, dd, color='r', alpha=0.45, s=45, zorder=3)
-    plt.colorbar()
     plt.text(-1.2, 1.2, r'$\Delta$ RA (") = %0.2f +/ %0.2f' % (medianr, stdr))
     plt.text(-1.2, 1.05, r'$\Delta$ Dec (") = %0.2f +/ %0.2f' % (mediand, stdd))
     plt.plot(cx, cy, 'r--', lw=1)
