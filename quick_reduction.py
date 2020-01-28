@@ -1865,7 +1865,7 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
 def plot_astrometry(f, A, sel, colors):
     log.info('Number of sources for astrometry": %i' % len(sel))
     mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
-    plt.figure(figsize=(6, 6))
+    plt.figure(figsize=(7, 6))
     plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
     dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - mRA)
     dd = 3600. * (f['Dec'][sel] - mDec)
@@ -1875,7 +1875,7 @@ def plot_astrometry(f, A, sel, colors):
     cx = np.cos(t) * stdr + medianr
     cy = np.sin(t) * stdd + mediand
     plt.scatter(dr, dd, c=colors, alpha=0.75, s=45, zorder=3, vmin=-0.3,
-                vmax=0.3, cmap=matplotlib.cm.get_cmap('ocean'))
+                vmax=0.3, cmap=matplotlib.cm.get_cmap('rainbow'))
     plt.colorbar()
     plt.text(-1.2, 1.2, r'$\Delta$ RA (") = %0.2f +/ %0.2f' % (medianr, stdr))
     plt.text(-1.2, 1.05, r'$\Delta$ Dec (") = %0.2f +/ %0.2f' % (mediand, stdd))
@@ -1902,7 +1902,7 @@ def plot_astrometry(f, A, sel, colors):
 
 def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
                     fwhm_virus=None):
-    plt.figure(figsize=(6, 6))
+    plt.figure(figsize=(7, 6))
     isel = np.ones(stats[:, 0].shape, dtype=bool)
     for i in np.arange(5):
         log.info('Number of sources for photometric modelling: %i' % isel.sum())
@@ -1935,7 +1935,7 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
     plt.gca().yaxis.set_minor_locator(mly)
     plt.scatter(GMag[:, 0], GMag[:, 0] - GMag[:, 1] - median, c=stats[:, 1],
                 alpha=0.75, s=75, zorder=3, vmin=vmin, vmax=vmax,
-                cmap=matplotlib.cm.get_cmap('ocean'))
+                cmap=matplotlib.cm.get_cmap('rainbow'))
     plt.colorbar()
     plt.plot([13, 22], [0, 0], 'k-', lw=1, alpha=0.5, zorder=1)
     plt.plot([13, 22], [std, std], 'r--', lw=1)
