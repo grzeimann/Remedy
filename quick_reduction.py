@@ -1866,7 +1866,7 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
 def plot_astrometry(f, A, sel, colors):
     log.info('Number of sources for astrometry": %i' % len(sel))
     mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
-    plt.figure(figsize=(7, 6))
+    plt.figure(figsize=(6, 6))
     plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
     dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - mRA)
     dd = 3600. * (f['Dec'][sel] - mDec)
@@ -1946,7 +1946,8 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
     plt.plot([13, 22], [-std, -std], 'r--', lw=1)
     plt.xlim([13, 22])
     plt.ylim([-0.5, 0.5])
-    plt.text(13.5, 0.37, 'Magnitude Offset: %0.2f +/- %0.2f' % (median, std))
+    plt.text(13.5, 0.41, 'Magnitude Offset: %0.2f' % median)
+    plt.text(13.5, 0.355, 'Magnitude Std: %0.2f' % std)
     plt.text(13.5, 0.3, 'FWHM of Guiders, VIRUS: %0.2f,  %0.2f' %
              (fwhm_guider, fwhm_virus))
     plt.xlabel("Pan-STARRS g' (AB mag)", fontsize=16, labelpad=10)
