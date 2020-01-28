@@ -1894,7 +1894,8 @@ def plot_astrometry(f, A, sel, colors):
     plt.gca().yaxis.set_minor_locator(mly)
     plt.savefig('astrometry_%s_%07d.png'  % (args.date, args.observation), dpi=300)
 
-def plot_photometry(GMag, stats, vmin=1., vmax=4.):
+def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
+                    fwhm_virus=None):
     plt.figure(figsize=(6, 6))
     isel = np.ones(stats[:, 0].shape, dtype=bool)
     for i in np.arange(5):
@@ -1903,6 +1904,7 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4.):
         log.info('The mean, median, and std for the best seeing for %s_%07d: '
                  '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean,
                                           median, std))
+        fwhm_virus = median
         sel = ((GMag[:, 0] < 21.) * (stats[:, 0] < 5.) *
                (np.abs((stats[:, 1]-median)) < 2 * std))
         mean, median, std = sigma_clipped_stats((GMag[sel, 0] - GMag[sel, 1]),
@@ -1927,13 +1929,14 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4.):
     plt.gca().yaxis.set_minor_locator(mly)
     plt.scatter(GMag[:, 0], GMag[:, 0] - GMag[:, 1] - median, c=stats[:, 1],
                 alpha=0.75, s=75, zorder=3, vmin=vmin, vmax=vmax)
-    plt.colorbar()
     plt.plot([13, 22], [0, 0], 'k-', lw=1, alpha=0.5, zorder=1)
     plt.plot([13, 22], [std, std], 'r--', lw=1)
     plt.plot([13, 22], [-std, -std], 'r--', lw=1)
     plt.xlim([13, 22])
     plt.ylim([-0.5, 0.5])
-    plt.text(13.5, 0.3, 'Magnitude Offset: %0.2f +/- %0.2f' % (median, std))
+    plt.text(13.5, 0.37, 'Magnitude Offset: %0.2f +/- %0.2f' % (median, std))
+    plt.text(13.5, 0.3, 'FWHM of Guiders, VIRUS: %0.2f,  %0.2f' %
+             (fwhm_guider, fwhm_virus))
     plt.xlabel("Pan-STARRS g' (AB mag)", fontsize=16, labelpad=10)
     plt.ylabel("Pan-STARRS g' - VIRUS g' + Cor", fontsize=16, labelpad=10)
     plt.savefig('mag_offset_%s_%07d.png'  % (args.date, args.observation), dpi=300)
@@ -2370,7 +2373,8 @@ E.ADRdec = E.ADRdec + np.interp(def_wave, nwave,
                                 np.median(Y, axis=0)-np.median(Y))
 
 othersel, colors = plot_photometry(GMag, stats, vmin=seeing_array.min(),
-                                   vmax=seeing_array.max())
+                                   vmax=seeing_array.max(),
+                                   fwhm_guider=np.median(gseeing))
 plot_astrometry(f, A, np.where(objsel)[0], colors)
 
 table = h5spec.create_table(h5spec.root, 'CatSpectra', CatSpectra, 
