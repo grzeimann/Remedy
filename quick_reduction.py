@@ -1934,7 +1934,8 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
     plt.gca().xaxis.set_minor_locator(ml)
     plt.gca().yaxis.set_minor_locator(mly)
     plt.scatter(GMag[:, 0], GMag[:, 0] - GMag[:, 1] - median, c=stats[:, 1],
-                alpha=0.75, s=75, zorder=3, vmin=vmin, vmax=vmax)
+                alpha=0.75, s=75, zorder=3, vmin=vmin, vmax=vmax,
+                cmap=matplotlib.cm.get_cmap('coolwarm'))
     plt.colorbar()
     plt.plot([13, 22], [0, 0], 'k-', lw=1, alpha=0.5, zorder=1)
     plt.plot([13, 22], [std, std], 'r--', lw=1)
