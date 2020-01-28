@@ -1946,7 +1946,7 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
     plt.plot([13, 22], [-std, -std], 'r--', lw=1)
     plt.xlim([13, 22])
     plt.ylim([-0.5, 0.5])
-    plt.text(13.5, 0.41, 'Magnitude Offset: %0.2f' % median)
+    plt.text(13.5, 0.41, 'Magnitude Offset Cor: %0.2f' % median)
     plt.text(13.5, 0.355, 'Magnitude Std: %0.2f' % std)
     plt.text(13.5, 0.3, 'FWHM of Guiders, VIRUS: %0.2f,  %0.2f' %
              (fwhm_guider, fwhm_virus))
