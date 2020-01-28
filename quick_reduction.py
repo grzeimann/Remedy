@@ -1897,7 +1897,8 @@ def plot_astrometry(f, A, sel, colors):
 def plot_photometry(GMag, stats, vmin=1., vmax=4.):
     plt.figure(figsize=(6, 6))
     isel = np.ones(stats[:, 0].shape, dtype=bool)
-    for i in np.arange(2):
+    for i in np.arange(5):
+        log.info('Number of sources for photometric modelling: %i' % isel.sum())
         mean, median, std = sigma_clipped_stats(stats[isel, 1], stdfunc=mad_std)
         log.info('The mean, median, and std for the best seeing for %s_%07d: '
                  '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean,
