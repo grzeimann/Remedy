@@ -46,6 +46,7 @@ from scipy.interpolate import griddata, interp1d, interp2d
 from scipy.signal import savgol_filter
 from tables import open_file, IsDescription, Float32Col, StringCol, Int32Col
 from matplotlib.ticker import MultipleLocator
+from matplotlib.colors import ListedColormap
 
 
 # Plot Style
@@ -1931,9 +1932,14 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
     plt.gca().yaxis.set_major_locator(MLy)
     plt.gca().xaxis.set_minor_locator(ml)
     plt.gca().yaxis.set_minor_locator(mly)
+    cmap = matplotlib.cm.get_cmap('BrBG')
+    newcolors = cmap(np.linspace(0, 1, 256))
+    for i in np.arange(3):
+        newcolors[:, i] = 1. - newcolors[:, i]
+    newcmp = ListedColormap(newcolors)
     plt.scatter(GMag[:, 0], GMag[:, 0] - GMag[:, 1] - median, c=stats[:, 1],
                 alpha=0.75, s=75, zorder=3, vmin=vmin, vmax=vmax,
-                cmap=matplotlib.cm.get_cmap('RdYlBu'))
+                cmap=newcmp)
     plt.colorbar()
     plt.plot([13, 22], [0, 0], 'k-', lw=1, alpha=0.5, zorder=1)
     plt.plot([13, 22], [std, std], 'r--', lw=1)
