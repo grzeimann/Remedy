@@ -2336,7 +2336,7 @@ for i, ind in enumerate(spec_list):
         Z[i, j] = j
     spec_package = ind[10]
     d = np.sqrt(spec_package[0]**2 + spec_package[1]**2)
-    fitsel = d <= 3.
+    fitsel = d <= 3.5
     goodsel = spec_package[4]
     B = spec_package[2] * 1.
     Ee = spec_package[3] * 1.
@@ -2346,7 +2346,7 @@ for i, ind in enumerate(spec_list):
         model = np.interp(d, R, Profile[j], right=0.0)
         norm = (np.nansum(model * B / Ee**2 * M, axis=0) /
                 np.nansum(model**2 * M / Ee**2, axis=0))
-        EP = np.sqrt(Ee**2 + (0.10*model*norm[np.newaxis, :])**2)
+        EP = np.sqrt(Ee**2 + (0.05*model*norm[np.newaxis, :])**2)
         chi2 = np.nansum((B - model*norm[np.newaxis, :])**2 / EP**2 * M)
         chi2norm[i, j] = chi2 / (M.sum())
     best_seeing = seeing_array[np.argmin(chi2norm[i])]
