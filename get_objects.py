@@ -37,7 +37,10 @@ for tarfolder in tarfolders:
         if name[-5:] == '.fits':
             b = fits.open(T.extractfile(a))
             Target = b[0].header['OBJECT']
-            exptime = b[0].header['EXPTIME']
+            try:
+                exptime = b[0].header['EXPTIME']
+            except:
+                exptime = 0.0
             try:
                 prog = b[0].header['QPROG']
             except:
