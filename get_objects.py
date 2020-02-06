@@ -19,7 +19,7 @@ date = sys.argv[1]
 
 inst = sys.argv[2]
 
-if inst == 'hpf'
+if inst == 'hpf':
     tarfolders = sorted(glob.glob(op.join(rootdir, date, inst, 'raw', '0*',
                                       '00*.tar' % inst)))
 else:
