@@ -131,6 +131,9 @@ parser.add_argument("-la", "--limit_adj",
                     help='''Limit Adjustment''',
                     action="count", default=0)
 
+parser.add_argument("-si", "--simple",
+                    help='''Limit Adjustment''',
+                    action="count", default=0)
 
 parser.add_argument("-sx", "--source_x",
                     help='''x-position for spectrum to add in cube''',
@@ -1905,7 +1908,7 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
     isel = np.ones(stats[:, 0].shape, dtype=bool)
     for i in np.arange(5):
         log.info('Number of sources for photometric modelling: %i' % isel.sum())
-        mean, median, std = sigma_clipped_stats(stats[isel, 1], stdfunc=mad_std)
+        mean, median, std = sigma_clipped_stats(stats[isel, 1], stdfunc=np.std)
         log.info('The mean, median, and std for the best seeing for %s_%07d: '
                  '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean,
                                           median, std))
@@ -1913,7 +1916,7 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
         sel = ((GMag[:, 0] < 21.) * (stats[:, 0] < 5.) *
                (np.abs((stats[:, 1]-median)) < 2 * std))
         mean, median, std = sigma_clipped_stats((GMag[sel, 0] - GMag[sel, 1]),
-                                                stdfunc=mad_std)
+                                                stdfunc=np.std)
         log.info('The mean, median, and std for the mag offset is for %s_%07d: '
                  '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean,
                                           median, std))
@@ -2182,7 +2185,8 @@ for k, _V in enumerate(intm):
 back_val, error_cor = biweight((scispectra / errspectra)[:, 800:900],
                                calc_std=True)
 log.info('Error Correction: %0.2f' % error_cor)
-errspectra *= error_cor
+if not args.simple:
+    errspectra *= error_cor
 
 # =============================================================================
 # Calculate ratio of skies from multiple exposures. Normalization factor??
