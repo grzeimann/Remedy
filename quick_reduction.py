@@ -2314,7 +2314,7 @@ outfile_name = '%s_%07d_recon.png' % (args.date, args.observation)
 objsel = (f['Cgmag'] < 21.) * (f['dist'] < 1.)
 cofes_plots(ifunums, specnums, filename_array, outfile_name, f[objsel])
 
-
+log.info('Astrometry: %0.6f %0.5f %0.2f' % (A.ra0, A.dec0, A.rot))
 # =============================================================================
 # Extraction of nearby sources
 # =============================================================================
