@@ -1450,6 +1450,7 @@ def get_mirror_illumination_guider(fn, exptime, default=51.4e4, default_t=1.,
                 p = (d - d0).seconds
                 if (p > -10.) * (p < exptime+10.):
                     final_list.append(t)
+            log.info('Length of Final List: %i' % len(final_list))
             for fn in final_list:
                 fobj = T.extractfile(T.getmember(fn))
                 M.append(get_mirror_illumination_throughput(fobj))
