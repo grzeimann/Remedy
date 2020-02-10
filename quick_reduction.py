@@ -1694,8 +1694,8 @@ def fit_astrometry(f, A1, thresh=10.):
     return A1
 
 
-def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-1.0,
-                vmax=2.5):
+def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-2.0,
+                vmax=20.):
     """
     filename_array is an array-like object that contains the filenames
     of fits files to plot. The output plot will be the shape of the input array.
@@ -1709,6 +1709,10 @@ def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-1.0,
     rows=10
     cols=10
     cmap = plt.get_cmap('Greys')
+    from astropy.visualization.stretch import AsinhStretch
+    from astropy.visualization import ImageNormalize
+    stretch = AsinhStretch()
+    norm = ImageNormalize(stretch=stretch)
     fig = plt.figure(figsize=(8, 8))
     for i in np.arange(10):
         for j in np.arange(1,11):
@@ -1727,7 +1731,7 @@ def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-1.0,
                     sel = fF['ifuslot'] == int(ifuname)
                     ax.imshow(data, vmin=vmin, vmax=vmax,
                               interpolation='nearest', origin='lower',
-                              cmap=cmap)
+                              cmap=cmap, norm=norm)
                     ax.scatter(fF['imagex'][sel], fF['imagey'][sel], color='g',
                                marker='x', s=8)
                     ax.text(32.5, 32.5, 'V' + specnums[index[0]],
@@ -1738,7 +1742,7 @@ def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-1.0,
                 except:
                     ax.imshow(np.zeros((65, 65)), vmin=vmin, vmax=vmax,
                               interpolation='nearest', origin='lower',
-                              cmap=cmap)
+                              cmap=cmap, norm=norm)
     for i in np.arange(10):
         for j in np.arange(1, 11):
             if i == 9:
@@ -1873,7 +1877,7 @@ def plot_astrometry(f, A, sel, colors):
     plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
     dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - mRA)
     dd = 3600. * (f['Dec'][sel] - mDec)
-    mean, medianr, stdr = sigma_clipped_stats(dr, stdfunc=mad_std)
+    mean, medianr, stdr = sigma_clipped_stats(dr, stdfunc=np.std)
     mean, mediand, stdd = sigma_clipped_stats(dd, stdfunc=mad_std)
     t = np.linspace(0, np.pi * 2., 361)
     cx = np.cos(t) * stdr + medianr
