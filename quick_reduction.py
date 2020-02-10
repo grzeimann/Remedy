@@ -789,7 +789,23 @@ def get_fiber_to_fiber(t):
     return ftf
 
 def get_fiber_to_fiber_adj(scispectra, ftf, nexp):
+#    inds = np.arange(scispectra.shape[0])
+#    init = safe_division(scispectra, ftf)
+#    off = np.zeros((scispectra.shape[0],))
+#    for k in np.arange(nexp):
+#        sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
+#        sky = biweight(init[sel], axis=0)
+#        off[sel] = biweight(scispectra[sel] / sky[np.newaxis, :], axis=1)
+#    nifus = len(scispectra.shape[0] / (448 * nexp))
+#    for k in np.arange(nifus):
+#        i1 = k * 448 * nexp
+#        i2 = (k + 1) * 448 * nexp
+#        y = off[i1:i2]
+#        mask, cont = identify_sky_pixels(y, kernel=2.5)
+#        off[i1:i2] = cont
+
     Adj = ftf * 0.0
+    inds = np.arange(scispectra.shape[0])
     for k in np.arange(nexp):
         sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
         bins = 9
@@ -2128,6 +2144,7 @@ log.info('Number of exposures: %i' % nexp)
 log.info('Getting Fiber to Fiber Correction')
 
 scispectra, Adj = get_fiber_to_fiber_adj(scispectra, ftf, nexp)
+Adj = np.ones(Adj.shape)
 if args.limit_adj:
     Adj[np.abs(Adj - 1.) > 0.1] = 1.0
 process = psutil.Process(os.getpid())
