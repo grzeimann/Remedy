@@ -2376,7 +2376,7 @@ for i, ind in enumerate(spec_list):
         X[i, j] = x*0.5 - 5.
         Y[i, j] = y*0.5 - 5.
         Z[i, j] = j
-    spec_package = ind[10]
+    spec_package = ind[12]
     d = np.sqrt(spec_package[0]**2 + spec_package[1]**2)
     fitsel = d <= 3.5
     goodsel = spec_package[4]
