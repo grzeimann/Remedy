@@ -1454,7 +1454,7 @@ def get_mirror_illumination_guider(fn, exptime, default=51.4e4, default_t=1.,
                 fobj = T.extractfile(T.getmember(fn))
                 M.append(get_mirror_illumination_throughput(fobj))
         M = np.array(M)
-        sel = M[:, 0] != 51.4e4
+        sel = M[:, 2] != 1.8
         if sel.sum() > 0.:
             transpar = np.median(M[sel, 1])
             area = np.median(M[sel, 0])
