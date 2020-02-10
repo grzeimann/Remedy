@@ -1435,10 +1435,10 @@ def get_mirror_illumination_guider(fn, exptime, default=51.4e4, default_t=1.,
         tarfolders = glob.glob(tarfolders)
         if len(tarfolders) == 0:
             area = 51.4e4
-            log.info('Using default mirror illumination: %0.2f m^2' % (area/1e4))
-            return area
+            log.info('No guide camera tarfolders found')
+            return default, default_t, default_iq
         for tarfolder in tarfolders:
-            T = tarfile.open(tarfolder[0], 'r')
+            T = tarfile.open(tarfolder, 'r')
             init_list = sorted([name for name in T.getnames()
                                 if name[-5:] == '.fits'])
             final_list = []
