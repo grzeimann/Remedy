@@ -1952,6 +1952,7 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
                 alpha=0.75, s=75, zorder=3, vmin=vmin, vmax=vmax,
                 cmap=newcmp)
     cbar = plt.colorbar()
+    cbar.ax.get_ylabel().labelpad = 15
     cbar.set_label('FWHM', rotation=270)
     plt.plot([13, 22], [0, 0], 'k-', lw=1, alpha=0.5, zorder=1)
     plt.plot([13, 22], [std, std], 'r--', lw=1)
