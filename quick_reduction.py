@@ -1439,6 +1439,8 @@ def get_mirror_illumination_guider(fn, exptime, default=51.4e4, default_t=1.,
             return default, default_t, default_iq
         for tarfolder in tarfolders:
             T = tarfile.open(tarfolder, 'r')
+            log.info('Opened succesfully')
+
             init_list = sorted([name for name in T.getnames()
                                 if name[-5:] == '.fits'])
             final_list = []
