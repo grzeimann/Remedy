@@ -22,7 +22,11 @@ inst = sys.argv[2]
 if inst == 'hpf':
     tarfolders = sorted(glob.glob(op.join(rootdir, date, inst, 'raw', '0*',
                                       '00*.tar')))
-else:
+if inst == 'gc1':
+    tarfolders = sorted(glob.glob(op.join(rootdir, date, inst, '%s.tar' % inst)))
+if inst == 'gc2':
+    tarfolders = sorted(glob.glob(op.join(rootdir, date, inst, '%s.tar' % inst)))
+if (inst == 'lrs2') or (inst == 'virus'):
     tarfolders = sorted(glob.glob(op.join(rootdir, date, inst,
                                           '%s0000*.tar' % inst)))
 for tarfolder in tarfolders:
@@ -34,18 +38,37 @@ for tarfolder in tarfolders:
             name = a.name
         except:
             flag = False
-        if name[-5:] == '.fits':
-            b = fits.open(T.extractfile(a))
-            Target = b[0].header['OBJECT']
-            try:
-                exptime = b[0].header['EXPTIME']
-            except:
-                exptime = 0.0
-            try:
-                prog = b[0].header['QPROG']
-            except:
-                prog = 'None'
-            print('%s: %s  %s  %s %0.1f' % (tarfolder, name[-8:-5], 
-                                            Target, prog, exptime))
-            flag = False
+        if 'gc' in inst:
+            if name[-5:] == '.fits':
+                b = fits.open(T.extractfile(a))
+                Target = b[0].header['OBJECT']
+                state = b[0].header['GUIDLOOP']
+                try:
+                    illum = b[0].header['PUPILLUM']
+                    transpar = b[0].header['TRANSPAR']
+                    iq = b[0].header['IQ']
+                except:
+                    illum = -99.0
+                    transpar = -99.0
+                    iq = -99.0
+                print('%s: %s  %s %s %0.2f %0.2f %0.2f' % (tarfolder,
+                                                           name[-8:-5], 
+                                                           Target, state,
+                                                           illum, transpar, iq))
+        
+        else:   
+            if name[-5:] == '.fits':
+                b = fits.open(T.extractfile(a))
+                Target = b[0].header['OBJECT']
+                try:
+                    exptime = b[0].header['EXPTIME']
+                except:
+                    exptime = 0.0
+                try:
+                    prog = b[0].header['QPROG']
+                except:
+                    prog = 'None'
+                print('%s: %s  %s  %s %0.1f' % (tarfolder, name[-8:-5], 
+                                                Target, prog, exptime))
+                flag = False
     T.close()
