@@ -1444,9 +1444,8 @@ def get_mirror_illumination_guider(fn, exptime, default=51.4e4, default_t=1.,
                                 if name[-5:] == '.fits'])
             final_list = []
             
-            log.info('Length of Initial List: %i' % len(init_list))
             for t in init_list:
-                DT = t.split('_')[0]
+                DT = op.basename(t).split('_')[0]
                 log.info('1')
                 log.info(DT)
                 y, m, d, h, mi, s = [int(x) for x in [DT[:4], DT[4:6], DT[6:8],
@@ -1459,7 +1458,6 @@ def get_mirror_illumination_guider(fn, exptime, default=51.4e4, default_t=1.,
 
                 if (p > -10.) * (p < exptime+10.):
                     final_list.append(t)
-            log.info('Length of Final List: %i' % len(final_list))
             for fn in final_list:
                 fobj = T.extractfile(T.getmember(fn))
                 M.append(get_mirror_illumination_throughput(fobj))
