@@ -2126,7 +2126,7 @@ log.info('[MRK] Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
 # =============================================================================
 ftf = get_fiber_to_fiber(twispectra)
 inds = np.arange(scispectra.shape[0])
-scispectra[errspectra == 0.] = np.nan
+#scispectra[errspectra == 0.] = np.nan
 del twispectra
 gc.collect()
 process = psutil.Process(os.getpid())
