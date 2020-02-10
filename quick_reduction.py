@@ -1917,6 +1917,7 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
                  '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean,
                                           median, std))
         fwhm_virus = median
+        std = np.max([std, 0.02])
         sel = ((GMag[:, 0] < 21.) * (stats[:, 0] < 5.) *
                (np.abs((stats[:, 1]-median)) < 2 * std))
         mean, median, std = sigma_clipped_stats((GMag[sel, 0] - GMag[sel, 1]),
@@ -1924,6 +1925,7 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
         log.info('The mean, median, and std for the mag offset is for %s_%07d: '
                  '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean,
                                           median, std))
+        std = np.max([std, 0.02])
         isel = (np.abs(GMag[:, 0] - GMag[:, 1] - median) < 2 * std ) * sel
     plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
     plt.gca().tick_params(axis='both', which='both', direction='in')
