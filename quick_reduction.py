@@ -1431,35 +1431,34 @@ def get_mirror_illumination_guider(fn, exptime, default=51.4e4, default_t=1.,
         y, m, d, h, mi, s = [int(x) for x in [DT[:4], DT[4:6], DT[6:8], DT[9:11],
                              DT[11:13], DT[13:15]]]
         d0 = datetime(y, m, d, h, mi, s)
-        tarfolder = op.join(path, 'gc1', '*.tar')
-        tarfolder = glob.glob(tarfolder)
-        if len(tarfolder) == 0:
+        tarfolders = op.join(path, 'gc*', '*.tar')
+        tarfolders = glob.glob(tarfolders)
+        if len(tarfolders) == 0:
             area = 51.4e4
             log.info('Using default mirror illumination: %0.2f m^2' % (area/1e4))
             return area
-        T = tarfile.open(tarfolder[0], 'r')
-        init_list = sorted([name for name in T.getnames()
-                            if name[-5:] == '.fits'])
-        final_list = []
-        for t in init_list:
-            DT = t.split('_')[0]
-            y, m, d, h, mi, s = [int(x) for x in [DT[:4], DT[4:6], DT[6:8],
-                                 DT[9:11], DT[11:13], DT[13:15]]]
-            d = datetime(y, m, d, h, mi, s)
-            p = (d - d0).seconds
-            if (p > -10.) * (p < exptime+10.):
-                final_list.append(t)
-        for fn in final_list:
-            fobj = T.extractfile(T.getmember(fn))
-            M.append(get_mirror_illumination_throughput(fobj))
+        for tarfolder in tarfolders:
+            T = tarfile.open(tarfolder[0], 'r')
+            init_list = sorted([name for name in T.getnames()
+                                if name[-5:] == '.fits'])
+            final_list = []
+            for t in init_list:
+                DT = t.split('_')[0]
+                y, m, d, h, mi, s = [int(x) for x in [DT[:4], DT[4:6], DT[6:8],
+                                     DT[9:11], DT[11:13], DT[13:15]]]
+                d = datetime(y, m, d, h, mi, s)
+                p = (d - d0).seconds
+                if (p > -10.) * (p < exptime+10.):
+                    final_list.append(t)
+            for fn in final_list:
+                fobj = T.extractfile(T.getmember(fn))
+                M.append(get_mirror_illumination_throughput(fobj))
         M = np.array(M)
         sel = M[:, 0] != 51.4e4
         if sel.sum() > 0.:
-            m, md, s = sigma_clipped_stats(M[sel, 1])
+            transpar = np.median(M[sel, 1])
             area = np.median(M[sel, 0])
-            transpar = md
-            m, md, s = sigma_clipped_stats(M[sel, 2])
-            iq = md
+            iq = np.median(M[sel, 2])
         else:
             area = 51.4e4
             transpar = 1.
@@ -1913,19 +1912,19 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
     for i in np.arange(5):
         log.info('Number of sources for photometric modelling: %i' % isel.sum())
         mean, median, std = sigma_clipped_stats(stats[isel, 1], stdfunc=np.std)
+        fwhm_virus = median
+        std = np.max([std, 0.02])
         log.info('The mean, median, and std for the best seeing for %s_%07d: '
                  '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean,
                                           median, std))
-        fwhm_virus = median
-        std = np.max([std, 0.02])
         sel = ((GMag[:, 0] < 21.) * (stats[:, 0] < 5.) *
                (np.abs((stats[:, 1]-median)) < 2 * std))
         mean, median, std = sigma_clipped_stats((GMag[sel, 0] - GMag[sel, 1]),
                                                 stdfunc=np.std)
+        std = np.max([std, 0.02])
         log.info('The mean, median, and std for the mag offset is for %s_%07d: '
                  '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean,
                                           median, std))
-        std = np.max([std, 0.02])
         isel = (np.abs(GMag[:, 0] - GMag[:, 1] - median) < 2 * std ) * sel
     plt.gca().set_position([0.2, 0.2, 0.65, 0.65])
     plt.gca().tick_params(axis='both', which='both', direction='in')
