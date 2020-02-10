@@ -1952,7 +1952,7 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
                 alpha=0.75, s=75, zorder=3, vmin=vmin, vmax=vmax,
                 cmap=newcmp)
     cbar = plt.colorbar()
-    cbar.set_label('FWHM', rotation=270, labelpad=10)
+    cbar.set_label('FWHM', rotation=270, labelpad=20)
     plt.plot([13, 22], [0, 0], 'k-', lw=1, alpha=0.5, zorder=1)
     plt.plot([13, 22], [std, std], 'r--', lw=1)
     plt.plot([13, 22], [-std, -std], 'r--', lw=1)
@@ -2023,8 +2023,10 @@ class Info(IsDescription):
 class CatSpectra(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
      dec  = Float32Col()    # float  (single-precision)
-     catra  = Float32Col()    # float  (single-precision)
-     catdec  = Float32Col()    # float  (single-precision)
+     fx  = Float32Col()    # float  (single-precision)
+     fy  = Float32Col()    # float  (single-precision)
+     catfx  = Float32Col()    # float  (single-precision)
+     catfy  = Float32Col()    # float  (single-precision)
      gmag  = Float32Col()    # float  (single-precision)
      syngmag  = Float32Col()    # float  (single-precision)
      spectrum  = Float32Col((1036,))    # float  (single-precision)
@@ -2321,7 +2323,7 @@ for i in info:
     #F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
     #F.writeto(name, overwrite=True)
 outfile_name = '%s_%07d_recon.png' % (args.date, args.observation)
-objsel = (f['Cgmag'] < 21.) * (f['dist'] < 1.)
+objsel = (f['Cgmag'] < 21.) * (f['dist'] < 1.5)
 cofes_plots(ifunums, specnums, filename_array, outfile_name, f[objsel])
 
 log.info('Astrometry: %0.6f %0.5f %0.2f' % (A.ra0, A.dec0, A.rot))
@@ -2342,8 +2344,9 @@ mRA, mDec = A.tp.wcs_pix2world(f['fx'][objsel], f['fy'][objsel], 1)
 E.coords = SkyCoord(mRA*units.deg, mDec*units.deg, frame='fk5')
 GMag = np.ones((len(E.coords), 2)) * np.nan
 GMag[:, 0] = f['Cgmag'][objsel]
-pRA = f['RA'][objsel]
-pDEC = f['Dec'][objsel]
+pFX, pFY = A.tp.wcs_world2pix(f['RA'][objsel], f['Dec'][objsel], 1)
+FX = f['fx'][objsel]
+FY = f['fy'][objsel]
 E.ra, E.dec = (RAFibers, DecFibers)
 E.data = scispectra
 E.error = errspectra
@@ -2357,7 +2360,9 @@ for i in np.arange(len(E.coords)):
         GMag[i, 1] = -2.5 * np.log10(gmag) + 23.9
     else:
         GMag[i, 1] = np.nan
-    spec_list.append([mRA[i], mDec[i], pRA[i], pDEC[i], GMag[i, 0], GMag[i, 1]] + list(specinfo))
+    
+    spec_list.append([mRA[i], mDec[i], FX[i], FY[i], pFX[i], pFY[i], GMag[i, 0],
+                      GMag[i, 1]] + list(specinfo))
     
 X, Y, Z = [np.zeros((len(spec_list), 11)) for k in np.arange(3)]
 nwave = np.array([np.mean(xi) for xi in np.array_split(def_wave, 11)])
@@ -2370,13 +2375,13 @@ for i, seeing in enumerate(seeing_array):
 chi2norm = np.zeros((len(spec_list), len(seeing_array)))
 stats = np.zeros((len(spec_list), 2))
 for i, ind in enumerate(spec_list):
-    im = ind[9]
+    im = ind[11]
     for j, ima in enumerate(im):
         x, y = centroid_com(ima)
         X[i, j] = x*0.5 - 5.
         Y[i, j] = y*0.5 - 5.
         Z[i, j] = j
-    spec_package = ind[12]
+    spec_package = ind[14]
     d = np.sqrt(spec_package[0]**2 + spec_package[1]**2)
     fitsel = d <= 3.5
     goodsel = spec_package[4]
@@ -2414,17 +2419,19 @@ specrow = table.row
 for specinfo in spec_list:
     specrow['ra'] = specinfo[0]
     specrow['dec'] = specinfo[1]
-    specrow['catra'] = specinfo[2]
-    specrow['catdec'] = specinfo[3]
-    specrow['gmag'] = specinfo[4]
-    specrow['syngmag'] = specinfo[5]
-    if len(specinfo[6]) > 0:
-        specrow['spectrum'] = specinfo[6]
-        specrow['error'] = specinfo[7]
-        specrow['weight'] = specinfo[8]
-        specrow['image'] = specinfo[9]
-        specrow['xgrid'] = specinfo[10]
-        specrow['ygrid'] = specinfo[11]
+    specrow['fx'] = specinfo[2]
+    specrow['fy'] = specinfo[3]
+    specrow['catfx'] = specinfo[4]
+    specrow['catfy'] = specinfo[5]
+    specrow['gmag'] = specinfo[6]
+    specrow['syngmag'] = specinfo[7]
+    if len(specinfo[8]) > 0:
+        specrow['spectrum'] = specinfo[8]
+        specrow['error'] = specinfo[9]
+        specrow['weight'] = specinfo[10]
+        specrow['image'] = specinfo[11]
+        specrow['xgrid'] = specinfo[12]
+        specrow['ygrid'] = specinfo[13]
     specrow.append()
 table.flush()
 
