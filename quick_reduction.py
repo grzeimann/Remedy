@@ -1443,14 +1443,19 @@ def get_mirror_illumination_guider(fn, exptime, default=51.4e4, default_t=1.,
             init_list = sorted([name for name in T.getnames()
                                 if name[-5:] == '.fits'])
             final_list = []
-            log.info('Opened succesfully')
-
+            
+            log.info('Length of Initial List: %i' % len(init_list))
             for t in init_list:
                 DT = t.split('_')[0]
+                log.info('1')
                 y, m, d, h, mi, s = [int(x) for x in [DT[:4], DT[4:6], DT[6:8],
                                      DT[9:11], DT[11:13], DT[13:15]]]
+                log.info('2')
                 d = datetime(y, m, d, h, mi, s)
+                log.info('3')
                 p = (d - d0).seconds
+                log.info('4')
+
                 if (p > -10.) * (p < exptime+10.):
                     final_list.append(t)
             log.info('Length of Final List: %i' % len(final_list))
