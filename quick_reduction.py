@@ -2370,7 +2370,7 @@ for i, seeing in enumerate(seeing_array):
 chi2norm = np.zeros((len(spec_list), len(seeing_array)))
 stats = np.zeros((len(spec_list), 2))
 for i, ind in enumerate(spec_list):
-    im = ind[7]
+    im = ind[9]
     for j, ima in enumerate(im):
         x, y = centroid_com(ima)
         X[i, j] = x*0.5 - 5.
