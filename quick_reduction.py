@@ -2023,6 +2023,8 @@ class Info(IsDescription):
 class CatSpectra(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
      dec  = Float32Col()    # float  (single-precision)
+     catra  = Float32Col()    # float  (single-precision)
+     catdec  = Float32Col()    # float  (single-precision)
      gmag  = Float32Col()    # float  (single-precision)
      syngmag  = Float32Col()    # float  (single-precision)
      spectrum  = Float32Col((1036,))    # float  (single-precision)
@@ -2340,6 +2342,8 @@ mRA, mDec = A.tp.wcs_pix2world(f['fx'][objsel], f['fy'][objsel], 1)
 E.coords = SkyCoord(mRA*units.deg, mDec*units.deg, frame='fk5')
 GMag = np.ones((len(E.coords), 2)) * np.nan
 GMag[:, 0] = f['Cgmag'][objsel]
+pRA = f['RA'][objsel]
+pDEC = f['Dec'][objsel]
 E.ra, E.dec = (RAFibers, DecFibers)
 E.data = scispectra
 E.error = errspectra
@@ -2353,7 +2357,7 @@ for i in np.arange(len(E.coords)):
         GMag[i, 1] = -2.5 * np.log10(gmag) + 23.9
     else:
         GMag[i, 1] = np.nan
-    spec_list.append([mRA[i], mDec[i], GMag[i, 0], GMag[i, 1]] + list(specinfo))
+    spec_list.append([mRA[i], mDec[i], pRA[i], pDEC[i], GMag[i, 0], GMag[i, 1]] + list(specinfo))
     
 X, Y, Z = [np.zeros((len(spec_list), 11)) for k in np.arange(3)]
 nwave = np.array([np.mean(xi) for xi in np.array_split(def_wave, 11)])
@@ -2410,15 +2414,17 @@ specrow = table.row
 for specinfo in spec_list:
     specrow['ra'] = specinfo[0]
     specrow['dec'] = specinfo[1]
-    specrow['gmag'] = specinfo[2]
-    specrow['syngmag'] = specinfo[3]
-    if len(specinfo[4]) > 0:
-        specrow['spectrum'] = specinfo[4]
-        specrow['error'] = specinfo[5]
-        specrow['weight'] = specinfo[6]
-        specrow['image'] = specinfo[7]
-        specrow['xgrid'] = specinfo[8]
-        specrow['ygrid'] = specinfo[9]
+    specrow['catra'] = specinfo[2]
+    specrow['catdec'] = specinfo[3]
+    specrow['gmag'] = specinfo[4]
+    specrow['syngmag'] = specinfo[5]
+    if len(specinfo[6]) > 0:
+        specrow['spectrum'] = specinfo[6]
+        specrow['error'] = specinfo[7]
+        specrow['weight'] = specinfo[8]
+        specrow['image'] = specinfo[9]
+        specrow['xgrid'] = specinfo[10]
+        specrow['ygrid'] = specinfo[11]
     specrow.append()
 table.flush()
 
