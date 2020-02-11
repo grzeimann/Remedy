@@ -1975,7 +1975,7 @@ def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
         sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
         sky = biweight(sci[sel] / ftf[sel], axis=0)
         K[sel] = K[sel] / sky[np.newaxis, :]
-    namps = int(K.shape[0] / 336)
+    namps = int(K.shape[0] / nexp*112)
     adj = np.zeros((sci.shape[0], nchunks))
     inds = np.arange(sci.shape[1])
     X = np.array([np.mean(xi) for xi in np.array_split(inds, nchunks)])
