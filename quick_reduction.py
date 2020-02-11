@@ -1665,6 +1665,8 @@ def fit_astrometry(f, A1, thresh=10.):
     a2 = np.arctan2(f['fy'][sel], f['fx'][sel])
     a2[f['fy'][sel] < 0.] = 2 * np.pi + a2[f['fy'][sel] < 0.]    
     da = a1 - a2
+    dda = np.rad2deg(da)
+    print(A.rot, dda)
     sel1 = np.abs(da) > np.pi
     da[sel1] -= np.sign(da[sel1]) * 2. * np.pi
     rot_i = A.rot * 1.
