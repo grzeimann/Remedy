@@ -2172,6 +2172,7 @@ for k in np.arange(nexp):
     sky = biweight(scispectra[sel], axis=0)
     skies.append(sky)
     scispectra[sel] = scispectra[sel] - sky
+    orig_sci[sel] = orig_sci[sel] / sky[:, np.newaxis]
 
 # =============================================================================
 # Make 2d sky-sub image 
@@ -2459,7 +2460,7 @@ table = h5spec.create_table(h5spec.root, 'Fibers', Fibers,
                             "Fiber Information")
 specrow = table.row
 for i in np.arange(len(scispectra)):
-    specrow['spectrum'] = scispectra[i]
+    specrow['spectrum'] = orig_sci[i]
     specrow['error'] = errspectra[i]
     specrow['chi2spec'] = C1[i]
     specrow['fiber_to_fiber'] = ftf[i]
