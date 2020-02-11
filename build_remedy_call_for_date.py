@@ -20,7 +20,7 @@ inst = 'virus'
 
 date = sys.argv[1]
 
-ncalls = sys.argv[2]
+ncalls = int(sys.argv[2])
 
 tarfolders = sorted(glob.glob(op.join(rootdir, date, inst,
                                       '%s0000*.tar' % inst)))
