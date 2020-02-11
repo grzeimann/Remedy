@@ -1975,8 +1975,6 @@ def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
         sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
         sky = biweight(sci[sel] / ftf[sel], axis=0)
         K[sel] = K[sel] / sky[np.newaxis, :]
-    s = biweight(K[:, 600:750] / ftf[:, 600:750], axis=1)
-    K = ftf * 1.
     namps = int(K.shape[0] / 336)
     adj = np.zeros((sci.shape[0], nchunks))
     inds = np.arange(sci.shape[1])
@@ -1984,11 +1982,9 @@ def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
     for i in np.arange(namps):
         i1 = int(i * nexp*112)
         i2 = int((i + 1) * nexp*112)
-        ampnorm = biweight(s[i1:i2])
-        K[i1:i2] = K[i1:i2] * ampnorm
         cnt = 0
-        for schunk, fchunk in zip(np.array_split(sci[i1:i2], nchunks, axis=1),
-                                  np.array_split(K[i1:i2], nchunks, axis=1)):
+        for schunk, fchunk in zip(np.array_split(K[i1:i2], nchunks, axis=1),
+                                  np.array_split(ftf[i1:i2], nchunks, axis=1)):
             z = biweight(schunk / fchunk, axis=1)
             b = []
             for j in np.arange(nexp):
@@ -2004,7 +2000,7 @@ def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
             for j in np.arange(nexp):
                  j1 = int(j * 112)
                  j2 = int((j+1) * 112)
-                 adj[i1+j1:i1+j2, cnt] = norms[j] * cont * ampnorm
+                 adj[i1+j1:i1+j2, cnt] = norms[j] * cont
             cnt += 1
     Adj = ftf * 0.
     for i in np.arange(sci.shape[0]):
