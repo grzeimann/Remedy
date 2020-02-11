@@ -825,7 +825,7 @@ def get_mask(scispectra, C1, ftf, Adj, nexp):
         mask[y[n], x1[n]] = True
     
     # Fiber to fiber < 0.5 (dead fiber) and Adj <0.9 or >1.1 should be considered questionable
-    badftf = (ftf < 0.5) + (np.abs(Adj-1.) > 0.1)
+    badftf = (ftf < 0.5) + (np.abs(Adj-1.) > 0.2)
     mask[badftf] = True
     
     # Error spectra with 0.0 are either outside the wavelength range or pixels masked by bad pixel mask
