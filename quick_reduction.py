@@ -2005,7 +2005,7 @@ def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
             avg = np.median([bi / norm for bi, norm in zip(b, norms)], axis=0)
             norms = [biweight(bi / avg) for bi in b]
             if np.isfinite(avg).sum():
-                mask, cont = identify_sky_pixels(avg, 2.5)
+                mask, cont = identify_sky_pixels(avg, 5)
             else:
                 cont = np.ones(avg.shape)
             for j in np.arange(nexp):
