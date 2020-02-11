@@ -825,7 +825,7 @@ def get_mask(scispectra, C1, ftf, Adj, nexp):
         mask[y[n], x1[n]] = True
     
     # Fiber to fiber < 0.5 (dead fiber) and Adj <0.9 or >1.1 should be considered questionable
-    badftf = (ftf < 0.5) + (np.abs(Adj-1.) > 0.2)
+    badftf = (ftf < 0.5) + (np.abs(Adj-1.) > 0.3)
     mask[badftf] = True
     
     # Error spectra with 0.0 are either outside the wavelength range or pixels masked by bad pixel mask
@@ -2169,7 +2169,6 @@ log.info('Number of exposures: %i' % nexp)
 # =============================================================================
 log.info('Getting Fiber to Fiber')
 ftf = get_fiber_to_fiber(twispectra)
-orig_sci = scispectra * 1.
 inds = np.arange(scispectra.shape[0])
 scispectra[errspectra == 0.] = np.nan
 log.info('Getting Fiber to Fiber Correction')
@@ -2495,7 +2494,7 @@ table = h5spec.create_table(h5spec.root, 'Fibers', Fibers,
                             "Fiber Information")
 specrow = table.row
 for i in np.arange(len(scispectra)):
-    specrow['spectrum'] = orig_sci[i]
+    specrow['spectrum'] = scispectra[i]
     specrow['error'] = errspectra[i]
     specrow['chi2spec'] = C1[i]
     specrow['fiber_to_fiber'] = ftf[i]
