@@ -2127,7 +2127,7 @@ log.info('[MRK] Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
 ftf = get_fiber_to_fiber(twispectra)
 orig_sci = scispectra * 1.
 inds = np.arange(scispectra.shape[0])
-#scispectra[errspectra == 0.] = np.nan
+scispectra[errspectra == 0.] = np.nan
 del twispectra
 gc.collect()
 process = psutil.Process(os.getpid())
@@ -2159,8 +2159,8 @@ errspectra = safe_division(errspectra, ftf * Adj)
 log.info('Masking bad pixels/fibers/amps')
 
 mask = get_mask(scispectra, C1, ftf, Adj, nexp)
-#scispectra[mask] = np.nan
-#errspectra[mask] = np.nan
+scispectra[mask] = np.nan
+errspectra[mask] = np.nan
 
 # =============================================================================
 # Sky Subtraction
