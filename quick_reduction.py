@@ -1912,7 +1912,11 @@ def plot_astrometry(f, A, sel, colors):
 def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
                     fwhm_virus=None):
     plt.figure(figsize=(7, 6))
-    isel = np.ones(stats[:, 0].shape, dtype=bool)
+    guess_sel = np.abs(GMag[:, 0] - 17.) < 2.
+    if guess_sel.sum() > 3:
+        isel = guess_sel
+    else:
+        isel = np.ones(stats[:, 0].shape, dtype=bool)
     for i in np.arange(5):
         log.info('Number of sources for photometric modelling: %i' % isel.sum())
         mean, median, std = sigma_clipped_stats(stats[isel, 1], stdfunc=np.std)
