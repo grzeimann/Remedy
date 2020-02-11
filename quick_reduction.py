@@ -2006,6 +2006,7 @@ def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
                  j2 = int((j+1) * 112)
                  adj[i1+j1:i1+j2, cnt] = norms[j] * cont * ampnorm
             cnt += 1
+    Adj = ftf * 0.
     for i in np.arange(sci.shape[0]):
         good = np.isfinite(adj[i])
         if good.sum() > (nchunks-3):
