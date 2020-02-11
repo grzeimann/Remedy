@@ -2125,6 +2125,7 @@ log.info('[MRK] Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
 # Get fiber to fiber from twilight spectra
 # =============================================================================
 ftf = get_fiber_to_fiber(twispectra)
+orig_sci = scispectra * 1.
 inds = np.arange(scispectra.shape[0])
 #scispectra[errspectra == 0.] = np.nan
 del twispectra
