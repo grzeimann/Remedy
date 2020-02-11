@@ -1983,6 +1983,23 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
     plt.savefig('mag_offset_%s_%07d.png'  % (args.date, args.observation), dpi=300)
     return sel, GMag[:, 0] - GMag[:, 1] - median
 
+def get_amp_norm_ftf(scispectra, ftf, nexp):
+    K = scispectra * 0.
+    for k in np.arange(nexp):
+        sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
+        sky = biweight(scispectra[sel] / ftf[sel], axis=0)
+        K[sel] = K[sel] / sky[np.newaxis, :]
+    s = biweight(K[:, 600:750] / ftf[:, 600:750], axis=1)
+    namps = int(K.shape[0] / 336)
+    K = ftf * 1.
+    for i in np.arange(namps):
+        i1 = int(i * 336)
+        i2 = int((i + 1) * 336)
+        y = biweight(s[i1:i2])
+        K[i1:i2] = K[i1:i2] * y
+    K[np.isnan(K)] = 0.0
+    return K
+
 # =============================================================================
 # MAIN SCRIPT
 # =============================================================================
@@ -2128,6 +2145,7 @@ ftf = get_fiber_to_fiber(twispectra)
 orig_sci = scispectra * 1.
 inds = np.arange(scispectra.shape[0])
 scispectra[errspectra == 0.] = np.nan
+ftf = get_amp_norm_ftf(scispectra, ftf)
 del twispectra
 gc.collect()
 process = psutil.Process(os.getpid())
