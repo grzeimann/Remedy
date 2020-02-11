@@ -2139,23 +2139,25 @@ process = psutil.Process(os.getpid())
 log.info('[MRK] Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
 
 # =============================================================================
+# Number of exposures
+# =============================================================================
+nexp = scispectra.shape[0] / 448 / nslots
+log.info('Number of exposures: %i' % nexp)
+
+
+# =============================================================================
 # Get fiber to fiber from twilight spectra
 # =============================================================================
 ftf = get_fiber_to_fiber(twispectra)
 orig_sci = scispectra * 1.
 inds = np.arange(scispectra.shape[0])
 scispectra[errspectra == 0.] = np.nan
-ftf = get_amp_norm_ftf(scispectra, ftf)
+ftf = get_amp_norm_ftf(scispectra, ftf, nexp)
 del twispectra
 gc.collect()
 process = psutil.Process(os.getpid())
 log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
 
-# =============================================================================
-# Number of exposures
-# =============================================================================
-nexp = scispectra.shape[0] / 448 / nslots
-log.info('Number of exposures: %i' % nexp)
 
 # =============================================================================
 # Fiber to Fiber Adjustment correction
