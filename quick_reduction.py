@@ -1969,7 +1969,7 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
     return sel, GMag[:, 0] - GMag[:, 1] - median
 
 def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
-    K = sci * 0.
+    K = sci * 1.
     inds = np.arange(sci.shape[0])
     for k in np.arange(nexp):
         sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
@@ -1982,7 +1982,6 @@ def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
     for i in np.arange(namps):
         i1 = int(i * nexp*112)
         i2 = int((i + 1) * nexp*112)
-        log.info('Working on amp: %i' % (i + 1))
         cnt = 0
         for schunk, fchunk in zip(np.array_split(K[i1:i2], nchunks, axis=1),
                                   np.array_split(ftf[i1:i2], nchunks, axis=1)):
