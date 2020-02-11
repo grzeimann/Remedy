@@ -1975,7 +1975,7 @@ def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
         sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
         sky = biweight(sci[sel] / ftf[sel], axis=0)
         K[sel] = K[sel] / sky[np.newaxis, :]
-    namps = int(K.shape[0] / nexp*112)
+    namps = int(K.shape[0] / (nexp*112))
     adj = np.zeros((sci.shape[0], nchunks))
     inds = np.arange(sci.shape[1])
     X = np.array([np.mean(xi) for xi in np.array_split(inds, nchunks)])
@@ -1986,7 +1986,7 @@ def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
         cnt = 0
         for schunk, fchunk in zip(np.array_split(K[i1:i2], nchunks, axis=1),
                                   np.array_split(ftf[i1:i2], nchunks, axis=1)):
-            z = np.median(schunk / fchunk, axis=1)
+            z = biweight(schunk / fchunk, axis=1)
             b = []
             for j in np.arange(nexp):
                 j1 = int(j * 112)
@@ -2000,7 +2000,6 @@ def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
                 mask, cont = identify_sky_pixels(avg, 2.5)
             else:
                 cont = np.ones(avg.shape)
-            
             for j in np.arange(nexp):
                  j1 = int(j * 112)
                  j2 = int((j+1) * 112)
