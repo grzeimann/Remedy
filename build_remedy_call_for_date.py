@@ -50,7 +50,7 @@ for tarfolder in tarfolders:
                 prog = b[0].header['QPROG']
             except:
                 prog = 'None'
-            obs = int(op.basename(tarfolder)[-12:-5])
+            obs = int(op.basename(tarfolder)[-11:-4])
             if name[-8:-5] == 'sci':
                 tarlist.append([obs, name[-8:-5], Target, prog, exptime])
             flag = False
