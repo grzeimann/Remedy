@@ -789,21 +789,6 @@ def get_fiber_to_fiber(t):
     return ftf
 
 def get_fiber_to_fiber_adj(scispectra, ftf, nexp):
-#    inds = np.arange(scispectra.shape[0])
-#    init = safe_division(scispectra, ftf)
-#    off = np.zeros((scispectra.shape[0],))
-#    for k in np.arange(nexp):
-#        sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
-#        sky = biweight(init[sel], axis=0)
-#        off[sel] = biweight(scispectra[sel] / sky[np.newaxis, :], axis=1)
-#    nifus = len(scispectra.shape[0] / (448 * nexp))
-#    for k in np.arange(nifus):
-#        i1 = k * 448 * nexp
-#        i2 = (k + 1) * 448 * nexp
-#        y = off[i1:i2]
-#        mask, cont = identify_sky_pixels(y, kernel=2.5)
-#        off[i1:i2] = cont
-
     Adj = ftf * 0.0
     inds = np.arange(scispectra.shape[0])
     for k in np.arange(nexp):
@@ -1983,22 +1968,53 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
     plt.savefig('mag_offset_%s_%07d.png'  % (args.date, args.observation), dpi=300)
     return sel, GMag[:, 0] - GMag[:, 1] - median
 
-def get_amp_norm_ftf(scispectra, ftf, nexp):
-    K = scispectra * 0.
+def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
+    K = sci * 0.
+    inds = np.arange(sci.shape[0])
     for k in np.arange(nexp):
         sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
-        sky = biweight(scispectra[sel] / ftf[sel], axis=0)
+        sky = biweight(sci[sel] / ftf[sel], axis=0)
         K[sel] = K[sel] / sky[np.newaxis, :]
     s = biweight(K[:, 600:750] / ftf[:, 600:750], axis=1)
-    namps = int(K.shape[0] / 336)
     K = ftf * 1.
+    namps = int(K.shape[0] / 336)
+    adj = np.zeros((sci.shape[0], nchunks))
+    inds = np.arange(sci.shape[1])
+    X = np.array([np.mean(xi) for xi in np.array_split(inds, nchunks)])
     for i in np.arange(namps):
-        i1 = int(i * 336)
-        i2 = int((i + 1) * 336)
-        y = biweight(s[i1:i2])
-        K[i1:i2] = K[i1:i2] * y
-    K[np.isnan(K)] = 0.0
-    return K
+        i1 = int(i * nexp*112)
+        i2 = int((i + 1) * nexp*112)
+        ampnorm = biweight(s[i1:i2])
+        K[i1:i2] = K[i1:i2] * ampnorm
+        cnt = 0
+        for schunk, fchunk in zip(np.array_split(sci[i1:i2], nchunks, axis=1),
+                                  np.array_split(K[i1:i2], nchunks, axis=1)):
+            z = biweight(schunk / fchunk, axis=1)
+            b = []
+            for j in np.arange(nexp):
+                j1 = int(j * 112)
+                j2 = int((j+1) * 112)
+                b.append(z[j1:j2])
+            avg = np.median(b, axis=0)
+            if np.isfinite(avg).sum():
+                mask, cont = identify_sky_pixels(avg, 2.5)
+            else:
+                cont = np.ones(avg.shape)
+            norms = [biweight(bi / avg) for bi in b]
+            for j in np.arange(nexp):
+                 j1 = int(j * 112)
+                 j2 = int((j+1) * 112)
+                 adj[i1+j1:i1+j2, cnt] = norms[j] * cont * ampnorm
+            cnt += 1
+    for i in np.arange(sci.shape[0]):
+        good = np.isfinite(adj[i])
+        if good.sum() > (nchunks-3):
+            Adj[i] = interp1d(X, adj[i], kind='quadratic',
+                              fill_value='extrapolate')(inds)
+        else:
+            Adj[i] = 0
+    
+    return Adj
 
 # =============================================================================
 # MAIN SCRIPT
@@ -2148,11 +2164,13 @@ log.info('Number of exposures: %i' % nexp)
 # =============================================================================
 # Get fiber to fiber from twilight spectra
 # =============================================================================
+log.info('Getting Fiber to Fiber')
 ftf = get_fiber_to_fiber(twispectra)
 orig_sci = scispectra * 1.
 inds = np.arange(scispectra.shape[0])
 scispectra[errspectra == 0.] = np.nan
-ftf = get_amp_norm_ftf(scispectra, ftf, nexp)
+log.info('Getting Fiber to Fiber Correction')
+Adj = get_amp_norm_ftf(scispectra, ftf, nexp, nchunks=9)
 del twispectra
 gc.collect()
 process = psutil.Process(os.getpid())
@@ -2162,12 +2180,6 @@ log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
 # =============================================================================
 # Fiber to Fiber Adjustment correction
 # =============================================================================
-log.info('Getting Fiber to Fiber Correction')
-
-scispectra, Adj = get_fiber_to_fiber_adj(scispectra, ftf, nexp)
-Adj = np.ones(Adj.shape)
-if args.limit_adj:
-    Adj[np.abs(Adj - 1.) > 0.1] = 1.0
 process = psutil.Process(os.getpid())
 log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))    
 scispectra = safe_division(scispectra, ftf * Adj)
