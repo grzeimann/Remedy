@@ -28,7 +28,7 @@ tarfolders = sorted(glob.glob(op.join(rootdir, date, inst,
 call = ('python /work/03730/gregz/maverick/Remedy/quick_reduction.py %s %i '
         '47 /work/03730/gregz/maverick/output/latest_cal.h5 -nd 8 -fp '
         '/work/03730/gregz/maverick/fplaneall.txt')
-
+print(call)
 tarlist = []
 for tarfolder in tarfolders:
     T = tarfile.open(tarfolder, 'r')
@@ -56,7 +56,6 @@ for tarfolder in tarfolders:
             flag = False
 with open('%s_calls' % date, 'w') as out_file:       
     for chunk in np.array_split(tarlist, ncalls):
-        print(chunk[0][0])
         calls = [call % (date, ch[0]) for ch in chunk]
         call_str = '; '.join(calls)
         out_file.write(call_str + '\n')
