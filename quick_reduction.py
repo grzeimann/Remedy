@@ -1925,7 +1925,7 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
         log.info('The mean, median, and std for the best seeing for %s_%07d: '
                  '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean,
                                           median, std))
-        sel = ((GMag[:, 0] < 21.) * (stats[:, 0] < 5.) *
+        sel = ((GMag[:, 0] < 22.) * (stats[:, 0] < 5.) *
                (np.abs((stats[:, 1]-median)) < 2 * std))
         mean, median, std = sigma_clipped_stats((GMag[sel, 0] - GMag[sel, 1]),
                                                 stdfunc=np.std)
@@ -1958,10 +1958,10 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
                 cmap=newcmp)
     cbar = plt.colorbar()
     cbar.set_label('FWHM', rotation=270, labelpad=20)
-    plt.plot([13, 22], [0, 0], 'k-', lw=1, alpha=0.5, zorder=1)
-    plt.plot([13, 22], [std, std], 'r--', lw=1)
-    plt.plot([13, 22], [-std, -std], 'r--', lw=1)
-    plt.xlim([13, 22])
+    plt.plot([13, 22.5], [0, 0], 'k-', lw=1, alpha=0.5, zorder=1)
+    plt.plot([13, 22.5], [std, std], 'r--', lw=1)
+    plt.plot([13, 22.5], [-std, -std], 'r--', lw=1)
+    plt.xlim([13, 22.5])
     plt.ylim([-0.5, 0.5])
     plt.text(13.5, 0.41, 'Magnitude Offset Cor: %0.2f' % median)
     plt.text(13.5, 0.355, 'Magnitude Std: %0.2f' % std)
@@ -2375,7 +2375,7 @@ for i in info:
     #F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
     #F.writeto(name, overwrite=True)
 outfile_name = '%s_%07d_recon.png' % (args.date, args.observation)
-objsel = (f['Cgmag'] < 21.) * (f['dist'] < 1.5)
+objsel = (f['Cgmag'] < 22.) * (f['dist'] < 1.5)
 cofes_plots(ifunums, specnums, filename_array, outfile_name, f[objsel])
 
 log.info('Astrometry: %0.6f %0.5f %0.2f' % (A.ra0, A.dec0, A.rot))
