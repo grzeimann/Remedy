@@ -1982,10 +1982,11 @@ def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
     for i in np.arange(namps):
         i1 = int(i * nexp*112)
         i2 = int((i + 1) * nexp*112)
+        log.info('Working on amp: %i' % (i + 1))
         cnt = 0
         for schunk, fchunk in zip(np.array_split(K[i1:i2], nchunks, axis=1),
                                   np.array_split(ftf[i1:i2], nchunks, axis=1)):
-            z = biweight(schunk / fchunk, axis=1)
+            z = np.median(schunk / fchunk, axis=1)
             b = []
             for j in np.arange(nexp):
                 j1 = int(j * 112)
