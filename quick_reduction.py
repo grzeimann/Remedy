@@ -1661,7 +1661,9 @@ def fit_astrometry(f, A1, thresh=10.):
     dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - RA0)
     dd = 3600. * (f['Dec'][sel] - Dec0)
     a1 = np.arctan2(dd, dr)
+    a1[dd < 0.] = np.pi + (np.pi + a1[dd < 0.])
     a2 = np.arctan2(f['fy'][sel], f['fx'][sel])
+    a2[f['fy'][sel] < 0.] = 2 * np.pi + a2[f['fy'][sel] < 0.]    
     da = a1 - a2
     sel1 = np.abs(da) > np.pi
     da[sel1] -= np.sign(da[sel1]) * 2. * np.pi
@@ -2551,48 +2553,48 @@ h5spec = None
 #    MakeRegionFile.writeHeader(k)
 #    MakeRegionFile.writeText(k, x, y, te)
 
-if args.simulate:
-    i = 0
-    N = 448 * nexp
-    F = np.nanmedian(ftf[N*i:(i+1)*N], axis=1)
-    data = scispectra[N*i:(i+1)*N]
-    P = pos[N*i:(i+1)*N]
-    log.info('Simulating spectrum from %s' % args.source_file)
-    simulated_spectrum = read_sim(args.source_file)
-    simdata = simulate_source(simulated_spectrum, P, data, 
-                                 args.source_x, args.source_y, 
-                                 args.source_seeing)
-    scispectra[N*i:(i+1)*N] = simdata * 1.
+#if args.simulate:
+#    i = 0
+#    N = 448 * nexp
+#    F = np.nanmedian(ftf[N*i:(i+1)*N], axis=1)
+#    data = scispectra[N*i:(i+1)*N]
+#    P = pos[N*i:(i+1)*N]
+#    log.info('Simulating spectrum from %s' % args.source_file)
+#    simulated_spectrum = read_sim(args.source_file)
+#    simdata = simulate_source(simulated_spectrum, P, data, 
+#                                 args.source_x, args.source_y, 
+#                                 args.source_seeing)
+#    scispectra[N*i:(i+1)*N] = simdata * 1.
+#
+#
+#if args.simulate:
+#    name = ('%s_%07d_%03d_sim.fits' %
+#                (args.date, args.observation, args.ifuslot))
+#    cubename = ('%s_%07d_%03d_cube_sim.fits' %
+#                (args.date, args.observation, args.ifuslot))
+#else:
+#    name = ('%s_%07d_%03d.fits' %
+#                (args.date, args.observation, args.ifuslot))
+#    cubename = ('%s_%07d_%03d_cube.fits' %
+#                (args.date, args.observation, args.ifuslot))
 
-
-if args.simulate:
-    name = ('%s_%07d_%03d_sim.fits' %
-                (args.date, args.observation, args.ifuslot))
-    cubename = ('%s_%07d_%03d_cube_sim.fits' %
-                (args.date, args.observation, args.ifuslot))
-else:
-    name = ('%s_%07d_%03d.fits' %
-                (args.date, args.observation, args.ifuslot))
-    cubename = ('%s_%07d_%03d_cube.fits' %
-                (args.date, args.observation, args.ifuslot))
-
-if tfile is not None:
-    t = tarfile.open(tfile, 'r')
-    a = fits.open(t.extractfile(fn))
-    t.close()
-else:
-    a = fits.open(fn)
-
-he = a[0].header
-
-# Making data cube
-log.info('Making Cube')
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore")
-    zgrid, xgrid, ygrid = make_cube(pos[:448*nexp, 0], pos[:448*nexp, 1], scispectra[:448*nexp], 
-                                     ADRx, 0. * def_wave, np.nanmedian(ftf[:448*nexp], axis=1), scale, ran)
-
-    write_cube(def_wave, xgrid, ygrid, zgrid, cubename, he)
+#if tfile is not None:
+#    t = tarfile.open(tfile, 'r')
+#    a = fits.open(t.extractfile(fn))
+#    t.close()
+#else:
+#    a = fits.open(fn)
+#
+#he = a[0].header
+#
+## Making data cube
+#log.info('Making Cube')
+#with warnings.catch_warnings():
+#    warnings.simplefilter("ignore")
+#    zgrid, xgrid, ygrid = make_cube(pos[:448*nexp, 0], pos[:448*nexp, 1], scispectra[:448*nexp], 
+#                                     ADRx, 0. * def_wave, np.nanmedian(ftf[:448*nexp], axis=1), scale, ran)
+#
+#    write_cube(def_wave, xgrid, ygrid, zgrid, cubename, he)
 
 
     
