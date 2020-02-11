@@ -2172,7 +2172,7 @@ for k in np.arange(nexp):
     sky = biweight(scispectra[sel], axis=0)
     skies.append(sky)
     scispectra[sel] = scispectra[sel] - sky
-    orig_sci[sel] = orig_sci[sel] / sky[:, np.newaxis]
+    orig_sci[sel] = orig_sci[sel] / sky[np.newaxis, :]
 
 # =============================================================================
 # Make 2d sky-sub image 
