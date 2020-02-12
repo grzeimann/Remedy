@@ -1651,7 +1651,7 @@ def fit_astrometry(f, A1, thresh=10.):
     sel = (f['dist'] < thresh) * (f['Cgmag']<22.) * (f['Cgmag'] > 15.)
     dr = np.array(np.cos(np.deg2rad(f['Dec']))*f['dra']*3600.)
     dd = np.array(f['ddec']*3600.)
-    d = np.sqrt((dr[np.newaxis, :] - dr)**2 + (dd[np.newaxis, :] - dd)**2)
+    d = np.sqrt((dr[:, np.newaxis] - dr)**2 + (dd[:, np.newaxis] - dd)**2)
     nneigh = (d < 1.5).sum(axis=1)
     ind = np.argmax(nneigh)
     sel = sel * (d[:, ind]<1.5)
