@@ -1702,7 +1702,7 @@ def fit_astrometry(f, A1, thresh=10.):
                                                       args.observation,
                                                       keep_rot - rot_i,
                                                       min_std))
-    RA0 = A.ra0 + raoff / np.cos(np.deg2ra(A.dec0)) / 3600.
+    RA0 = A.ra0 + raoff / np.cos(np.deg2rad(A.dec0)) / 3600.
     Dec0 = A.dec0 + decoff / 3600.
     dR = np.cos(np.deg2rad(Dec0)) * 3600. * (ra0 - RA0)
     dD = 3600. * (dec0 - Dec0)
