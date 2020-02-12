@@ -1654,8 +1654,6 @@ def fit_astrometry(f, A1, thresh=10.):
     dec0 = A.dec0 * 1.
     RA0 = fitr(0., 0.)
     Dec0 = fitd(0., 0.)
-    RA0 = ra0 - dr[ind] / 3600. / np.cos(np.deg2rad(Dec0))
-    Dec0 = dec0 - dd[ind] / 3600.
     dR = np.cos(np.deg2rad(Dec0)) * 3600. * (ra0 - RA0)
     dD = 3600. * (dec0 - Dec0)
     log.info('%s_%07d initial offsets: %0.2f, %0.2f' %(args.date, 
