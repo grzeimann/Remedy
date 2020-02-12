@@ -1685,9 +1685,9 @@ def fit_astrometry(f, A1, thresh=10.):
                                                       min_std))
     A.rot = keep_rot
     A.tp = A.setup_TP(A.ra0, A.dec0, keep_rot, A.x0,  A.y0)
-    mRA, mDec = A.tp.wcs_pix2world(f['fx'][gsel], f['fy'][gsel], 1)
-    DR = (f['RA'][gsel] - mRA) * np.cos(np.deg2rad(A.dec0)) * 3600.
-    DD = (f['Dec'][gsel] - mDec) * 3600.
+    mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
+    DR = (f['RA'][sel] - mRA) * np.cos(np.deg2rad(A.dec0)) * 3600.
+    DD = (f['Dec'][sel] - mDec) * 3600.
     raoff = np.median(DR)
     decoff = np.median(DD)
 
