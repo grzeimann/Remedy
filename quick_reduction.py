@@ -1542,7 +1542,7 @@ def make_photometric_image(x, y, data, filtg, mask, Dx, Dy,
         image = np.nan * grid_x
     return image
 
-def match_to_archive(sources, image, A, ifuslot, scale, ran, coords,
+def match_to_archive(sources, image, A, ifuslot, scale, ran, coords, gC,
                      apradius=3.5):
     '''
     Match list of sources in a given IFU slot to a set of coordinates from
@@ -1795,7 +1795,7 @@ def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-0.3,
 
 
 def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
-                      coords, nexp):
+                      coords, nexp, gC):
     '''
     Parameters
     ----------
@@ -1854,7 +1854,8 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
         info.append([image, fn, name, ui, tfile, sources])
         
         # Match sources to archive catalog
-        Sources = match_to_archive(sources, image, A, ui, scale, ran, coords)
+        Sources = match_to_archive(sources, image, A, ui, scale, ran, coords,
+                                   gC)
         if Sources is not None:
             Total_sources.append(Sources) 
     
@@ -1869,7 +1870,8 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
         Total_sources = []
         for i, ui in enumerate(allifus):
             image, fn, name, ui, tfile, sources = info[i]
-            Sources = match_to_archive(sources, image, A, ui, scale, ran, coords)
+            Sources = match_to_archive(sources, image, A, ui, scale, ran, coords,
+                                       gC)
             if Sources is not None:
                 Total_sources.append(Sources) 
         Total_sources = np.vstack(Total_sources)
@@ -2323,7 +2325,7 @@ scale = 0.75
 ran = [-23., 25., -23., 25.]
 f, Total_sources, info, A = advanced_analysis(tfile, fn, scispectra, allifus,
                                               pos, A, scale, ran, coords,
-                                              nexp)
+                                              nexp, gC)
 
 
 # =============================================================================
