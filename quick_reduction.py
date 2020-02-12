@@ -1645,6 +1645,7 @@ def fit_astrometry(f, A1, thresh=10.):
     P = Polynomial2D(1)
     fitter = FittingWithOutlierRemoval(LevMarLSQFitter(), sigma_clip)
     sel = (f['dist'] < thresh) * (f['Cgmag']<22.) * (f['Cgmag'] > 15.)
+    gsel = (f['Cgmag']<22.) * (f['Cgmag'] > 15.)
     dr = np.cos(np.deg2rad(f['Dec']))*f['dra']*3600.
     dd = f['ddec']*3600.
     d = np.sqrt((dr[np.newaxis, :] - dr)**2 + (dd[np.newaxis, :] - dd)**2)
@@ -1679,15 +1680,28 @@ def fit_astrometry(f, A1, thresh=10.):
         if np.abs(A.rot - i) < 1.5:
             rot = i
     rot = rot_i + 0.2
-    A.rot = rot * 1.
-    A.tp = A.setup_TP(RA0, Dec0, A.rot, A.x0,  A.y0)
-    mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
-    DR = (f['RA'][sel] - mRA)
-    DD = (f['Dec'][sel] - mDec)
-    print(np.cos(np.deg2rad(Dec0)) * 3600. * mad_std(DR),
-          3600. * mad_std(DD))
-    RA0 += np.median(DR)
-    Dec0 += np.median(DD)
+    min_std = 9999
+    for roff in np.linspace(-4., 4., 41):
+        for doff in np.linspace(-4., 4., 41):
+            for aoff in np.linspace(-0.3, 0.3, 31):
+                RA0 = A.ra0 * 1. + np.cos(np.deg2rad(A.dec0)) * 3600. * roff
+                Dec0 * A.dec0 * 1. + 3600. * doff
+                rot = A.rot * 1. + aoff
+                A.tp = A.setup_TP(RA0, Dec0, rot, A.x0,  A.y0)
+                mRA, mDec = A.tp.wcs_pix2world(f['fx'][gsel], f['fy'][gsel], 1)
+                DR = (f['RA'][gsel] - mRA) * np.cos(np.deg2rad(Dec0)) * 3600.
+                DD = (f['Dec'][gsel] - mDec) * 3600.
+                std = np.sqrt(mad_std(DR) * mad_std(DD))
+                if std < min_std:
+                    min_std = std
+                    keep_ra = RA0
+                    keep_dec = Dec0
+                    keep_rot = rot
+    log.info('%s_%07d Best std offset: %0.2f'  % (args.date,  args.observation,
+                                                  min_std))
+    A.tp = A.setup_TP(keep_ra, keep_dec, keep_rot, A.x0,  A.y0)
+    RA0 = keep_ra
+    Dec0 = keep_dec
     dR = np.cos(np.deg2rad(Dec0)) * 3600. * (ra0 - RA0)
     dD = 3600. * (dec0 - Dec0)
     log.info('%s_%07d Rotation offset and error: %0.2f, %0.2f' %(args.date,
