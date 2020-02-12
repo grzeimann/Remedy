@@ -1878,7 +1878,7 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
         f = Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist',
                                           'Cgmag', 'RA', 'Dec', 'fx', 'fy', 'dra',
                                           'ddec', 'ifuslot'])
-        f.write('sources.dat', format='ascii.fixed_width_two_line', overwrite=True)
+        # f.write('sources.dat', format='ascii.fixed_width_two_line', overwrite=True)
 
     return f, Total_sources, info, A
 
