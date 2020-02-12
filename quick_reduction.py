@@ -1595,6 +1595,9 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords,
                                   Sources[:, 1]*scale + ran[2])
     ifu = A.fplane.by_ifuslot('%03d' % ifuslot)
     ifux, ifuy = (ifu.y, ifu.x) 
+    fx, fy = (sources['xcentroid']*scale + ran[0] + ifux,
+              sources['ycentroid']*scale + ran[2] + ifuy)
+    RA, Dec = A.tp.wcs_pix2world(Sources[:, 7], Sources[:, 8], 1)
 
     # Find closest bright source, use that for offset, then match
     # Make image class that combines, does astrometry, detections, updates coords
@@ -1604,9 +1607,7 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords,
     Sources[:, 4] = gC[idx]
     Sources[:, 5] = coords[idx].ra.deg
     Sources[:, 6] = coords[idx].dec.deg
-    Sources[:, 7], Sources[:, 8] = (sources['xcentroid']*scale + ran[0] + ifux,
-                                    sources['ycentroid']*scale + ran[2] + ifuy)
-    RA, Dec = A.tp.wcs_pix2world(Sources[:, 7], Sources[:, 8], 1)
+    Sources[:, 7], Sources[:, 8] = (fx, fy)
     Sources[:, 9], Sources[:, 10] = (RA-Sources[:,5], Dec-Sources[:, 6])
     Sources[:, 11] = ifuslot
     return Sources
