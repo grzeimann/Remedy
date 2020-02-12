@@ -1705,8 +1705,6 @@ def fit_astrometry(f, A1, thresh=25.):
                                                       dR, dD,
                                                       A.rot-rot_i))
     A.get_pa()
-    if (np.sqrt(dR**2 + dD**2) > 25.) or (np.abs(A.rot-rot_i) > 1.):
-        return A1
     A1 = Astrometry(RA0, Dec0, A.pa, 0., 0., fplane_file=args.fplane_file)
     A1.tp = A1.setup_TP(RA0, Dec0, A1.rot, A1.x0,  A1.y0)
     return A1
@@ -1744,6 +1742,8 @@ def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-0.3,
                 ax.axis('off')
             if len(index):
                 f = filename_array[index[0]]
+                ax.set_xlim([0, 65])
+                ax.set_ylim([0, 65])
                 try:
                     data = f * 1.
                     sel = fF['ifuslot'] == int(ifuname)
