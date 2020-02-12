@@ -1649,13 +1649,12 @@ def fit_astrometry(f, A1, thresh=10.):
     P = Polynomial2D(1)
     fitter = FittingWithOutlierRemoval(LevMarLSQFitter(), sigma_clip)
     sel = (f['dist'] < thresh) * (f['Cgmag']<22.) * (f['Cgmag'] > 15.)
-    gsel = (f['Cgmag']<22.) * (f['Cgmag'] > 15.)
     dr = np.cos(np.deg2rad(f['Dec']))*f['dra']*3600.
     dd = f['ddec']*3600.
     d = np.sqrt((dr[np.newaxis, :] - dr)**2 + (dd[np.newaxis, :] - dd)**2)
     nneigh = (d < 1.5).sum(axis=1)
     ind = np.argmax(nneigh)
-    sel = gsel
+    sel = sel * (d[ind]<1.5)
     log.info('Number of sources within 1.5" of max density: %i' % (sel.sum()))
     filtered_r, fitr = fitter(P, f['fx'][sel], f['fy'][sel], f['RA'][sel])
     filtered_d, fitd = fitter(P, f['fx'][sel], f['fy'][sel], f['Dec'][sel])
@@ -1673,9 +1672,9 @@ def fit_astrometry(f, A1, thresh=10.):
     for aoff in np.linspace(-0.3, 0.3, 61):
         rot = A.rot * 1. + aoff
         A.tp = A.setup_TP(A.ra0, A.dec0, rot, A.x0,  A.y0)
-        mRA, mDec = A.tp.wcs_pix2world(f['fx'][gsel], f['fy'][gsel], 1)
-        DR = (f['RA'][gsel] - mRA) * np.cos(np.deg2rad(Dec0)) * 3600.
-        DD = (f['Dec'][gsel] - mDec) * 3600.
+        mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
+        DR = (f['RA'][sel] - mRA) * np.cos(np.deg2rad(Dec0)) * 3600.
+        DD = (f['Dec'][sel] - mDec) * 3600.
         std = np.sqrt(mad_std(DR) * mad_std(DD))
         if std < min_std:
             min_std = std
