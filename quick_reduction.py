@@ -1651,12 +1651,13 @@ def fit_astrometry(f, A1, thresh=10.):
     d = np.sqrt((dr[np.newaxis, :] - dr)**2 + (dd[np.newaxis, :] - dd)**2)
     nneigh = (d < 1.5).sum(axis=1)
     ind = np.argmax(nneigh)
-    sel = (d[ind, :] < 1.5) * sel
+    sel = gsel
     log.info('Number of sources within 1.5" of max density: %i' % (sel.sum()))
     filtered_r, fitr = fitter(P, f['fx'][sel], f['fy'][sel], f['RA'][sel])
     filtered_d, fitd = fitter(P, f['fx'][sel], f['fy'][sel], f['Dec'][sel])
     ra0 = A.ra0 * 1.
     dec0 = A.dec0 * 1.
+    rot_i = A.rot * 1.
     RA0 = fitr(0., 0.)
     Dec0 = fitd(0., 0.)
     dR = np.cos(np.deg2rad(Dec0)) * 3600. * (ra0 - RA0)
@@ -1664,22 +1665,6 @@ def fit_astrometry(f, A1, thresh=10.):
     log.info('%s_%07d initial offsets: %0.2f, %0.2f' %(args.date, 
                                                        args.observation, dR,
                                                        dD))
-    dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - RA0)
-    dd = 3600. * (f['Dec'][sel] - Dec0)
-    a1 = np.arctan2(dd, dr)
-    a1[dd < 0.] = np.pi + (np.pi + a1[dd < 0.])
-    a2 = np.arctan2(f['fy'][sel], f['fx'][sel])
-    a2[f['fy'][sel] < 0.] = 2 * np.pi + a2[f['fy'][sel] < 0.]    
-    da = a1 - a2
-    sel1 = np.abs(da) > np.pi
-    da[sel1] -= np.sign(da[sel1]) * 2. * np.pi
-    rot_i = A.rot * 1.
-    rot = np.rad2deg(np.median(da))
-    rot_error = mad_std(np.rad2deg(da))
-    for i in [rot, 360. - rot, -rot]:
-        if np.abs(A.rot - i) < 1.5:
-            rot = i
-    rot = rot_i + 0.2
     min_std = 9999
     for aoff in np.linspace(-0.3, 0.3, 61):
         rot = A.rot * 1. + aoff
@@ -1691,22 +1676,24 @@ def fit_astrometry(f, A1, thresh=10.):
         if std < min_std:
             min_std = std
             keep_rot = rot
+    log.info('%s_%07d Rotation offset and spread: %0.2f, %0.2f' %(args.date,
+                                                      args.observation,
+                                                      keep_rot - rot_i,
+                                                      min_std))
+    A.rot = keep_rot
     A.tp = A.setup_TP(A.ra0, A.dec0, keep_rot, A.x0,  A.y0)
     mRA, mDec = A.tp.wcs_pix2world(f['fx'][gsel], f['fy'][gsel], 1)
     DR = (f['RA'][gsel] - mRA) * np.cos(np.deg2rad(A.dec0)) * 3600.
     DD = (f['Dec'][gsel] - mDec) * 3600.
     raoff = np.median(DR)
     decoff = np.median(DD)
-    
-    log.info('%s_%07d Rotation offset and spread: %0.2f, %0.2f' %(args.date,
-                                                      args.observation,
-                                                      keep_rot - rot_i,
-                                                      min_std))
+
     RA0 = A.ra0 + raoff / np.cos(np.deg2rad(A.dec0)) / 3600.
     Dec0 = A.dec0 + decoff / 3600.
     dR = np.cos(np.deg2rad(Dec0)) * 3600. * (ra0 - RA0)
     dD = 3600. * (dec0 - Dec0)
     A.tp = A.setup_TP(RA0, Dec0, keep_rot, A.x0,  A.y0)
+    A.rot = keep_rot
 
     log.info('%s_%07d offsets: %0.2f, %0.2f, %0.2f' %(args.date,
                                                       args.observation,
