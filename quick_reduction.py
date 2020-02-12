@@ -210,8 +210,12 @@ def get_ra_dec_from_header(tfile, fn):
         a = fits.open(t.extractfile(fn))
     else:
         a = fits.open(fn)
-    ra = a[0].header['TRAJCRA'] * 15.
-    dec = a[0].header['TRAJCDEC'] * 1.
+    try:
+        ra = a[0].header['TRAJCRA'] * 15.
+        dec = a[0].header['TRAJCDEC'] * 1.
+    except:
+        ra = a[0].header['TRAJRA'] * 15.
+        dec = a[0].header['TRAJDEC'] * 1.
     pa = a[0].header['PARANGLE'] * 1.
     if tfile is not None:
         t.close()
@@ -1597,7 +1601,7 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords, gC,
     ifux, ifuy = (ifu.y, ifu.x) 
     fx, fy = (sources['xcentroid']*scale + ran[0] + ifux,
               sources['ycentroid']*scale + ran[2] + ifuy)
-    RA, Dec = A.tp.wcs_pix2world(Sources[:, 7], Sources[:, 8], 1)
+    #RA, Dec = A.tp.wcs_pix2world(Sources[:, 7], Sources[:, 8], 1)
 
     # Find closest bright source, use that for offset, then match
     # Make image class that combines, does astrometry, detections, updates coords
