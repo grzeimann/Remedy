@@ -1601,7 +1601,6 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords, gC,
     ifux, ifuy = (ifu.y, ifu.x) 
     fx, fy = (sources['xcentroid']*scale + ran[0] + ifux,
               sources['ycentroid']*scale + ran[2] + ifuy)
-    #RA, Dec = A.tp.wcs_pix2world(Sources[:, 7], Sources[:, 8], 1)
 
     # Find closest bright source, use that for offset, then match
     # Make image class that combines, does astrometry, detections, updates coords
@@ -1687,7 +1686,7 @@ def fit_astrometry(f, A1, thresh=10.):
     mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
     DR = (f['RA'][sel] - mRA)
     DD = (f['Dec'][sel] - mDec)
-    
+    print(DR, DD)
     RA0 += np.median(DR)
     Dec0 += np.median(DD)
     dR = np.cos(np.deg2rad(Dec0)) * 3600. * (ra0 - RA0)
@@ -1894,14 +1893,14 @@ def plot_astrometry(f, A, sel, colors):
     dr = np.cos(np.deg2rad(f['Dec'][sel])) * -3600. * (f['RA'][sel] - mRA)
     dd = 3600. * (f['Dec'][sel] - mDec)
     mean, medianr, stdr = sigma_clipped_stats(dr, stdfunc=np.std)
-    mean, mediand, stdd = sigma_clipped_stats(dd, stdfunc=mad_std)
+    mean, mediand, stdd = sigma_clipped_stats(dd, stdfunc=np.std)
     t = np.linspace(0, np.pi * 2., 361)
     cx = np.cos(t) * stdr + medianr
     cy = np.sin(t) * stdd + mediand
     plt.scatter(dr, dd, color='r', alpha=0.45, s=45, zorder=3)
     plt.text(-1.2, 1.2, r'$\Delta$ RA (") = %0.2f +/ %0.2f' % (medianr, stdr))
     plt.text(-1.2, 1.05, r'$\Delta$ Dec (") = %0.2f +/ %0.2f' % (mediand, stdd))
-    plt.plot(cx, cy, 'r--', lw=1)
+    plt.plot(cx, cy, 'k--', lw=2)
     plt.plot([0, 0], [-1.5, 1.5], 'k-', lw=1, alpha=0.5, zorder=1)
     plt.plot([-1.5, 1.5], [0, 0], 'k-', lw=1, alpha=0.5, zorder=1)
     plt.axis([-1.5, 1.5, -1.5, 1.5])
