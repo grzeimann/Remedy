@@ -1655,7 +1655,6 @@ def fit_astrometry(f, A1, thresh=25.):
     nneigh = (d < 1.5).sum(axis=1)
     ind = np.argmax(nneigh)
     sel = sel * (d[:, ind]<1.5)
-    print(dr[sel], dd[sel])
     log.info('RA, Dec offset with most sources: %0.2f, %0.2f' % (dr[ind], dd[ind]))
     log.info('Number of sources within 1.5" of max density: %i' % (sel.sum()))
     filtered_r, fitr = fitter(P, f['fx'][sel], f['fy'][sel], f['RA'][sel])
