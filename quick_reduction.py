@@ -1651,10 +1651,12 @@ def fit_astrometry(f, A1, thresh=10.):
     sel = (f['dist'] < thresh) * (f['Cgmag']<22.) * (f['Cgmag'] > 15.)
     dr = np.cos(np.deg2rad(f['Dec']))*f['dra']*3600.
     dd = f['ddec']*3600.
-    d = np.sqrt((dr[np.newaxis, :] - dr)**2 + (dd[np.newaxis, :] - dd)**2)
+    d = np.array(np.sqrt((dr[np.newaxis, :] - dr)**2 +
+                         (dd[np.newaxis, :] - dd)**2))
     nneigh = (d < 1.5).sum(axis=1)
     ind = np.argmax(nneigh)
     sel = sel * (d[ind]<1.5)
+    log.info('RA, Dec offset with most sources: %0.2f, %0.2f' % (dr[ind], dd[ind]))
     log.info('Number of sources within 1.5" of max density: %i' % (sel.sum()))
     filtered_r, fitr = fitter(P, f['fx'][sel], f['fy'][sel], f['RA'][sel])
     filtered_d, fitd = fitter(P, f['fx'][sel], f['fy'][sel], f['Dec'][sel])
