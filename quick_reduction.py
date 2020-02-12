@@ -1615,7 +1615,7 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords, gC,
     Sources[:, 11] = ifuslot
     ix, iy = A.tp.wcs_world2pix(Sources[:, 5], Sources[:, 6], 1)
     ix, iy = (ix - ifux, iy - ifuy)
-    xc, yc = ((ix -ran[0])/scale, (iy-ran[1])/scale)
+    xc, yc = ((ix -ran[0])/scale, (iy-ran[2])/scale)
     Sources[:, 0], Sources[:, 1] = (xc, yc)
     return Sources
 
