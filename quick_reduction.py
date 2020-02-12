@@ -1613,6 +1613,10 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords, gC,
     Sources[:, 7], Sources[:, 8] = (fx, fy)
     Sources[:, 9], Sources[:, 10] = (RA-Sources[:,5], Dec-Sources[:, 6])
     Sources[:, 11] = ifuslot
+    ix, iy = A.tp.wcs_world2pix(Sources[:, 5], Sources[:, 6], 1)
+    ix, iy = (ix - ifux, iy - ifuy)
+    xc, yc = ((ix -ran[0])/scale, (iy-ran[1])/scale)
+    Sources[:, 0], Sources[:, 1] = (xc, yc)
     return Sources
 
 def fit_astrometry(f, A1, thresh=10.):
