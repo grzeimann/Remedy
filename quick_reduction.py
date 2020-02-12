@@ -1619,7 +1619,7 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords, gC,
     Sources[:, 0], Sources[:, 1] = (xc, yc)
     return Sources
 
-def fit_astrometry(f, A1, thresh=10.):
+def fit_astrometry(f, A1, thresh=25.):
     '''
     Fit astrometry using a linear fit to the conversion of focal plane x and y
     to RA as well as a linear fit to the conversion of focal plane x and y to
@@ -1705,7 +1705,7 @@ def fit_astrometry(f, A1, thresh=10.):
                                                       dR, dD,
                                                       A.rot-rot_i))
     A.get_pa()
-    if (np.sqrt(dR**2 + dD**2) > 7.) or (np.abs(A.rot-rot_i) > 1.):
+    if (np.sqrt(dR**2 + dD**2) > 25.) or (np.abs(A.rot-rot_i) > 1.):
         return A1
     A1 = Astrometry(RA0, Dec0, A.pa, 0., 0., fplane_file=args.fplane_file)
     A1.tp = A1.setup_TP(RA0, Dec0, A1.rot, A1.x0,  A1.y0)
