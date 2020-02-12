@@ -1650,7 +1650,6 @@ def fit_astrometry(f, A1, thresh=10.):
     d = np.sqrt((dr[np.newaxis, :] - dr)**2 + (dd[np.newaxis, :] - dd)**2)
     nneigh = (d < 1.5).sum(axis=1)
     ind = np.argmax(nneigh)
-    print(dr[ind], dd[ind])
     sel = (d[ind, :] < 1.5) * sel
     log.info('Number of sources within 1.5" of max density: %i' % (sel.sum()))
     filtered_r, fitr = fitter(P, f['fx'][sel], f['fy'][sel], f['RA'][sel])
@@ -1679,6 +1678,7 @@ def fit_astrometry(f, A1, thresh=10.):
     for i in [rot, 360. - rot, -rot]:
         if np.abs(A.rot - i) < 1.5:
             rot = i
+    rot = rot_i + 0.2
     A.rot = rot * 1.
     A.tp = A.setup_TP(RA0, Dec0, A.rot, A.x0,  A.y0)
     mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
