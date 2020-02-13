@@ -1996,17 +1996,14 @@ def get_sky_fibers(norm_array):
     ind = np.argmax(Neighbors)
     nsky = per_array[ind]
     return (norm_array-nsky) < (2 * bm)
-    
-        
-
 
 def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
     K = sci * 1.
     inds = np.arange(sci.shape[0])
     for k in np.arange(nexp):
         sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
-        skyfibers = get_sky_fibers(biweight(sci[sel, 800:900]) /
-                                   ftf[sel, 800:900], axis=1)
+        skyfibers = get_sky_fibers(biweight(sci[sel, 800:900] /
+                                   ftf[sel, 800:900], axis=1))
         sky = biweight((sci[sel] / ftf[sel])[skyfibers], axis=0)
         K[sel] = K[sel] / sky[np.newaxis, :]
     namps = int(K.shape[0] / (nexp*112))
