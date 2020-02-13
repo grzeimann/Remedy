@@ -2189,6 +2189,9 @@ inds = np.arange(scispectra.shape[0])
 scispectra[errspectra == 0.] = np.nan
 log.info('Getting Fiber to Fiber Correction')
 Adj = get_amp_norm_ftf(scispectra, ftf, nexp, nchunks=9)
+if args.limit_adj:
+    sel = np.abs(np.median(Adj, axis=1) - 1.) > 0.2
+    Adj[sel] = 1.
 del twispectra
 gc.collect()
 process = psutil.Process(os.getpid())
