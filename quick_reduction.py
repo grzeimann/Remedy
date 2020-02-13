@@ -2267,8 +2267,8 @@ for k, _V in enumerate(intm):
 back_val, error_cor = biweight((scispectra / errspectra)[:, 800:900],
                                calc_std=True)
 log.info('Error Correction: %0.2f' % error_cor)
-if not args.simple:
-    errspectra *= error_cor
+error_cor = np.min([np.max([error_cor, 0.5]), 1.5])
+errspectra *= error_cor
 
 # =============================================================================
 # Calculate ratio of skies from multiple exposures. Normalization factor??
