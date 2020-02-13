@@ -2234,7 +2234,7 @@ log.info('Subtracting sky for all ifuslots')
 skies = []
 for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
-    skyfibers = get_sky_fibers(biweight(scispectra[sel, 800:900]), axis=1)
+    skyfibers = get_sky_fibers(biweight(scispectra[sel, 800:900], axis=1))
     log.info('Number of fibers with sky: %i / %i' % (skyfibers.sum(), sel.sum()))
     sky = biweight(scispectra[sel][skyfibers], axis=0)
     skies.append(sky)
