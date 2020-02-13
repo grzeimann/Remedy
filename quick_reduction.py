@@ -1988,12 +1988,26 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
     plt.savefig('mag_offset_%s_%07d.png'  % (args.date, args.observation), dpi=300)
     return sel, GMag[:, 0] - GMag[:, 1] - median
 
+def get_sky_fibers(norm_array):
+    bl, bm = biweight(norm_array, calc_std=True)
+    per_array = np.linspace(bl-2*bm, bl+2*bm, 81)
+    Neighbors = np.sum(np.abs(norm_array[:, np.newaxis] - per_array) < bm,
+                       axis=0)
+    ind = np.argmax(Neighbors)
+    nsky = per_array[ind]
+    return (norm_array-nsky) < (2 * bm)
+    
+        
+
+
 def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
     K = sci * 1.
     inds = np.arange(sci.shape[0])
     for k in np.arange(nexp):
         sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
-        sky = biweight(sci[sel] / ftf[sel], axis=0)
+        skyfibers = get_sky_fibers(biweight(sci[sel, 800:900]) /
+                                   ftf[sel, 800:900], axis=1)
+        sky = biweight((sci[sel] / ftf[sel])[skyfibers], axis=0)
         K[sel] = K[sel] / sky[np.newaxis, :]
     namps = int(K.shape[0] / (nexp*112))
     adj = np.zeros((sci.shape[0], nchunks))
@@ -2223,7 +2237,9 @@ log.info('Subtracting sky for all ifuslots')
 skies = []
 for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
-    sky = biweight(scispectra[sel], axis=0)
+    skyfibers = get_sky_fibers(biweight(scispectra[sel, 800:900]), axis=1)
+    log.info('Number of fibers with sky: %i / %i' % (skyfibers.sum(), sel.sum()))
+    sky = biweight(scispectra[sel][skyfibers], axis=0)
     skies.append(sky)
     scispectra[sel] = scispectra[sel] - sky
 
