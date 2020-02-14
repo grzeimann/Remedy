@@ -55,6 +55,20 @@ for tarfolder in tarfolders:
                                                            name[-8:-5], 
                                                            Target, state,
                                                            illum, transpar, iq))
+        if 'hpf' in inst:
+            if name[-5:] == '.fits':
+                b = fits.open(T.extractfile(a))
+                Target = b[0].header['OBJECT']
+                try:
+                    prog = b[0].header['QPROG']
+                except:
+                    prog = 'None'
+                sciobj = b[0].header['SCI-OBJ']
+                calobj = b[0].header['CAL-OBJ']
+                skyobj = b[0].header['SKY-OBJ']
+                print('%s: %s  %s  %s %s %s %s' % (tarfolder, name[-8:-5], 
+                                                Target, prog, sciobj, calobj, skyobj))
+                flag = False
         
         else:   
             if name[-5:] == '.fits':
