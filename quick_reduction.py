@@ -1420,8 +1420,6 @@ def get_mirror_illumination_throughput(fn=None, default=51.4e4, default_t=1.,
         area = default
         transpar = default_t
         iq = default_iq
-    #log.info('Mirror illumination: %0.2f m^2' % (area/1e4))
-    #log.info('Througphut: %0.2f' % transpar)
     return area, transpar, iq
 
 
