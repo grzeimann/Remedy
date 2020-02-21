@@ -2501,6 +2501,7 @@ plot_astrometry(f, A, np.where(objsel)[0], colors)
 table = h5spec.create_table(h5spec.root, 'CatSpectra', CatSpectra, 
                             "Spectral Extraction Information")
 
+norm = 1e-29 * 2.99792e18 / def_wave**2
 specrow = table.row
 for specinfo in spec_list:
     specrow['ra'] = specinfo[0]
@@ -2527,8 +2528,8 @@ table = h5spec.create_table(h5spec.root, 'Fibers', Fibers,
                             "Fiber Information")
 specrow = table.row
 for i in np.arange(len(scispectra)):
-    specrow['spectrum'] = scispectra[i]
-    specrow['error'] = errspectra[i]
+    specrow['spectrum'] = scispectra[i] * norm
+    specrow['error'] = errspectra[i] * norm
     specrow['chi2spec'] = C1[i]
     specrow['fiber_to_fiber'] = ftf[i]
     specrow['fiber_to_fiber_adj'] = Adj[i]
