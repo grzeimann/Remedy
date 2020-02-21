@@ -1448,6 +1448,7 @@ def get_mirror_illumination_guider(fn, exptime, default=51.4e4, default_t=1.,
             final_list = []
             
             for t in init_list:
+                print(t)
                 DT = op.basename(t).split('_')[0]
                 y, m, d, h, mi, s = [int(x) for x in [DT[:4], DT[4:6], DT[6:8],
                                      DT[9:11], DT[11:13], DT[13:15]]]
