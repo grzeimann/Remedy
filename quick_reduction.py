@@ -2071,7 +2071,7 @@ h5spec = open_file(name, mode="w", title="%s Spectra" % name[:-3])
 class Fibers(IsDescription):
      spectrum  = Float32Col((1036,))    # float  (single-precision)
      error  = Float32Col((1036,))    # float  (single-precision)
-     #chi2spec = Float32Col((1036,))
+     chi2spec = Float32Col((1036,))
      #fiber_to_fiber  = Float32Col((1036,))    # float  (single-precision)
      #fiber_to_fiber_adj  = Float32Col((1036,))    # float  (single-precision)     
 
@@ -2531,8 +2531,8 @@ for i in np.arange(len(scispectra)):
     specrow['spectrum'] = scispectra[i] * norm
     specrow['error'] = errspectra[i] * norm
     specrow['chi2spec'] = C1[i]
-    specrow['fiber_to_fiber'] = ftf[i]
-    specrow['fiber_to_fiber_adj'] = Adj[i]
+    #specrow['fiber_to_fiber'] = ftf[i]
+    #specrow['fiber_to_fiber_adj'] = Adj[i]
     specrow.append()
 table.flush()
 
