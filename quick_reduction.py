@@ -1138,14 +1138,14 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             N = twi.shape[0]
             _I = np.char.array(['%s_%s_%s_%s' % (specid, ifuslot, ifuid, amp)] * N)
             _V = '%s_%s_%s_%s_exp%02d' % (specid, ifuslot, ifuid, amp, j+1)
-            for loop in np.arange(len(spec)):
-                specrow['observed'] = spec1[loop]
-                specrow['observed_error'] = espec1[loop]
-                specrow['plawspec'] = plaw1[loop]
-                specrow['mdarkspec'] = mdark1[loop]
-                specrow['trace'] = trace[loop]
-                specrow['wavelength'] = wave[loop]
-                specrow.append()
+#            for loop in np.arange(len(spec)):
+#                specrow['observed'] = spec1[loop]
+#                specrow['observed_error'] = espec1[loop]
+#                specrow['plawspec'] = plaw1[loop]
+#                specrow['mdarkspec'] = mdark1[loop]
+#                specrow['trace'] = trace[loop]
+#                specrow['wavelength'] = wave[loop]
+#                specrow.append()
             p[cnt:cnt+112, :] = pos
             t[cnt:cnt+112, :] = twi
             s[cnt:cnt+112, :] = spec
@@ -2071,9 +2071,9 @@ h5spec = open_file(name, mode="w", title="%s Spectra" % name[:-3])
 class Fibers(IsDescription):
      spectrum  = Float32Col((1036,))    # float  (single-precision)
      error  = Float32Col((1036,))    # float  (single-precision)
-     chi2spec = Float32Col((1036,))
-     fiber_to_fiber  = Float32Col((1036,))    # float  (single-precision)
-     fiber_to_fiber_adj  = Float32Col((1036,))    # float  (single-precision)     
+     #chi2spec = Float32Col((1036,))
+     #fiber_to_fiber  = Float32Col((1036,))    # float  (single-precision)
+     #fiber_to_fiber_adj  = Float32Col((1036,))    # float  (single-precision)     
 
 class Cals(IsDescription):
      trace  = Float32Col((1032,))    # float  (single-precision)
@@ -2513,8 +2513,8 @@ for specinfo in spec_list:
     specrow['gmag'] = specinfo[6]
     specrow['syngmag'] = specinfo[7]
     if len(specinfo[8]) > 0:
-        specrow['spectrum'] = specinfo[8]
-        specrow['error'] = specinfo[9]
+        specrow['spectrum'] = specinfo[8] * norm
+        specrow['error'] = specinfo[9] * norm
         specrow['weight'] = specinfo[10]
         specrow['image'] = specinfo[11]
         specrow['xgrid'] = specinfo[12]
