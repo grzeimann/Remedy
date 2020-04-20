@@ -841,9 +841,9 @@ def get_mask(scispectra, C1, ftf, Adj, nexp):
     badfibers = np.where(badfiberflag)[0]
     mask[badfibers] = True
     # Flag an amp as bad if more than 20% of their fibers are marked as bad
-    for k in np.arange(0, int(len(inds)/112./nexp)):
-        ll = k*112*nexp
-        hl = (k+1)*112*nexp
+    for k in np.arange(0, int(len(inds)/112./nexp), dtype=int):
+        ll = int(k*112*nexp)
+        hl = int((k+1)*112*nexp)
         nbadfibers = badfiberflag[ll:hl].sum()
         nfibers = hl - ll
         idx = int(k / 4)
