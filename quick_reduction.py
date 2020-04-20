@@ -2187,7 +2187,7 @@ log.info('[MRK] Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
 # =============================================================================
 # Number of exposures
 # =============================================================================
-nexp = scispectra.shape[0] / 448 / nslots
+nexp = int(scispectra.shape[0] / 448 / nslots)
 log.info('Number of exposures: %i' % nexp)
 
 
