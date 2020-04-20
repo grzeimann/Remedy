@@ -2033,7 +2033,8 @@ def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
             for j in np.arange(nexp):
                  j1 = int(j * 112)
                  j2 = int((j+1) * 112)
-                 adj[i1+j1:i1+j2, cnt] = norms[j] * cont
+                 print(j1, j2, i1, i2, cnt, j)
+                 adj[(i1+j1):(i1+j2), cnt] = norms[j] * cont
             cnt += 1
     Adj = ftf * 0.
     for i in np.arange(sci.shape[0]):
