@@ -441,7 +441,7 @@ def base_reduction(filename, get_header=False, tfile=None, rdnoise=None):
     image = np.array(a[0].data, dtype=float)
     
     # Overscan subtraction
-    overscan_length = 32 * (image.shape[1] / 1064)
+    overscan_length = int(32 * (image.shape[1] / 1064))
     O = biweight_location(image[:, -(overscan_length-2):])
     image[:] = image - O
     
