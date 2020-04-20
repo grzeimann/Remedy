@@ -1072,7 +1072,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
     for ind in ifuloop:
         ifuslot = '%03d' % h5table[ind]['ifuslot']
         ifuid = str(h5table[ind]['ifuid'])
-        specid = str(h5table[ind]['specid')]
+        specid = str(h5table[ind]['specid'])
         amp = str(h5table[ind]['amp'])
         amppos = h5table[ind]['ifupos']
         wave = h5table[ind]['wavelength']
