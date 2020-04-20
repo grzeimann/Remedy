@@ -1850,11 +1850,12 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
         image = make_photometric_image(P[:, 0], P[:, 1], data, filtg,
                                        M, ADRx, 0.*ADRx, nchunks=11,
                                        ran=ran,  scale=scale, seeing=seeing)
-        print(image)
         # Make full fits file with wcs info (using default header)
         mean, median, std = sigma_clipped_stats(image, sigma=3.0, stdfunc=np.std)
         daofind = DAOStarFinder(fwhm=4.0, threshold=7. * std, exclude_border=True) 
         sources = daofind(image)
+        if sources is None:
+            source = []
         log.info('Found %i sources in %03d' % (len(sources), ui))
         
         # Keep certain info for new loops
