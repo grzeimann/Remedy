@@ -2030,10 +2030,9 @@ def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
                 mask, cont = identify_sky_pixels(avg, 5)
             else:
                 cont = np.ones(avg.shape)
-            for j in np.arange(nexp):
+            for j in np.arange(nexp, dtype=int):
                  j1 = int(j * 112)
                  j2 = int((j+1) * 112)
-                 print(j1, j2, i1, i2, cnt, j)
                  adj[(i1+j1):(i1+j2), cnt] = norms[j] * cont
             cnt += 1
     Adj = ftf * 0.
