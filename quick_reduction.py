@@ -1657,8 +1657,8 @@ def fit_astrometry(f, A1, thresh=25.):
     log.info('Number of sources within 1.5" of max density: %i' % (sel.sum()))
     if sel.sum() < 4.:
         return A
-    filtered_r, fitr = fitter(P, f['fx'][sel], f['fy'][sel], f['RA'][sel])
-    filtered_d, fitd = fitter(P, f['fx'][sel], f['fy'][sel], f['Dec'][sel])
+    fitr, filtered_r = fitter(P, f['fx'][sel], f['fy'][sel], f['RA'][sel])
+    fitd, filtered_d = fitter(P, f['fx'][sel], f['fy'][sel], f['Dec'][sel])
     ra0 = A.ra0 * 1.
     dec0 = A.dec0 * 1.
     rot_i = A.rot * 1.
