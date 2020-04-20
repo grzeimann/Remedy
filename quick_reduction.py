@@ -1855,7 +1855,7 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
         daofind = DAOStarFinder(fwhm=4.0, threshold=7. * std, exclude_border=True) 
         sources = daofind(image)
         if sources is None:
-            source = []
+            sources = []
         log.info('Found %i sources in %03d' % (len(sources), ui))
         
         # Keep certain info for new loops
