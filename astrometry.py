@@ -16,7 +16,7 @@ try:
 except:
     print('Could not find fplane class in pyhetdex.')
     print('Please check your pyhetdex installation.')
-    pyhexdex_flag = False
+    pyhetdex_flag = False
 
 
 class Astrometry:
