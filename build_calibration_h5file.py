@@ -148,9 +148,9 @@ def get_unique_ifuslots(tarfolders):
     return ifuslots
 
 def expand_date_range(daterange, days):
-    l1 = [daterange[0] - timedelta(days=x)
+    l1 = [daterange[0] - timedelta(days=float(x))
           for x in np.arange(1, days+1)]
-    l2 = [daterange[-1] + timedelta(days=x)
+    l2 = [daterange[-1] + timedelta(days=float(x))
           for x in np.arange(1, days+1)]
     return l1 + daterange + l2
 
@@ -230,8 +230,8 @@ parser.add_argument('outfilename', type=str,
 parser.add_argument("-f", "--folder", help='''Output folder''', type=str,
                     default='output')
 
-parser.add_argument("-dd", "--dark_days", help='''Extra days +/- for darks''', type=int,
-                    default=7)
+parser.add_argument("-dd", "--dark_days", help='''Extra days +/- for darks''',
+                    type=int, default=7)
 
 parser.add_argument("-i", "--ifuslot",  help='''IFUSLOT''', type=str,
                     default='047')
