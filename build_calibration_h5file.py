@@ -94,8 +94,7 @@ def get_filenames(args, daterange, kind):
                 line = process.stdout.readline()
                 if not line:
                     break
-                b = line.rstrip()
-                print(b, args.rootdir)
+                b = line.rstrip().decode("utf-8")
                 c = op.join(args.rootdir, b)
                 filenames.append(c[:-14])
     return filenames
