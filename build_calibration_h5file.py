@@ -25,6 +25,8 @@ from input_utils import setup_parser, set_daterange, setup_logging
 from math_utils import biweight
 
 karl_tarlist = '/work/00115/gebhardt/maverick/gettar/%starlist'
+karl_scilist = '/work/00115/gebhardt/maverick/gettar/%ssci'
+
 warnings.filterwarnings("ignore")
 
 def get_script_path():
@@ -89,6 +91,30 @@ def get_filenames(args, daterange, kind):
             process = subprocess.Popen('cat %s | grep %s | grep _%sLL | '
                                        'grep %s' %
                                        (tname, kind, ifuslot, daten),
+                                       stdout=subprocess.PIPE, shell=True)
+            while True:
+                line = process.stdout.readline()
+                if not line:
+                    break
+                b = line.rstrip().decode("utf-8")
+                c = op.join(args.rootdir, b)
+                filenames.append(c[:-14])
+    return filenames
+
+def get_scifilenames(args, daterange, kind):
+    filenames = []
+    dates = []
+    for date in daterange:
+        date = '%04d%02d' % (date.year, date.month)
+        if date not in dates:
+            dates.append(date)
+    
+    for date in dates:
+        tname = karl_scilist % date
+        for daten in daterange:
+            daten = '%04d%02d%02d' % (daten.year, daten.month, daten.day)
+            process = subprocess.Popen('cat %s | grep %s | grep %s ' %
+                                       (tname, daten, 'DEX'),
                                        stdout=subprocess.PIPE, shell=True)
             while True:
                 line = process.stdout.readline()
@@ -252,7 +278,10 @@ for kind in kinds:
         daterange = expand_date_range(args.daterange, args.dark_days)
     else:
         daterange = list(args.daterange)
-    filename_dict[kind] = get_filenames(args, daterange, kind)
+    if kind == 'sci':
+        filename_dict[kind] = get_scifilenames(args, daterange, kind)
+    else:
+        filename_dict[kind] = get_filenames(args, daterange, kind)
     tarname_dict[kind] = get_tarfiles(filename_dict[kind])
     if kind == 'twi':
         ifuslots = get_unique_ifuslots(tarname_dict[kind])
