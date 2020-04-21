@@ -48,11 +48,12 @@ class VIRUSImage(tb.IsDescription):
     pixelmask = tb.Int32Col((1032, 1032))
     mastertwi = tb.Float32Col((1032, 1032))
     mastercmp = tb.Float32Col((1032, 1032))
+    mastersci = tb.Float32Col((1032, 1032))
 
 
 def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
                            amp, readnoise, pixelmask, masterdark, mastertwi,
-                           mastercmp, lampspec, contid):
+                           mastercmp, mastersci, lampspec, contid):
     row['wavelength'] = wave * 1.
     row['trace'] = trace * 1.
     row['ifupos'] = ifupos * 1.
@@ -64,6 +65,7 @@ def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
     row['pixelmask'] = pixelmask
     row['masterdark'] = masterdark
     row['mastertwi'] = mastertwi
+    row['mastersci'] = mastersci
     row['mastercmp'] = mastercmp
     row['lampspec'] = lampspec
     row['amp'] = amp
@@ -165,6 +167,9 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
             if kind == 'twi':
                 if (np.mean(I) < 1000.) or (np.mean(I) > 50000):
                     continue
+            if kind == 'sci':
+                if (np.mean(I) < 1.) or (np.mean(I) > 50000):
+                    continue
             hspecid, hifuid = ['%03d' % int(header[name])
                                for name in ['SPECID', 'IFUID']]
             hcontid = header['CONTID']
@@ -205,6 +210,10 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
         big_array = np.array([v[0] for v in bia_list])
         masterbias = np.median(big_array, axis=0)
         masterstd = np.std(big_array, axis=0)
+    if kind == 'sci':
+        big_array = np.array([v[0] for v in bia_list])
+        masterbias = np.median(big_array, axis=0)
+        masterstd = np.std(big_array, axis=0)
 
     log.info('Number of frames for %s: %i' % (kind, len(big_array)))
     d1 = bia_list[0][3]
@@ -231,7 +240,7 @@ parser.add_argument("-i", "--ifuslot",  help='''IFUSLOT''', type=str,
 args = parser.parse_args(args=None)
 args.log = setup_logging(logname='build_master_bias')
 args = set_daterange(args)
-kinds = ['drk', 'twi', 'cmp']
+kinds = ['drk', 'twi', 'cmp', 'sci']
 mkpath(args.folder)
 dirname = get_script_path()
 
@@ -264,6 +273,7 @@ for ifuslot_key in ifuslots:
         row = imagetable.row
         masterdark = np.zeros((1032, 1032))
         mastertwi = np.zeros((1032, 1032))
+        mastersci = np.zeros((1032, 1032))
         wave = np.zeros((112, 1032))
         trace = np.zeros((112, 1032))
         readnoise = 3.
@@ -280,6 +290,8 @@ for ifuslot_key in ifuslots:
                 break
             specid, ifuSlot, ifuid = ['%03d' % int(z)
                                       for z in [_info[3], ifuslot, _info[4]]]
+            if kind == 'sci':
+                mastersci = _info[0] * 1.
             if kind == 'drk':
                 masterdark = _info[0] * 1.
                 readnoise = biweight(_info[1])
@@ -332,6 +344,6 @@ for ifuslot_key in ifuslots:
         success = append_fibers_to_table(row, wave, trace, ifupos, ifuslot,
                                          ifuid, specid, amp, readnoise,
                                          pixelmask, masterdark, mastertwi, 
-                                         mastercmp, cmp, contid)
+                                         mastercmp, mastersci, cmp, contid)
         if success:
             imagetable.flush()
