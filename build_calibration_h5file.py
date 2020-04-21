@@ -95,6 +95,7 @@ def get_filenames(args, daterange, kind):
                 if not line:
                     break
                 b = line.rstrip()
+                print(b, args.rootdir)
                 c = op.join(args.rootdir, b)
                 filenames.append(c[:-14])
     return filenames
