@@ -96,6 +96,7 @@ def get_filenames(args, daterange, kind):
                     break
                 b = line.rstrip().decode("utf-8")
                 c = op.join(args.rootdir, b)
+                print(c)
                 filenames.append(c[:-14])
     return filenames
 
