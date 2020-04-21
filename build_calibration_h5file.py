@@ -121,6 +121,7 @@ def get_scifilenames(args, daterange, kind):
                 if not line:
                     break
                 b = line.rstrip().decode("utf-8")
+                b = b.split(' ')[0].split('maverick/')[1]
                 c = op.join(args.rootdir, b)
                 filenames.append(c[:-14])
     return filenames
