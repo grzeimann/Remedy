@@ -187,13 +187,12 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
     # Create empty lists for the left edge jump, right edge jump, and structure
     objnames = ['hg', 'cd-a']
     bia_list = []
-    print(file_list)
     for itm in file_list:
         fn = itm + '%s%s_%s.fits' % (ifuslot, amp, kind)
         try:
             I, E, header = base_reduction(fn, get_header=True)
             if kind == 'flt':
-                if (np.mean(I) < 1000.) or (np.mean(I) > 50000):
+                if (np.mean(I) < 50.) or (np.mean(I) > 50000):
                     continue
             if kind == 'sci':
                 if (np.mean(I) < 1.) or (np.mean(I) > 50000):
