@@ -343,8 +343,6 @@ for ifuslot_key in ifuslots:
                 except:
                     args.log.error('Trace Failed for %s %s.' %
                                        (ifuslot_key, amp))
-                    fits.PrimaryHDU(_info[0]).writeto('inspect_twi.fits', overwrite=True)
-                    sys.exit(1)
                 try:
                     cm, cl, ch = measure_contrast(_info[0], twi, trace)
                     if cm is not None:
