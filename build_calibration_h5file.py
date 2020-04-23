@@ -191,7 +191,7 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
         fn = itm + '%s%s_%s.fits' % (ifuslot, amp, kind)
         try:
             I, E, header = base_reduction(fn, get_header=True)
-            if kind == 'twi':
+            if kind == 'flt':
                 if (np.mean(I) < 1000.) or (np.mean(I) > 50000):
                     continue
             if kind == 'sci':
@@ -233,7 +233,7 @@ def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
         big_array = np.array([v[0] for v in bia_list])
         masterbias = np.median(big_array, axis=0)
         masterstd = np.std(big_array, axis=0)
-    if kind == 'twi':
+    if kind == 'flt':
         big_array = np.array([v[0] for v in bia_list])
         masterbias = np.median(big_array, axis=0)
         masterstd = np.std(big_array, axis=0)
@@ -267,7 +267,7 @@ parser.add_argument("-i", "--ifuslot",  help='''IFUSLOT''', type=str,
 args = parser.parse_args(args=None)
 args.log = setup_logging(logname='build_master_bias')
 args = set_daterange(args)
-kinds = ['drk', 'twi', 'cmp', 'sci']
+kinds = ['drk', 'flt', 'cmp', 'sci']
 mkpath(args.folder)
 dirname = get_script_path()
 
@@ -284,7 +284,7 @@ for kind in kinds:
     else:
         filename_dict[kind] = get_filenames(args, daterange, kind)
     tarname_dict[kind] = get_tarfiles(filename_dict[kind])
-    if kind == 'twi':
+    if kind == 'flt':
         ifuslots = get_unique_ifuslots(tarname_dict[kind])
 
 args.log.info('Number of unique ifuslot zipcodes: %i' % len(ifuslots))
@@ -330,7 +330,7 @@ for ifuslot_key in ifuslots:
                 args.log.info('Getting pixel mask %03d %s' %
                               (int(ifuslot), amp))
                 pixelmask = get_pixelmask(masterdark)
-            if kind == 'twi':
+            if kind == 'flt':
                 ifupos = get_ifucenfile(dirname, ifuid, amp)
                 mastertwi = _info[0] * 1.
 
