@@ -2211,7 +2211,7 @@ log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
 
 fac = 360. / ExP
 fac[ExP==0.] = 1.
-mult_fac2 = mult_fac * fac
+mult_fac2 = mult_fac[np.newaxis, :] * fac[:, np.newaxis]
 scispectra[:] = scispectra / throughput[np.newaxis, :] * mult_fac2
 errspectra[:] = errspectra / throughput[np.newaxis, :] * mult_fac2
 # =============================================================================
