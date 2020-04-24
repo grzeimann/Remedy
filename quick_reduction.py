@@ -1043,12 +1043,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         for j, fn in enumerate(filenames):
             sciimage, scierror, header = base_reduction(fn, tfile=scitarfile,
                                                 rdnoise=readnoise, get_header=True)
-            if header['EXPTIME'] > 0.:
-                fac = 360. / header['EXPTIME']
-                mult_fac2 = mult_fac * fac
-            else:
-                mult_fac2 = mult_fac * 1.
-                fac = 1.
+            
             sciimage[:] = sciimage - masterdark
             sci_plaw = get_powerlaw(sciimage, trace)
             sciimage[:] = sciimage - sci_plaw
@@ -1069,7 +1064,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
                     intpm = None
                     log.warning('modeling images failed')
             
-            ExP[j] = header['EXPTIME']
+            ExP[cnt:cnt+112] = np.array([header['EXPTIME']]*112)
 #            twi[:] = safe_division(twi, throughput)
 #            spec = safe_division(spec1, throughput) * mult_fac2
 #            espec = safe_division(espec1, throughput) * mult_fac2
@@ -2016,7 +2011,7 @@ h5spec = open_file(name, mode="w", title="%s Spectra" % name[:-3])
 class Fibers(IsDescription):
      spectrum  = Float32Col((1036,))    # float  (single-precision)
      error  = Float32Col((1036,))    # float  (single-precision)
-     chi2spec = Float32Col((1036,))
+     #chi2spec = Float32Col((1036,))
      #fiber_to_fiber  = Float32Col((1036,))    # float  (single-precision)
      #fiber_to_fiber_adj  = Float32Col((1036,))    # float  (single-precision)     
 
@@ -2210,7 +2205,15 @@ gc.collect()
 process = psutil.Process(os.getpid())
 log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))    
 
+# =============================================================================
+# Calibration
+# =============================================================================
 
+fac = 360. / ExP
+fac[ExP==0.] = 1.
+mult_fac2 = mult_fac * fac
+scispectra[:] = scispectra / throughput[np.newaxis, :] * mult_fac2
+errspectra[:] = errspectra / throughput[np.newaxis, :] * mult_fac2
 # =============================================================================
 # Make 2d sky-sub image 
 # =============================================================================
@@ -2501,7 +2504,7 @@ specrow = table.row
 for i in np.arange(len(scispectra)):
     specrow['spectrum'] = scispectra[i] * norm
     specrow['error'] = errspectra[i] * norm
-    specrow['chi2spec'] = C1[i]
+    #specrow['chi2spec'] = C1[i]
     #specrow['fiber_to_fiber'] = ftf[i]
     #specrow['fiber_to_fiber_adj'] = Adj[i]
     specrow.append()
