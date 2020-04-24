@@ -2159,7 +2159,7 @@ mask = get_mask(scispectra, C1, ftf, res, nexp)
 if not args.no_masking:
     scispectra[mask] = np.nan
     errspectra[mask] = np.nan
-fits.Primary(HDU(safe_division(scispectra, ftf))).writeto('test.fits', overwrite=True)
+fits.PrimaryHDU(safe_division(scispectra, ftf)).writeto('test.fits', overwrite=True)
 log.info('Exiting Early')
 sys.exit(1)
 
