@@ -852,15 +852,15 @@ def get_mask(scispectra, C1, ftf, res, nexp):
     for k in np.arange(0, int(len(inds)/112./nexp), dtype=int):
         ll = int(k*112*nexp)
         hl = int((k+1)*112*nexp)
-        nbadfibers = badfiberflag[ll:hl].sum()
-        nfibers = hl - ll
         idx = int(k / 4)
         ampid = amps[k % 4]
         bad_columns = np.sum(mask[ll:hl], axis=0) > (0.2 * nexp * 112)
         log.info('%03d%s number of columns marked bad: %i' %
                  (allifus[idx], ampid, bad_columns.sum()))
         mask[ll:hl, bad_columns] = True
-        if (nbadfibers*1./nfibers) > 0.2:
+        mfrac = ((mask[ll:hl].sum()*1.) / 
+                 (mask[ll:hl].shape[0]*mask[ll:hl].shape[1]))
+        if mfrac > 0.2:
             log.info('%03d%s Amplifier marked bad.' % (allifus[idx], ampid))
             mask[ll:hl, :] = True
     return mask
@@ -2172,7 +2172,7 @@ scispectra = safe_division(scispectra, ftf)
 errspectra = safe_division(errspectra, ftf)
 scirect = np.zeros((scispectra.shape[0], len(def_wave)))
 for i in np.arange(scispectra.shape[0]):
-    scirect = np.interp(def_wave, wave_all[i], scispectra, left=np.nan,
+    scirect = np.interp(def_wave, wave_all[i], scispectra[i], left=np.nan,
                         right=np.nan)
 fits.PrimaryHDU(scirect).writeto('test.fits', overwrite=True)
 log.info('Exiting Early')
