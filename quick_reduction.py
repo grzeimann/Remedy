@@ -722,8 +722,8 @@ def get_spectra_quick(array_sci, array_err, array_flt, plaw, mdark, array_trace,
     err_spectrum[total_mask] = 0.0
     sci_spectrum[total_mask] = 0.0
     msci_spectrum[total_mask] = 0.0
-    return twi_spectrum, sci_spectrum, err_spectrum, plaw_spectrum,
-           mdark_spectrum, chi2_spectrum, msci_spectrum
+    return (twi_spectrum, sci_spectrum, err_spectrum, plaw_spectrum,
+            mdark_spectrum, chi2_spectrum, msci_spectrum)
 
 
 def get_continuum(spectra, nbins=25):
