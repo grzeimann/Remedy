@@ -2172,10 +2172,10 @@ scispectra = safe_division(scispectra, ftf)
 errspectra = safe_division(errspectra, ftf)
 scirect = np.zeros((scispectra.shape[0], len(def_wave)))
 for i in np.arange(scispectra.shape[0]):
-    scirect = np.interp(def_wave, wave_all[i], scispectra[i], left=np.nan,
+    scirect[i] = np.interp(def_wave, wave_all[i], scispectra[i], left=np.nan,
                         right=np.nan)
 fits.PrimaryHDU(scirect).writeto('test.fits', overwrite=True)
-log.info('Exiting Early')
+
 # =============================================================================
 # Sky Subtraction
 # =============================================================================
