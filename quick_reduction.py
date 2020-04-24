@@ -839,7 +839,7 @@ def get_mask(scispectra, C1, ftf, res, nexp):
     mask[badftf] = True
     
     # Error spectra with 0.0 are either outside the wavelength range or pixels masked by bad pixel mask
-    badpixmask = np.isnan(errspectra)
+    badpixmask = np.isnan(scispectra)
     mask[badpixmask] = True
     
     # Flag a fiber as bad if more than 200 columns are already flagged bad
