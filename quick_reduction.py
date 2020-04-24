@@ -795,7 +795,7 @@ def get_fiber_to_fiber(twispec, scispec, wave_all):
         ftf[i] = ftftwi[i] * z
         sky[i] = ftf[i] * S(w)
     skysub_frac = (scispec - sky) / sky
-    return ftf, skysub_frace
+    return ftf, skysub_frac
     
 
 def get_fiber_to_fiber_adj(scispectra, ftf, nexp):
