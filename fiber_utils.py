@@ -444,7 +444,7 @@ def get_spectra_chi2(array_flt, array_sci, array_err,
             chi2[j+LB, 2] = array_err[indv+j, x] * w
         norm = chi2[:, 0].sum(axis=0) / chi2[:, 1].sum(axis=0)
         num = (chi2[:, 0] - chi2[:, 1] * norm[np.newaxis, :])**2
-        denom = (chi2[:, 2] + 0.01*chi2[:, 0].sum(axis=0)[:, np.newaxis])**2
+        denom = (chi2[:, 2] + 0.01*chi2[:, 0].sum(axis=0)[np.newaxis, :])**2
         spec[fiber] = 1. / (1. + npix) * np.sum(num / denom, axis=0)
     return spec
 
