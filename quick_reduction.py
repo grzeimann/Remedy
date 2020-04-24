@@ -1056,7 +1056,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             mask1 = get_spectra(pixelmask, trace)
             mspec = get_spectra(mastersci, trace)
             for arr in [spec, espec, twi, mspec]:
-                arr[mask1] = np.nan
+                arr[mask1>0.] = np.nan
             if j==0:
                 try:
                     intpm, shifts = measure_fiber_profile(masterflt, twi, trace, wave, def_wave)
