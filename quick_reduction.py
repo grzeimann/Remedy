@@ -1065,9 +1065,9 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
                     log.warning('modeling images failed')
             
             ExP[j] = header['EXPTIME']
-            twi[:] = safe_division(twi, throughput)
-            spec = safe_division(spec1, throughput) * mult_fac2
-            espec = safe_division(espec1, throughput) * mult_fac2
+#            twi[:] = safe_division(twi, throughput)
+#            spec = safe_division(spec1, throughput) * mult_fac2
+#            espec = safe_division(espec1, throughput) * mult_fac2
             if nexposures == 3:
                 pos = amppos + dither_pattern[j]
             else:
