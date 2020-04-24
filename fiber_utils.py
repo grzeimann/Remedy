@@ -426,7 +426,7 @@ def get_spectra_chi2(array_flt, array_sci, array_err,
     LB = int((npix+1)/2)
     HB = -LB + npix + 1
     for fiber in np.arange(array_trace.shape[0]):
-        chi2 = np.zeros((npix+1, 2, len(x)))
+        chi2 = np.zeros((npix+1, 3, len(x)))
         if np.round(array_trace[fiber]).min() < LB:
             continue
         if np.round(array_trace[fiber]).max() >= (N-LB):
