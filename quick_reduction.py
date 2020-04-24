@@ -859,10 +859,10 @@ def get_mask(scispectra, C1, ftf, res, nexp):
                  (allifus[idx], ampid, bad_columns.sum()))
         mask[ll:hl, bad_columns] = True
         mfrac = ((mask[ll:hl].sum()*1.) / 
-                 (mask[ll:hl].shape[0]*mask[ll:hl].shape[1]))
+                 (mask[ll:hl].shape[0]*mask[ll:hl].shape[1])*1.)
         if mfrac > 0.2:
             log.info('%03d%s Amplifier marked bad.' % (allifus[idx], ampid))
-            mask[ll:hl, :] = True
+            mask[ll:hl] = True
     return mask
 
 def power_law(x, c1, c2=.5, c3=.15, c4=1., sig=2.5):
