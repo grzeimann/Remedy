@@ -37,7 +37,8 @@ from catalog_search import query_panstarrs, MakeRegionFile
 from datetime import datetime, timedelta
 from extract import Extract
 from fiber_utils import identify_sky_pixels, measure_fiber_profile, get_trace
-from fiber_utils import build_model_image, detect_sources
+from fiber_utils import build_model_image, detect_sources, get_powerlaw
+from fiber_utils import get_spectra, get_spectra_error, get_spectra_chi2
 from input_utils import setup_logging
 from math_utils import biweight
 from photutils import DAOStarFinder, aperture_photometry, CircularAperture
@@ -626,7 +627,7 @@ def get_twi_spectra(array_flt, array_trace, wave, def_wave):
 
 
 def get_spectra_quick(array_sci, array_err, array_flt, plaw, mdark, array_trace, wave, def_wave,
-                pixelmask):
+                      pixelmask, mastersci):
     '''
     Extract spectra by dividing the flat field and averaging the central
     two pixels
@@ -661,6 +662,7 @@ def get_spectra_quick(array_sci, array_err, array_flt, plaw, mdark, array_trace,
     plaw_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
     mdark_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
     chi2_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
+    msci_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
 
     mask = np.zeros((array_trace.shape[0], def_wave.shape[0]))
 
@@ -674,7 +676,7 @@ def get_spectra_quick(array_sci, array_err, array_flt, plaw, mdark, array_trace,
         if np.round(array_trace[fiber]).max() >= (N-2):
             continue
         indv = np.round(array_trace[fiber]).astype(int)
-        tw, sw, ew, pm, pl, md = (0., 0., 0., 0., 0., 0.)
+        tw, sw, ew, pm, pl, md, msw = (0., 0., 0., 0., 0., 0., 0.)
         chi2 = np.zeros((len(indv), 6, 3))
         for j in np.arange(-3, 3):
             if j == -3:
@@ -685,6 +687,7 @@ def get_spectra_quick(array_sci, array_err, array_flt, plaw, mdark, array_trace,
                 w = 1.
             tw += array_flt[indv+j, x] * w
             sw += array_sci[indv+j, x] * w
+            msw += mastersci[indv+j, x] * w
             pl += plaw[indv+j, x] * w
             md += mdark[indv+j, x] * w
             ew += array_err[indv+j, x]**2 * w
@@ -705,6 +708,8 @@ def get_spectra_quick(array_sci, array_err, array_flt, plaw, mdark, array_trace,
                                         left=0.0, right=0.0)
         sci_spectrum[fiber] = np.interp(def_wave, wave[fiber], sw / dw,
                                         left=0.0, right=0.0)
+        msci_spectrum[fiber] = np.interp(def_wave, wave[fiber], msw / dw,
+                                        left=0.0, right=0.0)
         mask[fiber] = np.interp(def_wave, wave[fiber], pm / dw,
                                         left=0.0, right=0.0)
         chi2_spectrum[fiber] = np.interp(def_wave, wave[fiber], chi2a,
@@ -716,7 +721,9 @@ def get_spectra_quick(array_sci, array_err, array_flt, plaw, mdark, array_trace,
     twi_spectrum[total_mask] = 0.0
     err_spectrum[total_mask] = 0.0
     sci_spectrum[total_mask] = 0.0
-    return twi_spectrum, sci_spectrum, err_spectrum, plaw_spectrum, mdark_spectrum, chi2_spectrum
+    msci_spectrum[total_mask] = 0.0
+    return twi_spectrum, sci_spectrum, err_spectrum, plaw_spectrum,
+           mdark_spectrum, chi2_spectrum, msci_spectrum
 
 
 def get_continuum(spectra, nbins=25):
@@ -749,7 +756,7 @@ def get_continuum(spectra, nbins=25):
             cont[i] = 0.0
     return cont
 
-def get_fiber_to_fiber(t):
+def get_fiber_to_fiber(twispec, scispec, wave_all):
     '''
     Get Fiber to Fiber from twilight spectra
     
@@ -763,34 +770,34 @@ def get_fiber_to_fiber(t):
     ftf : 2d numpy array
         fiber to fiber normalization
     '''
-    t[t< 1e-8] = np.nan
-    nbins = 25
-    a = np.array([np.nanmedian(f, axis=1) 
-                  for f in np.array_split(t, nbins, axis=1)]).swapaxes(0, 1)
-    x = np.array([np.mean(xi) 
-                  for xi in np.array_split(np.arange(t.shape[1]), nbins)])
-    ftf_init = np.zeros(t.shape)
-    X = np.arange(t.shape[1])
-    for i, ai in enumerate(a):
-        sel = np.isfinite(ai)
-        if np.sum(sel)>1:
-            I = interp1d(x[sel], ai[sel], kind='quadratic',
-                         fill_value='extrapolate')
-            ftf_init[i] = I(X)
-        else:
-            ftf_init[i] = 0.0
-    # Normalization for each fiber of the smooth spectra
-    norm = np.nanmean(ftf_init, axis=1)
-    # One single normalization value
-    big_Norm = np.nanmedian(norm)
-    # Normalized smoothed spectra
-    smooth_avg = np.nanmedian(ftf_init / norm[:, np.newaxis], axis=0)
-    # continuum normalized spectra
-    finer_avg = np.nanmedian(safe_division(t, ftf_init), axis=0)
-    # continuum normalized spectra * average smooth spectrum * big normalization
-    avg_spec = finer_avg * smooth_avg * big_Norm
-    ftf = safe_division(t, avg_spec)
-    return ftf
+    
+    inds = np.argsort(wave_all.ravel())
+    S = scispec.ravel()
+    avgsci = [biweight(chunk) for chunk in np.array_split(S[inds], 3000)]
+    avgwav = [np.mean(w) for w in np.array_split(wave_all.ravel()[inds], 3000)]
+    S = twispec.ravel()
+    S[mask_all.ravel()>0.] = np.nan
+    avgtwi = [biweight(chunk) for chunk in np.array_split(S[inds], 3000)]
+    S = interp1d(avgwav, avgsci, bounds_error=False, fill_value=np.nan)
+    T = interp1d(avgwav, avgtwi, bounds_error=False, fill_value=np.nan)
+    ftftwi = twispec * 0.
+    ftfsci = scispec * 0.
+    ftf = ftfsci * 0.
+    sky = ftf * 0.
+    G = Gaussian1DKernel(21.)
+    for i in np.arange(scispec.shape[0]):
+        w = wave_all[i]
+        si = scispec[i]
+        ti = twispec[i]
+        ftftwi[i] = ti / T(w) 
+        ftfsci[i] = si / S(w)
+        y = ftfsci[i] / ftftwi[i]
+        z = convolve(y, G, boundary='extend')
+        ftf[i] = ftftwi[i] * z
+        sky[i] = ftf[i] * S(w)
+    skysub_frac = (scispec - sky) / sky
+    return ftf, skysub_frace
+    
 
 def get_fiber_to_fiber_adj(scispectra, ftf, nexp):
     Adj = ftf * 0.0
@@ -817,7 +824,7 @@ def get_fiber_to_fiber_adj(scispectra, ftf, nexp):
                 scispectra[sel(j)] = np.nan
     return scispectra, Adj
 
-def get_mask(scispectra, C1, ftf, Adj, nexp):
+def get_mask(scispectra, C1, ftf, res, nexp):
     mask = np.zeros(scispectra.shape, dtype=bool)
 
     # Chi2 cut (pre-error adjustment, which is usually 0.8, so may need to think more)
@@ -828,18 +835,20 @@ def get_mask(scispectra, C1, ftf, Adj, nexp):
         n = (x1 > -1) * (x1 < mask.shape[1])
         mask[y[n], x1[n]] = True
     
-    # Fiber to fiber < 0.5 (dead fiber) and Adj <0.9 or >1.1 should be considered questionable
-    badftf = (ftf < 0.5) + (np.abs(Adj-1.) > 0.3)
+    # Fiber to fiber < 0.5 (dead fiber) and |res| > 0.25, meaning mastersky residuals > 25%
+    badftf = (ftf < 0.5) + (np.abs(res) > 0.25)
     mask[badftf] = True
     
     # Error spectra with 0.0 are either outside the wavelength range or pixels masked by bad pixel mask
-    badpixmask = errspectra == 0.
+    badpixmask = np.isnan(errspectra)
     mask[badpixmask] = True
     
     # Flag a fiber as bad if more than 200 columns are already flagged bad
     badfiberflag = mask.sum(axis=1) > 200
     badfibers = np.where(badfiberflag)[0]
     mask[badfibers] = True
+    
+    inds = np.arange(scispectra.shape[0])
     # Flag an amp as bad if more than 20% of their fibers are marked as bad
     for k in np.arange(0, int(len(inds)/112./nexp), dtype=int):
         ll = int(k*112*nexp)
@@ -900,81 +909,6 @@ def get_powerlaw_ydir(trace, spec, amp, col):
                               power_law(d, 1.4e-5, c3=2., c4=1.0,  sig=1.5)))
     return yz, np.array(plaw)   
 
-def get_powerlaw(image, trace, spec, amp):
-    '''
-    Solve for scatter light from powerlaw
-    
-    Parameters
-    ----------
-    image : 2d numpy array
-        fits image
-    trace : 2d numpy array
-        y position as function of x for each fiber
-    spec : 2d numpy array
-        fiber spectra
-    amp : str
-        amplifier
-
-    Returns
-    -------
-    plaw : 2d numpy array
-        scatter light image from powerlaw
-    '''
-    fibgap = np.where(np.diff(trace[:, 400]) > 10.)[0]
-    X = np.arange(image.shape[1])
-    yind, xind = np.indices(image.shape)
-    XV = np.array_split(X, 25)
-    T = np.array_split(trace, 25, axis=1)
-    XM, YM, ZM = ([], [], [])
-    for xchunk, tchunk in zip(XV, T):
-        avgy, avgz = ([], [])
-        avgx = int(np.mean(xchunk))
-        x, y = ([], [])
-        dy = np.array(np.ceil(trace[0, xchunk])-7, dtype=int)
-        for j, xc in enumerate(xchunk):
-            d = np.arange(0, dy[j])
-            if len(d):
-                y.append(d)
-                x.append([xc] * len(d))
-        if len(y):
-            y, x = [np.array(np.hstack(i), dtype=int) for i in [y, x]]
-            avgy.append(np.mean(y))
-            avgz.append(np.median(image[y, x]))
-        for fib in fibgap:
-            x, y = ([], [])
-            dy = np.array(np.ceil(trace[fib, xchunk])+7, dtype=int)
-            dy2 = np.array(np.ceil(trace[fib+1, xchunk])-7, dtype=int)
-            for j, xc in enumerate(xchunk):
-                d = np.arange(dy[j], dy2[j])
-                if len(d):
-                    y.append(d)
-                    x.append([xc] * len(d))
-            if len(y):
-                y, x = [np.array(np.hstack(i), dtype=int) for i in [y, x]]
-                avgy.append(np.mean(y))
-                avgz.append(np.median(image[y, x]))
-        x, y = ([], [])
-        dy = np.array(np.ceil(trace[-1, xchunk])+7, dtype=int)
-        for j, xc in enumerate(xchunk):
-            d = np.arange(dy[j], image.shape[1])
-            if len(d):
-                y.append(d)
-                x.append([xc] * len(d))
-        if len(y):
-            y, x = [np.array(np.hstack(i), dtype=int) for i in [y, x]]
-            avgy.append(np.mean(y))
-            avgz.append(np.median(image[y, x]))
-        yz, plaw_col = get_powerlaw_ydir(trace, spec, amp, avgx)
-        norm = np.nanmedian(np.array(avgz) / np.interp(avgy, yz, plaw_col))
-        XM.append([avgx] * len(yz))
-        YM.append(yz)
-        ZM.append(plaw_col * norm)
-    XM, YM = (np.hstack(XM), np.hstack(YM))
-    xi, yi = (np.unique(XM), np.unique(YM))
-    I = interp2d(xi, yi, np.hstack(ZM).reshape(len(yi), len(xi)), kind='cubic',
-                 bounds_error=False)
-    plaw = I(xind[0, :], yind[:, 0]).swapaxes(0, 1)
-    return plaw
 
 def get_sci_twi_files(kind='twi'):
     '''
@@ -1049,9 +983,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
     '''
     _i, intm = ([], [])
     
-    # Calibration factors to convert electrons to uJy
-    mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.92
-    mult_fac *= 1e29 * def_wave**2 / 3e18
+    
     # Check if tarred
 
     scinames, twinames, scitarfile, twitarfile = get_sci_twi_files()
@@ -1064,10 +996,12 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
     N = len(ifuloop) * nexposures * 112
     ExP = np.zeros((N,))
     p = np.zeros((N, 2))
-    t = np.zeros((N, len(def_wave)))
-    s = np.zeros((N, len(def_wave)))
-    e = np.zeros((N, len(def_wave)))
-    c1 = np.zeros((N, len(def_wave)))
+    t = np.zeros((N, 1032))
+    s = np.zeros((N, 1032))
+    ms = np.zeros((N, 1032))
+    e = np.zeros((N, 1032))
+    c1 = np.zeros((N, 1032))
+    wa = np.zeros((N, 1032))
     cnt = 0
     for ind in ifuloop:
         ifuslot = '%03d' % h5table[ind]['ifuslot']
@@ -1076,26 +1010,30 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         amp = h5table[ind]['amp'].decode("utf-8")
         amppos = h5table[ind]['ifupos']
         wave = h5table[ind]['wavelength']
+        dw = np.diff(wave, axis=1)
+        dw = np.hstack([dw[:, 0:1], dw])
         trace = h5table[ind]['trace']
         readnoise = h5table[ind]['readnoise']
         masterflt = h5table[ind]['mastertwi']
+        mastersci = h5table[ind]['mastersci']
         try:
             masterdark = h5table[ind]['masterdark']
             pixelmask = h5table[ind]['pixelmask']
         except:
             log.warning("Can't open masterdark, pixelmask")
-            masterdark = 0.0
+            masterdark = np.zeros((1032, 1032))
             pixelmask = np.zeros((1032, 1032), dtype=int)
         
-        T = Table.read(op.join(DIRNAME, 'CALS/throughput.txt'),
-                       format='ascii.fixed_width_two_line')
-        throughput = np.array([T['throughput']]*112)
-        
-        twi = get_twi_spectra(masterflt, trace, wave, def_wave)
         log.info('Getting powerlaw for mastertwi for %s%s' % (ifuslot, amp))
-        plaw = get_powerlaw(masterflt, trace, twi, amp)
         
+        masterflt[:] = masterflt - masterdark
+        plaw = get_powerlaw(masterflt, trace)
         masterflt[:] = masterflt - plaw
+        
+        mastersci[:] = mastersci - masterdark
+        plaw2 = get_powerlaw(mastersci, trace)
+        mastersci[:] = mastersci - plaw2
+        
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
         fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
         filenames = fnmatch.filter(scinames, fnames_glob)
@@ -1109,20 +1047,19 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
                 mult_fac2 = mult_fac * 1.
                 fac = 1.
             sciimage[:] = sciimage - masterdark
-            div = safe_division(sciimage, masterflt)
-            ratio = savgol_filter(np.median(div, axis=0), 351, 3)
-            sci_plaw = plaw * ratio[np.newaxis, :]
-            #sciS = get_twi_spectra(sciimage, trace, wave, def_wave)
-            #plawS = get_powerlaw(sciimage, trace, sciS, amp)
-
+            sci_plaw = get_powerlaw(sciimage, trace)
             sciimage[:] = sciimage - sci_plaw
-            twi, spec1, espec1, plaw1, mdark1, chi21 = get_spectra_quick(sciimage, 
-                                        scierror, masterflt, sci_plaw, masterdark,
-                                        trace, wave, def_wave, pixelmask)
+            twi = get_spectra(masterflt, trace)
+            spec = get_spectra(sciimage, trace)
+            espec = get_spectra_error(scierror, trace)
+            chi21 = get_spectra_chi2(masterflt, sciimage, scierror, trace)
+            mask1 = get_spectra(pixelmask, trace)
+            mspec = get_spectra(mastersci, trace)
+            for arr in [spec, espec, twi, mspec]:
+                arr[mask1] = np.nan
             if j==0:
                 try:
                     intpm, shifts = measure_fiber_profile(masterflt, twi, trace, wave, def_wave)
-                    trace += biweight(shifts)
                 except:
                     intpm = None
                     log.warning('modeling images failed')
@@ -1149,8 +1086,10 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             p[cnt:cnt+112, :] = pos
             t[cnt:cnt+112, :] = twi
             s[cnt:cnt+112, :] = spec
+            ms[cnt:cnt+112, :] = mspec
             e[cnt:cnt+112, :] = espec
             c1[cnt:cnt+112, :] = chi21
+            wa[cnt:cnt+112, :] = wave
             cnt += 112
             for x, i in zip([_i, intm], [_I, [intpm, 0.0, _V]]):
                 x.append(i * 1) 
@@ -1160,7 +1099,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
     _i = np.vstack(_i)
     tableh5.flush()
     tableh5 = None
-    return p, t, s, e, filenames, scitarfile, _i, c1, intm, ExP
+    return p, t, s, e, wa, filenames, scitarfile, _i, c1, intm, ExP, ms
 
 
 def make_cube(xloc, yloc, data, Dx, Dy, ftf, scale, ran,
@@ -2126,8 +2065,6 @@ DIRNAME = get_script_path()
 # =============================================================================
 instrument = 'virus'
 
-
-
 # =============================================================================
 # Open HDF5 file
 # =============================================================================
@@ -2146,7 +2083,20 @@ u_ifuslots = np.unique(ifuslots)
 T = Table.read(op.join(DIRNAME, 'filters/ps1g.dat'), format='ascii')
 filtg = np.interp(def_wave, T['col1'], T['col2'], left=0.0, right=0.0)
 filtg /= filtg.sum()
- 
+
+# =============================================================================
+# Calibration factors to convert electrons to uJy
+# =============================================================================
+mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.92
+mult_fac *= 1e29 * def_wave**2 / 3e18
+
+# =============================================================================
+# Read standard throughput
+# =============================================================================
+T = Table.read(op.join(DIRNAME, 'CALS/throughput.txt'),
+                       format='ascii.fixed_width_two_line')
+throughput = np.array(T['throughput'])
+        
 # =============================================================================
 # Collect indices for ifuslots (target and neighbors)
 # =============================================================================
@@ -2175,8 +2125,9 @@ allifus = np.hstack(allifus)
 tableh5 = h5spec.create_table(h5spec.root, 'Cals', Cals, 
                             "Cal Information")
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
-pos, twispectra, scispectra, errspectra, fns, tfile, _I, C1, intm, ExP = reduce_ifuslot(ifuloop,
-                                                                        h5table, tableh5)
+(pos, twispectra, scispectra, errspectra, wave_all, 
+ fns, tfile, _I, C1, intm, ExP, mscispectra) = reduce_ifuslot(ifuloop, h5table,
+                                                              tableh5)
 
 fn = fns[0]
 _I = np.hstack(_I)
@@ -2196,15 +2147,28 @@ log.info('Number of exposures: %i' % nexp)
 # Get fiber to fiber from twilight spectra
 # =============================================================================
 log.info('Getting Fiber to Fiber')
-ftf = get_fiber_to_fiber(twispectra)
+ftf, res = get_fiber_to_fiber(twispectra, mscispectra, wave_all)
+
+# =============================================================================
+# Masking
+# =============================================================================
+log.info('Masking bad pixels/fibers/amps')
 inds = np.arange(scispectra.shape[0])
+mask = get_mask(scispectra, C1, ftf, res, nexp)
+if not args.no_masking:
+    scispectra[mask] = np.nan
+    errspectra[mask] = np.nan
+fits.Primary(HDU(safe_division(scispectra, ftf))).writeto('test.fits', overwrite=True)
+log.info('Exiting Early')
+sys.exit(1)
+
 scispectra[errspectra == 0.] = np.nan
 log.info('Getting Fiber to Fiber Correction')
 Adj = get_amp_norm_ftf(scispectra, ftf, nexp, nchunks=9)
 if args.limit_adj:
     sel = np.abs(np.median(Adj, axis=1) - 1.) > 0.2
     Adj[sel] = 1.
-del twispectra
+del twispectra, mscispectra
 gc.collect()
 process = psutil.Process(os.getpid())
 log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
@@ -2218,15 +2182,7 @@ log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
 scispectra = safe_division(scispectra, ftf * Adj)
 errspectra = safe_division(errspectra, ftf * Adj)
 
-# =============================================================================
-# Masking
-# =============================================================================
-log.info('Masking bad pixels/fibers/amps')
 
-mask = get_mask(scispectra, C1, ftf, Adj, nexp)
-if not args.no_masking:
-    scispectra[mask] = np.nan
-    errspectra[mask] = np.nan
 
 # =============================================================================
 # Sky Subtraction
