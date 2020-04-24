@@ -839,7 +839,7 @@ def get_mask(scispectra, C1, ftf, res, nexp):
     mask[badftf] = True
     
     # Error spectra with 0.0 are either outside the wavelength range or pixels masked by bad pixel mask
-    badpixmask = np.isnan(scispectra)
+    badpixmask = np.isnan(scispectra) + (scispectra == 0.)
     mask[badpixmask] = True
     
     # Flag a fiber as bad if more than 200 columns are already flagged bad
@@ -856,6 +856,10 @@ def get_mask(scispectra, C1, ftf, res, nexp):
         nfibers = hl - ll
         idx = int(k / 4)
         ampid = amps[k % 4]
+        bad_columns = np.sum(mask[ll:hl], axis=1) > (0.2 * nexp * 112)
+        log.info('%03d%s number of columns marked bad: %i' %
+                 (allifus[idx], ampid, bad_columns.sum()))
+        mask[ll:hl, bad_columns] = True
         if (nbadfibers*1./nfibers) > 0.2:
             log.info('%03d%s Amplifier marked bad.' % (allifus[idx], ampid))
             mask[ll:hl, :] = True
@@ -1048,12 +1052,12 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             sciimage[:] = sciimage - masterdark
             sci_plaw = get_powerlaw(sciimage, trace)
             sciimage[:] = sciimage - sci_plaw
-            twi = get_spectra(masterflt, trace)
-            spec = get_spectra(sciimage, trace)
-            espec = get_spectra_error(scierror, trace)
+            twi = get_spectra(masterflt, trace) / dw
+            spec = get_spectra(sciimage, trace) / dw
+            espec = get_spectra_error(scierror, trace) / dw
             chi21 = get_spectra_chi2(masterflt, sciimage, scierror, trace)
             mask1 = get_spectra(pixelmask, trace)
-            mspec = get_spectra(mastersci, trace)
+            mspec = get_spectra(mastersci, trace) / dw
             for arr in [spec, espec, twi, mspec]:
                 arr[mask1>0.] = np.nan
             if j==0:
@@ -2150,6 +2154,11 @@ log.info('Number of exposures: %i' % nexp)
 log.info('Getting Fiber to Fiber')
 ftf, res = get_fiber_to_fiber(twispectra, mscispectra, wave_all)
 
+del twispectra, mscispectra
+gc.collect()
+process = psutil.Process(os.getpid())
+log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
+
 # =============================================================================
 # Masking
 # =============================================================================
@@ -2159,44 +2168,48 @@ mask = get_mask(scispectra, C1, ftf, res, nexp)
 if not args.no_masking:
     scispectra[mask] = np.nan
     errspectra[mask] = np.nan
-fits.PrimaryHDU(safe_division(scispectra, ftf)).writeto('test.fits', overwrite=True)
+scispectra = safe_division(scispectra, ftf)
+errspectra = safe_division(errspectra, ftf)
+scirect = np.zeros((scispectra.shape[0], len(def_wave)))
+for i in np.arange(scispectra.shape[0]):
+    scirect = np.interp(def_wave, wave_all[i], scispectra, left=np.nan,
+                        right=np.nan)
+fits.PrimaryHDU(scirect).writeto('test.fits', overwrite=True)
 log.info('Exiting Early')
-sys.exit(1)
-
-scispectra[errspectra == 0.] = np.nan
-log.info('Getting Fiber to Fiber Correction')
-Adj = get_amp_norm_ftf(scispectra, ftf, nexp, nchunks=9)
-if args.limit_adj:
-    sel = np.abs(np.median(Adj, axis=1) - 1.) > 0.2
-    Adj[sel] = 1.
-del twispectra, mscispectra
-gc.collect()
-process = psutil.Process(os.getpid())
-log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
-
-
-# =============================================================================
-# Fiber to Fiber Adjustment correction
-# =============================================================================
-process = psutil.Process(os.getpid())
-log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))    
-scispectra = safe_division(scispectra, ftf * Adj)
-errspectra = safe_division(errspectra, ftf * Adj)
-
-
-
 # =============================================================================
 # Sky Subtraction
 # =============================================================================
 log.info('Subtracting sky for all ifuslots')
 skies = []
+skysubrect = scirect * 0.
+errorrect = scirect * 0.
 for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
-    skyfibers = get_sky_fibers(biweight(scispectra[sel, 800:900], axis=1))
-    log.info('Number of fibers with sky: %i / %i' % (skyfibers.sum(), len(sel)))
-    sky = biweight(scispectra[sel][skyfibers], axis=0)
+    skyfibers = get_sky_fibers(biweight(scirect[sel, 800:900], axis=1))
+    log.info('Number of fibers with sky: %i / %i' %
+             (skyfibers.sum(), len(sel)))
+    W = wave_all[sel][skyfibers].ravel()
+    sinds = np.argsort(W)
+    S = scispectra[sel][skyfibers].ravel()
+    W = np.array([np.mean(chunk) 
+                    for chunk in np.array_split(W[sinds], 3000)])
+    sky = np.array([biweight(chunk) 
+                    for chunk in np.array_split(S[sinds], 3000)])
     skies.append(sky)
-    scispectra[sel] = scispectra[sel] - sky
+    S = interp1d(W, sky, bounds_error=False, fill_value=np.nan)
+    for j in sel:
+        skysub = scispectra[j] - S(wave_all[j])
+        skysubrect[j] = np.interp(def_wave, wave_all[j], skysub,
+                                  left=np.nan, right=np.nan)
+        errorrect[j] = np.sqrt(np.interp(def_wave, wave_all[j],
+                               errspectra[j]**2, left=np.nan, right=np.nan))
+scispectra = skysubrect * 1.
+errspectra = errorrect * 1.
+del errorrect, skysubrect
+gc.collect()
+process = psutil.Process(os.getpid())
+log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))    
+
 
 # =============================================================================
 # Make 2d sky-sub image 
