@@ -16,7 +16,7 @@ from math_utils import biweight
 from datetime import datetime
 from scipy.interpolate import interp2d, interp1d, LinearNDInterpolator
 
-from astropy.modeling.models import Gaussian1D
+from astropy.modeling.models import Gaussian1D, Polynomial2D
 from astropy.modeling.fitting import LevMarLSQFitter
 from astropy.stats import sigma_clip, mad_std, sigma_clipped_stats
 from astropy.convolution import Gaussian1DKernel, convolve
@@ -172,7 +172,7 @@ def get_powerlaw_ydir(trace, spec, amp, col):
     return yz, np.array(plaw)   
 
 
-def get_powerlaw(image, trace, spec, amp):
+def get_powerlaw(image, trace):
     '''
     Solve for scatter light from powerlaw
     
@@ -236,16 +236,13 @@ def get_powerlaw(image, trace, spec, amp):
             y, x = [np.array(np.hstack(i), dtype=int) for i in [y, x]]
             avgy.append(np.mean(y))
             avgz.append(np.median(image[y, x]))
-        yz, plaw_col = get_powerlaw_ydir(trace, spec, amp, avgx)
-        norm = np.nanmedian(np.array(avgz) / np.interp(avgy, yz, plaw_col))
-        XM.append([avgx] * len(yz))
-        YM.append(yz)
-        ZM.append(plaw_col * norm)
-    XM, YM = (np.hstack(XM), np.hstack(YM))
-    xi, yi = (np.unique(XM), np.unique(YM))
-    I = interp2d(xi, yi, np.hstack(ZM).reshape(len(yi), len(xi)), kind='cubic',
-                 bounds_error=False)
-    plaw = I(xind[0, :], yind[:, 0]).swapaxes(0, 1)[:, ::-1]
+        XM.append([avgx] * len(avgy))
+        YM.append(avgy)
+        ZM.append(avgz)
+    XM, YM, ZM = (np.hstack(XM), np.hstack(YM), np.hstack(ZM))
+    P = Polynomial2D(2)
+    fit = LevMarLSQFitter()(P, XM, YM, ZM)
+    plaw = fit(xind, yind)
     return plaw
 
 
@@ -357,6 +354,99 @@ def get_spectra(array_flt, array_trace, npix=5):
                 w = 1.
             spec[fiber] += array_flt[indv+j, x] * w
     return spec / npix
+
+def get_spectra_error(array_flt, array_trace, npix=5):
+    '''
+    Extract spectra by dividing the flat field and averaging the central
+    two pixels
+    
+    Parameters
+    ----------
+    array_flt : 2d numpy array
+        twilight image
+    array_trace : 2d numpy array
+        trace for each fiber
+    wave : 2d numpy array
+        wavelength for each fiber
+    def_wave : 1d numpy array [GLOBAL]
+        rectified wavelength
+    
+    Returns
+    -------
+    twi_spectrum : 2d numpy array
+        rectified twilight spectrum for each fiber  
+    '''
+    spec = np.zeros((array_trace.shape[0], array_trace.shape[1]))
+    N = array_flt.shape[0]
+    x = np.arange(array_flt.shape[1])
+    LB = int((npix+1)/2)
+    HB = -LB + npix + 1
+    for fiber in np.arange(array_trace.shape[0]):
+        if np.round(array_trace[fiber]).min() < LB:
+            continue
+        if np.round(array_trace[fiber]).max() >= (N-LB):
+            continue
+        indv = np.round(array_trace[fiber]).astype(int)
+        for j in np.arange(-LB, HB):
+            if j == -LB:
+                w = indv + j + 1 - (array_trace[fiber] - npix/2.)
+            elif j == HB-1:
+                w = (npix/2. + array_trace[fiber]) - (indv + j) 
+            else:
+                w = 1.
+            spec[fiber] += array_flt[indv+j, x]**2 * w
+    return np.sqrt(spec) / npix
+
+
+def get_spectra_chi2(array_flt, array_sci, array_err,
+                     array_trace, npix=5):
+    '''
+    Extract spectra by dividing the flat field and averaging the central
+    two pixels
+    
+    Parameters
+    ----------
+    array_flt : 2d numpy array
+        twilight image
+    array_trace : 2d numpy array
+        trace for each fiber
+    wave : 2d numpy array
+        wavelength for each fiber
+    def_wave : 1d numpy array [GLOBAL]
+        rectified wavelength
+    
+    Returns
+    -------
+    twi_spectrum : 2d numpy array
+        rectified twilight spectrum for each fiber  
+    '''
+    spec = np.zeros((array_trace.shape[0], array_trace.shape[1]))
+    N = array_flt.shape[0]
+    x = np.arange(array_flt.shape[1])
+    LB = int((npix+1)/2)
+    HB = -LB + npix + 1
+    for fiber in np.arange(array_trace.shape[0]):
+        chi2 = np.zeros((npix+1, 2, len(x)))
+        if np.round(array_trace[fiber]).min() < LB:
+            continue
+        if np.round(array_trace[fiber]).max() >= (N-LB):
+            continue
+        indv = np.round(array_trace[fiber]).astype(int)
+        for j in np.arange(-LB, HB):
+            if j == -LB:
+                w = indv + j + 1 - (array_trace[fiber] - npix/2.)
+            elif j == HB-1:
+                w = (npix/2. + array_trace[fiber]) - (indv + j) 
+            else:
+                w = 1.
+            chi2[j+LB, 0] = array_sci[indv+j, x] * w
+            chi2[j+LB, 1] = array_flt[indv+j, x] * w
+            chi2[j+LB, 2] = array_err[indv+j, x] * w
+        norm = chi2[:, 0].sum(axis=1) / chi2[:, 1].sum(axis=1)
+        num = (chi2[:, 0] - chi2[:, 1] * norm[:, np.newaxis])**2
+        denom = (chi2[:, 2] + 0.01*chi2[:, 0].sum(axis=1)[:, np.newaxis])**2
+        spec[fiber] = 1. / (1. + npix) * np.sum(num / denom, axis=1)
+    return spec
 
 
 def get_ifucenfile(folder, ifuid, amp):
