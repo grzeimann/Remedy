@@ -776,7 +776,6 @@ def get_fiber_to_fiber(twispec, scispec, wave_all):
     avgsci = [biweight(chunk) for chunk in np.array_split(S[inds], 3000)]
     avgwav = [np.mean(w) for w in np.array_split(wave_all.ravel()[inds], 3000)]
     S = twispec.ravel()
-    S[mask_all.ravel()>0.] = np.nan
     avgtwi = [biweight(chunk) for chunk in np.array_split(S[inds], 3000)]
     S = interp1d(avgwav, avgsci, bounds_error=False, fill_value=np.nan)
     T = interp1d(avgwav, avgtwi, bounds_error=False, fill_value=np.nan)
@@ -1059,7 +1058,9 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
                 arr[mask1>0.] = np.nan
             if j==0:
                 try:
-                    intpm, shifts = measure_fiber_profile(masterflt, twi, trace, wave, def_wave)
+                    intpm, shifts = measure_fiber_profile(masterflt, twi, 
+                                                          trace, wave,
+                                                          def_wave)
                 except:
                     intpm = None
                     log.warning('modeling images failed')
