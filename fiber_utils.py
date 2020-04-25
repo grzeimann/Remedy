@@ -684,11 +684,11 @@ def measure_fiber_profile(image, spec, trace, wave, def_wave, xmin=400,
     return init, smodel
 
 
-def build_model_image(init, image, trace, wave, spec, def_wave):
+def build_model_image(init, image, trace, wave, spec):
     yind, xind = np.indices(image.shape)
     model_image = image * 0.
     for fibert, fiberw, fibers in zip(trace, wave, spec):
-        ospec = np.interp(fiberw, def_wave, fibers, left=0.0, right=0.0)
+        ospec = fibers
         indl = int(np.max([0, np.min(fibert)-10.]))
         indh = int(np.min([image.shape[0], np.max(fibert)+10.]))
         foff = yind[indl:indh, :] - fibert[np.newaxis, :]
