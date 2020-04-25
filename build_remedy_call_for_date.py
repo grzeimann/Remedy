@@ -25,10 +25,9 @@ ncalls = int(sys.argv[2])
 tarfolders = sorted(glob.glob(op.join(rootdir, date, inst,
                                       '%s0000*.tar' % inst)))
 
-call = ('python /work/03730/gregz/maverick/Remedy/quick_reduction.py %s %i '
-        '47 /work/03730/gregz/maverick/output/latest_cal.h5 -nd 8 -fp '
+call = ('python3 /work/03730/gregz/maverick/Remedy/quick_reduction.py %s %i '
+        '47 /work/03730/gregz/maverick/output/new_cal.h5 -nd 8 -fp '
         '/work/03730/gregz/maverick/fplaneall.txt')
-print(call)
 tarlist = []
 for tarfolder in tarfolders:
     T = tarfile.open(tarfolder, 'r')
