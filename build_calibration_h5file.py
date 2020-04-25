@@ -51,11 +51,12 @@ class VIRUSImage(tb.IsDescription):
     mastertwi = tb.Float32Col((1032, 1032))
     mastercmp = tb.Float32Col((1032, 1032))
     mastersci = tb.Float32Col((1032, 1032))
+    masterbias = tb.Float32Col((1032, 1032))
 
 
 def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
                            amp, readnoise, pixelmask, masterdark, mastertwi,
-                           mastercmp, mastersci, lampspec, contid):
+                           mastercmp, mastersci, masterbias, lampspec, contid):
     row['wavelength'] = wave * 1.
     row['trace'] = trace * 1.
     row['ifupos'] = ifupos * 1.
@@ -68,6 +69,7 @@ def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
     row['masterdark'] = masterdark
     row['mastertwi'] = mastertwi
     row['mastersci'] = mastersci
+    row['masterbias'] = masterbias
     row['mastercmp'] = mastercmp
     row['lampspec'] = lampspec
     row['amp'] = amp
@@ -134,6 +136,15 @@ def get_tarfiles(filenames):
             tarnames.append(tarbase)
     return tarnames
 
+def get_tarinfo(tarnames):
+    l = []
+    for tarname in tarnames:
+        T = tarfile.open(tarname, 'r')
+        members = T.getmembers()
+        names = [t.name for t in members]
+        l.append([T, members, names])
+    return l
+
 def get_ifuslots(tarfolder):
     T = tarfile.open(tarfolder, 'r')
     flag = True
@@ -182,15 +193,15 @@ def expand_date_range(daterange, days):
     return l1 + daterange + l2
 
 
-def build_master_frame(file_list, ifuslot, amp, kind, log, folder, specid,
-                       ifuid, contid):
+def build_master_frame(file_list, tarinfo_list, ifuslot, amp, kind, log, 
+                       folder, specid, ifuid, contid):
     # Create empty lists for the left edge jump, right edge jump, and structure
     objnames = ['hg', 'cd-a']
     bia_list = []
-    for itm in file_list:
+    for itm, tinfo in zip(file_list, tarinfo_list):
         fn = itm + '%s%s_%s.fits' % (ifuslot, amp, kind)
         try:
-            I, E, header = base_reduction(fn, get_header=True)
+            I, E, header = base_reduction(fn, tinfo, get_header=True)
             if kind == 'flt':
                 if (np.mean(I) < 50.) or (np.mean(I) > 50000):
                     continue
@@ -267,12 +278,13 @@ parser.add_argument("-i", "--ifuslot",  help='''IFUSLOT''', type=str,
 args = parser.parse_args(args=None)
 args.log = setup_logging(logname='build_master_bias')
 args = set_daterange(args)
-kinds = ['drk', 'flt', 'cmp', 'sci']
+kinds = ['zro', 'drk', 'flt', 'cmp', 'sci']
 mkpath(args.folder)
 dirname = get_script_path()
 
 filename_dict = {}
 tarname_dict = {}
+tarinfo_dict = {}
 for kind in kinds:
     args.log.info('Getting file names for %s' % kind)
     if kind == 'drk':
@@ -284,6 +296,7 @@ for kind in kinds:
     else:
         filename_dict[kind] = get_filenames(args, daterange, kind)
     tarname_dict[kind] = get_tarfiles(filename_dict[kind])
+    tarinfo_dict[kind] = get_tarinfo(tarname_dict[kind])
     if kind == 'flt':
         ifuslots = get_unique_ifuslots(tarname_dict[kind])
 
@@ -304,6 +317,7 @@ for ifuslot_key in ifuslots:
         masterdark = np.zeros((1032, 1032))
         mastertwi = np.zeros((1032, 1032))
         mastersci = np.zeros((1032, 1032))
+        masterbias = np.zeros((1032, 1032))
         wave = np.zeros((112, 1032))
         trace = np.zeros((112, 1032))
         readnoise = 3.
@@ -311,7 +325,8 @@ for ifuslot_key in ifuslots:
         for kind in kinds:
             args.log.info('Making %s master frame for %s %s' %
                           (kind, ifuslot_key, amp))
-            _info = build_master_frame(filename_dict[kind], ifuslot, amp, kind,
+            _info = build_master_frame(filename_dict[kind], tarinfo_dict[kind],
+                                       ifuslot, amp, kind,
                                        args.log, args.folder, specid, ifuid,
                                        contid)
             if _info is None:
@@ -322,6 +337,8 @@ for ifuslot_key in ifuslots:
                                       for z in [_info[3], ifuslot, _info[4]]]
             if kind == 'sci':
                 mastersci = _info[0] * 1.
+            if kind == 'zro':
+                masterbias = _info[0] * 1.
             if kind == 'drk':
                 masterdark = _info[0] * 1.
                 readnoise = biweight(_info[1])
@@ -372,6 +389,7 @@ for ifuslot_key in ifuslots:
         success = append_fibers_to_table(row, wave, trace, ifupos, ifuslot,
                                          ifuid, specid, amp, readnoise,
                                          pixelmask, masterdark, mastertwi, 
-                                         mastercmp, mastersci, cmp, contid)
+                                         mastercmp, mastersci, masterbias,
+                                         cmp, contid)
         if success:
             imagetable.flush()
