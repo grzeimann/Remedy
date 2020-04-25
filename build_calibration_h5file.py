@@ -240,15 +240,7 @@ def build_master_frame(file_list, tarinfo_list, ifuslot, amp, kind, log,
             masterst = np.std(big_array, axis=0)
             masterbias += masterim
             masterstd += masterst / len(objnames)
-    if kind == 'drk':
-        big_array = np.array([v[0] for v in bia_list])
-        masterbias = np.median(big_array, axis=0)
-        masterstd = np.std(big_array, axis=0)
-    if kind == 'flt':
-        big_array = np.array([v[0] for v in bia_list])
-        masterbias = np.median(big_array, axis=0)
-        masterstd = np.std(big_array, axis=0)
-    if kind == 'sci':
+    else:
         big_array = np.array([v[0] for v in bia_list])
         masterbias = np.median(big_array, axis=0)
         masterstd = np.std(big_array, axis=0)
