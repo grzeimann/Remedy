@@ -1058,8 +1058,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             if j==0:
                 try:
                     intpm, shifts = measure_fiber_profile(masterflt, twi, 
-                                                          trace, wave,
-                                                          def_wave)
+                                                          trace, wave)
                 except:
                     intpm = None
                     log.warning('modeling images failed')
