@@ -136,14 +136,19 @@ def get_tarfiles(filenames):
             tarnames.append(tarbase)
     return tarnames
 
-def get_tarinfo(tarnames):
+def get_tarinfo(tarnames, filenames):
     l = []
     for tarname in tarnames:
         T = tarfile.open(tarname, 'r')
         members = T.getmembers()
         names = [t.name for t in members]
         l.append([T, members, names])
-    return l
+    L = []
+    for filename in filenames:
+        tarbase = op.dirname(op.dirname(op.dirname(filename))) + '.tar'
+        ind = np.where(tarbase == np.array(tarnames))[0][0]
+        L.append(l[ind])
+    return L
 
 def get_ifuslots(tarfolder):
     T = tarfile.open(tarfolder, 'r')
@@ -288,10 +293,9 @@ for kind in kinds:
     else:
         filename_dict[kind] = get_filenames(args, daterange, kind)
     tarname_dict[kind] = get_tarfiles(filename_dict[kind])
-    tarinfo_dict[kind] = get_tarinfo(tarname_dict[kind])
+    tarinfo_dict[kind] = get_tarinfo(tarname_dict[kind], filename_dict[kind])
     args.log.info('Number of tarfiles for %s: %i' %
                   (kind, len(tarname_dict[kind])))
-
     if kind == 'flt':
         ifuslots = get_unique_ifuslots(tarname_dict[kind])
 
