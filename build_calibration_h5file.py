@@ -297,6 +297,9 @@ for kind in kinds:
         filename_dict[kind] = get_filenames(args, daterange, kind)
     tarname_dict[kind] = get_tarfiles(filename_dict[kind])
     tarinfo_dict[kind] = get_tarinfo(tarname_dict[kind])
+    args.log.info('Number of tarfiles for %s: %i' %
+                  (kind, len(tarname_dict[kind])))
+
     if kind == 'flt':
         ifuslots = get_unique_ifuslots(tarname_dict[kind])
 
