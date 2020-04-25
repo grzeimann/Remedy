@@ -605,7 +605,7 @@ def get_pixelmask(dark):
                 mask[:, xi] = True
     return np.array(mask, dtype=int)
 
-def measure_fiber_profile(image, spec, trace, wave, def_wave, xmin=400,
+def measure_fiber_profile(image, spec, trace, wave, xmin=400,
                           xmax=600):
     ''' Measure the fiber profile for an image
     
@@ -631,8 +631,7 @@ def measure_fiber_profile(image, spec, trace, wave, def_wave, xmin=400,
     
     profile = []
     for fibert, fiberw, fibers in zip(trace, wave, spec):
-        ospec = interp1d(def_wave, fibers, kind='quadratic', fill_value=0.0,
-                         bounds_error=False)(fiberw)
+        ospec = fibers
         indl = int(np.max([0, np.min(fibert)-10.]))
         indh = int(np.min([image.shape[0], np.max(fibert)+10.]))
         foff = yind[indl:indh, xmin:xmax] - fibert[np.newaxis, xmin:xmax]
