@@ -1019,6 +1019,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         readnoise = h5table[ind]['readnoise']
         masterflt = h5table[ind]['mastertwi']
         mastersci = h5table[ind]['mastersci']
+        masterbias = h5table[ind]['masterbias']
         try:
             masterdark = h5table[ind]['masterdark']
             pixelmask = h5table[ind]['pixelmask']
@@ -1028,12 +1029,12 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             pixelmask = np.zeros((1032, 1032), dtype=int)
         
         log.info('Getting powerlaw for mastertwi for %s%s' % (ifuslot, amp))
-        
-        masterflt[:] = masterflt - masterdark
+        masterdark[:] = masterdark - masterbias
+        masterflt[:] = masterflt - masterdark - masterbias
         plaw = get_powerlaw(masterflt, trace)
         masterflt[:] = masterflt - plaw
         
-        mastersci[:] = mastersci - masterdark
+        mastersci[:] = mastersci - masterdark - masterbias
         plaw2 = get_powerlaw(mastersci, trace)
         mastersci[:] = mastersci - plaw2
         
@@ -1043,8 +1044,10 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         for j, fn in enumerate(filenames):
             sciimage, scierror, header = base_reduction(fn, tfile=scitarfile,
                                                 rdnoise=readnoise, get_header=True)
-            
-            sciimage[:] = sciimage - masterdark
+            facexp = header['EXPTIME'] / 360.
+            if facexp < 0.:
+                facexp = 1.
+            sciimage[:] = sciimage - masterdark*facexp - masterbias
             sci_plaw = get_powerlaw(sciimage, trace)
             sciimage[:] = sciimage - sci_plaw
             twi = get_spectra(masterflt, trace) / dw
