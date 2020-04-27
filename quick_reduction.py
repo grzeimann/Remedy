@@ -797,6 +797,17 @@ def get_fiber_to_fiber(twispec, scispec, wave_all):
     skysub_frac = (scispec - sky) / sky
     return ftf, skysub_frac
     
+def background_pixels(trace, image):
+    back = np.ones(image.shape, dtype=bool)
+    x = np.arange(image.shape[1])
+    for fibert in trace:
+        for j in np.arange(-7, 8):
+            indv = np.round(fibert) + j
+            m = np.max([np.zeros(fibert.shape), indv], axis=0)
+            n = np.min([m, np.ones(fibert.shape)*(image.shape[0]-1)], axis=0)
+            inds = np.array(n, dtype=int)
+            back[inds, x] = False
+    return back
 
 def get_fiber_to_fiber_adj(scispectra, ftf, nexp):
     Adj = ftf * 0.0
@@ -1079,6 +1090,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             _V = '%s_%s_%s_%s_exp%02d' % (specid, ifuslot, ifuid, amp, j+1)
             specrow['image'] = sciimage
             specrow['zipcode'] = _V
+            specrow['mastersci'] = mastersci
             specrow.append()
 #            for loop in np.arange(len(spec)):
 #                specrow['observed'] = spec1[loop]
@@ -2030,7 +2042,7 @@ class Cals(IsDescription):
      
 class Images(IsDescription):
      zipcode  = StringCol(21)
-     skysub  = Float32Col((1032,1032))    # float  (single-precision)
+     mastersci  = Float32Col((1032,1032))    # float  (single-precision)
      image  = Float32Col((1032,1032))    # float  (single-precision)
 
 class Info(IsDescription):
