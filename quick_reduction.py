@@ -1077,6 +1077,9 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             N = twi.shape[0]
             _I = np.char.array(['%s_%s_%s_%s' % (specid, ifuslot, ifuid, amp)] * N)
             _V = '%s_%s_%s_%s_exp%02d' % (specid, ifuslot, ifuid, amp, j+1)
+            specrow['image'] = sciimage
+            specrow['zipcode'] = _V
+            specrow.append()
 #            for loop in np.arange(len(spec)):
 #                specrow['observed'] = spec1[loop]
 #                specrow['observed_error'] = espec1[loop]
@@ -2124,8 +2127,8 @@ allifus = np.hstack(allifus)
 # =============================================================================
 # Reducing IFUSLOT
 # =============================================================================
-tableh5 = h5spec.create_table(h5spec.root, 'Cals', Cals, 
-                            "Cal Information")
+tableh5 = h5spec.create_table(h5spec.root, 'Images', Images, 
+                            "Image Information")
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
 (pos, twispectra, scispectra, errspectra, wave_all, 
  fns, tfile, _I, C1, intm, ExP, mscispectra) = reduce_ifuslot(ifuloop, h5table,
