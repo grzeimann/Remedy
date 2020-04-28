@@ -2193,10 +2193,10 @@ def fiber_to_fiber_correction(scirect, scispectra, nexp):
     for k in np.arange(nexp):
         sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
         tsky = biweight(scirect[sel], axis=0)
-        nifus = int(len(sel) / 448.)
+        nifus = int(len(sel) / 112.)
         for j in np.arange(nifus):
-            ll = int(j * 448)
-            hl = int((j+1) * 448)
+            ll = int(j * 112)
+            hl = int((j+1) * 112)
             norm[sel[ll:hl]] = biweight(scirect[sel][ll:hl, 700:800] / tsky[700:800][np.newaxis, :])
     return norm
 
