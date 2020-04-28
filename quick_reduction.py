@@ -2187,8 +2187,9 @@ for i in np.arange(scispectra.shape[0]):
     scirect[i] = np.interp(def_wave, wave_all[i], scispectra[i], left=np.nan,
                         right=np.nan)
 
-def fiber_to_fiber_correction(scirect, scispectra):
+def fiber_to_fiber_correction(scirect, scispectra, nexp):
     norm = scispectra * 0.
+    inds = np.arange(scispectra.shape[0])
     for k in np.arange(nexp):
         sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
         tsky = biweight(scirect[sel], axis=0)
@@ -2196,10 +2197,10 @@ def fiber_to_fiber_correction(scirect, scispectra):
         for j in np.arange(nifus):
             ll = int(j * 448)
             hl = int((j+1) * 448)
-            norm[sel][ll:hl] = biweight(scirect[sel][ll:hl, 700:800] / tsky[700:800])
+            norm[sel[ll:hl]] = biweight(scirect[sel][ll:hl, 700:800] / tsky[700:800][np.newaxis, :])
     return norm
 
-ftf_cor = fiber_to_fiber_correction(scirect, scispectra)
+ftf_cor = fiber_to_fiber_correction(scirect, scispectra, nexp)
 scispectra = safe_division(scispectra, ftf_cor)
 errspectra = safe_division(errspectra, ftf_cor)
 
