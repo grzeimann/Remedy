@@ -2199,7 +2199,7 @@ def fiber_to_fiber_correction(scirect, scispectra):
             norm[sel][ll:hl] = biweight(scirect[sel][ll:hl, 700:800] / tsky[700:800])
     return norm
 
-ftf_cor = fiber_to_fiber_correction(scirect, pos)
+ftf_cor = fiber_to_fiber_correction(scirect, scispectra)
 scispectra = safe_division(scispectra, ftf_cor)
 errspectra = safe_division(errspectra, ftf_cor)
 
