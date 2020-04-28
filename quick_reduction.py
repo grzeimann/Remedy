@@ -2186,13 +2186,29 @@ scirect = np.zeros((scispectra.shape[0], len(def_wave)))
 for i in np.arange(scispectra.shape[0]):
     scirect[i] = np.interp(def_wave, wave_all[i], scispectra[i], left=np.nan,
                         right=np.nan)
-fits.PrimaryHDU(scirect).writeto('test.fits', overwrite=True)
+
+def fiber_to_fiber_correction(scirect, scispectra):
+    norm = scispectra * 0.
+    for k in np.arange(nexp):
+        sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
+        tsky = biweight(scirect[sel], axis=0)
+        nifus = int(len(sel) / 448.)
+        for j in np.arange(nifus):
+            ll = int(j * 448)
+            hl = int((j+1) * 448)
+            norm[sel][ll:hl] = biweight(scirect[sel][ll:hl, 700:800] / tsky[700:800])
+    return norm
+
+ftf_cor = fiber_to_fiber_correction(scirect, pos)
+scispectra = safe_division(scispectra, ftf_cor)
+errspectra = safe_division(errspectra, ftf_cor)
 
 # =============================================================================
 # Sky Subtraction
 # =============================================================================
 log.info('Subtracting sky for all ifuslots')
 skies = []
+
 skysubrect = scirect * 0.
 errorrect = scirect * 0.
 for k in np.arange(nexp):
@@ -2215,6 +2231,7 @@ for k in np.arange(nexp):
                                   left=np.nan, right=np.nan)
         errorrect[j] = np.sqrt(np.interp(def_wave, wave_all[j],
                                errspectra[j]**2, left=np.nan, right=np.nan))
+
 scispectra = skysubrect * 1.
 errspectra = errorrect * 1.
 del errorrect, skysubrect
