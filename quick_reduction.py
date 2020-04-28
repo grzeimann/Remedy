@@ -1824,7 +1824,9 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
             Total_sources.append(Sources) 
     
     # Write temporary info out
-    Total_sources = np.vstack(Total_sources)
+    if len(Total_sources) > 0:
+        Total_sources = np.vstack(Total_sources)
+        
     f = Table(Total_sources, names = ['imagex', 'imagey', 'gmag', 'dist',
                                       'Cgmag', 'RA', 'Dec', 'fx', 'fy', 'dra',
                                       'ddec', 'ifuslot'])
