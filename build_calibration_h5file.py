@@ -39,6 +39,7 @@ class VIRUSImage(tb.IsDescription):
     wavelength = tb.Float32Col((112, 1032))
     trace = tb.Float32Col((112, 1032))
     lampspec = tb.Float32Col((112, 1032))
+    scispec = tb.Float32Col((112, 1032))
     masterdark = tb.Float32Col((1032, 1032))
     ifupos = tb.Float32Col((112, 2))
     ifuslot = tb.Int32Col()
@@ -56,7 +57,8 @@ class VIRUSImage(tb.IsDescription):
 
 def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
                            amp, readnoise, pixelmask, masterdark, mastertwi,
-                           mastercmp, mastersci, masterbias, lampspec, contid):
+                           mastercmp, mastersci, masterbias, spec,
+                           lampspec, contid):
     row['wavelength'] = wave * 1.
     row['trace'] = trace * 1.
     row['ifupos'] = ifupos * 1.
@@ -70,6 +72,7 @@ def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
     row['mastertwi'] = mastertwi
     row['mastersci'] = mastersci
     row['masterbias'] = masterbias
+    row['scispec'] = spec
     row['mastercmp'] = mastercmp
     row['lampspec'] = lampspec
     row['amp'] = amp
@@ -319,6 +322,7 @@ for ifuslot_key in ifuslots:
         masterbias = np.zeros((1032, 1032))
         wave = np.zeros((112, 1032))
         trace = np.zeros((112, 1032))
+        spec = np.zeros((112, 1032))
         readnoise = 3.
         pixelmask = np.zeros((1032, 1032))
         for kind in kinds:
@@ -336,6 +340,8 @@ for ifuslot_key in ifuslots:
                                       for z in [_info[3], ifuslot, _info[4]]]
             if kind == 'sci':
                 mastersci = _info[0] * 1.
+                plaw = get_powerlaw(mastersci - masterdark)
+                spec = get_spectra(mastersci - masterdark - plaw, trace)
             if kind == 'zro':
                 masterbias = _info[0] * 1.
             if kind == 'drk':
@@ -389,6 +395,6 @@ for ifuslot_key in ifuslots:
                                          ifuid, specid, amp, readnoise,
                                          pixelmask, masterdark, mastertwi, 
                                          mastercmp, mastersci, masterbias,
-                                         cmp, contid)
+                                         spec, cmp, contid)
         if success:
             imagetable.flush()
