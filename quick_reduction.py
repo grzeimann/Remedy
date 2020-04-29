@@ -2244,7 +2244,7 @@ for k in np.arange(nexp):
              (k+1, outliers.sum(), len(outliers)))
     y = coeffs[:, 0] * 1.
     y[outliers] = np.nan
-    cont = identify_sky_pixels(y, kernel=2.5)
+    kmask, cont = identify_sky_pixels(y, kernel=2.5)
     ftf_adj[sel] = cont
     scirect[sel] = (scirect[sel]-back) / cont[:, np.newaxis]
     for i, j in enumerate(sel):
