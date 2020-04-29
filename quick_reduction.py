@@ -2246,10 +2246,10 @@ for k in np.arange(nexp):
     y[outliers] = np.nan
     cont = identify_sky_pixels(y, kernel=2.5)
     ftf_adj[sel] = cont
-    scirect[sel] = scirect[sel] / cont[:, np.newaxis]
-    for j in sel:
+    scirect[sel] = (scirect[sel]-back) / cont[:, np.newaxis]
+    for i, j in enumerate(sel):
         scispectra[j] = scispectra[j] - np.interp(wave_all[j], def_wave,
-                                                  back[j], left=np.nan,
+                                                  back[i], left=np.nan,
                                                   right=np.nan)
 scispectra = safe_division(scispectra, ftf_adj)
 errspectra = safe_division(errspectra, ftf_adj)   
