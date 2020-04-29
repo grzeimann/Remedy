@@ -2193,8 +2193,8 @@ errorrect = np.zeros((scispectra.shape[0], len(def_wave)))
 for i in np.arange(scispectra.shape[0]):
     scirect[i] = np.interp(def_wave, wave_all[i], scispectra[i], left=np.nan,
                         right=np.nan)
-    errorrect[j] = np.sqrt(np.interp(def_wave, wave_all[j],
-                            errspectra[j]**2, left=np.nan, right=np.nan))
+    errorrect[i] = np.sqrt(np.interp(def_wave, wave_all[i],
+                            errspectra[i]**2, left=np.nan, right=np.nan))
 
 def fiber_to_fiber_correction(scirect, scispectra, nexp):
     norm = scispectra * 0.
