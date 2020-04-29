@@ -508,6 +508,7 @@ def safe_sigma_clip(y):
 def identify_sky_pixels(sky, kernel=10.0):
     G = Gaussian1DKernel(kernel)
     cont = convolve(sky, G, boundary='extend')
+    
     mask = safe_sigma_clip(sky - cont)
     for i in np.arange(5):
         nsky = sky * 1.
