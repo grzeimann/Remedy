@@ -45,4 +45,4 @@ bl, bm = biweight(res_map[:, sel], axis=1, calc_std=True)
 mask = np.abs(res_map - bl[:, np.newaxis]) > 2. * bm[:, np.newaxis]
 res = res_map - bl[:, np.newaxis]
 res[mask] = np.nan
-fits.PrimaryHDU(res).writeto('test.fits', overwrite=True)
+fits.PrimaryHDU(bl).writeto('20191214_res_ftf.fits', overwrite=True)
