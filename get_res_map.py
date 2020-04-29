@@ -33,7 +33,7 @@ for j, filename in enumerate(filenames):
     nfibers = int(len(ui) * 448)
     nexp = int(len(ifuslots) / nfibers)
     sci = T.root.Fibers.cols.sci[:]
-    sky = T.root.fibers.cols.sky[:]
+    sky = T.root.Fibers.cols.sky[:]
     inds = np.arange(len(ifuslots))
     for k in np.arange(nexp):
         sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
