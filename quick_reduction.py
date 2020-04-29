@@ -1088,9 +1088,9 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             N = twi.shape[0]
             _I = np.char.array(['%s_%s_%s_%s' % (specid, ifuslot, ifuid, amp)] * N)
             _V = '%s_%s_%s_%s_exp%02d' % (specid, ifuslot, ifuid, amp, j+1)
-            specrow['image'] = sciimage
+            #specrow['image'] = sciimage
             specrow['zipcode'] = _V
-            specrow['mastersci'] = mastersci
+            #specrow['mastersci'] = mastersci
             specrow.append()
 #            for loop in np.arange(len(spec)):
 #                specrow['observed'] = spec1[loop]
@@ -2030,6 +2030,9 @@ h5spec = open_file(name, mode="w", title="%s Spectra" % name[:-3])
 class Fibers(IsDescription):
      spectrum  = Float32Col((1036,))    # float  (single-precision)
      error  = Float32Col((1036,))    # float  (single-precision)
+     sky  = Float32Col((1036,))    # float  (single-precision)
+     sci  = Float32Col((1036,))    # float  (single-precision)
+
      #chi2spec = Float32Col((1036,))
      #fiber_to_fiber  = Float32Col((1036,))    # float  (single-precision)
      #fiber_to_fiber_adj  = Float32Col((1036,))    # float  (single-precision)     
@@ -2044,8 +2047,8 @@ class Cals(IsDescription):
      
 class Images(IsDescription):
      zipcode  = StringCol(21)
-     mastersci  = Float32Col((1032,1032))    # float  (single-precision)
-     image  = Float32Col((1032,1032))    # float  (single-precision)
+     #mastersci  = Float32Col((1032,1032))    # float  (single-precision)
+     #image  = Float32Col((1032,1032))    # float  (single-precision)
 
 class Info(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
@@ -2192,17 +2195,21 @@ for i in np.arange(scispectra.shape[0]):
 def fiber_to_fiber_correction(scirect, scispectra, nexp):
     norm = scispectra * 0.
     inds = np.arange(scispectra.shape[0])
+    skyrect = scirect * 0.
     for k in np.arange(nexp):
         sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
         tsky = biweight(scirect[sel], axis=0)
+        skyrect[sel] = tsky
         nifus = int(len(sel) / 112.)
         for j in np.arange(nifus):
             ll = int(j * 112)
             hl = int((j+1) * 112)
-            norm[sel[ll:hl]] = biweight(scirect[sel][ll:hl, 700:800] / tsky[700:800][np.newaxis, :])
-    return norm
+            N = biweight(scirect[sel][ll:hl, 700:800] / tsky[700:800][np.newaxis, :])
+            norm[sel[ll:hl]] = N
+            scirect[sel[ll:hl]] /= N
+    return norm, skyrect, scirect
 
-ftf_cor = fiber_to_fiber_correction(scirect, scispectra, nexp)
+ftf_cor, skyrect, scirect = fiber_to_fiber_correction(scirect, scispectra, nexp)
 scispectra = safe_division(scispectra, ftf_cor)
 errspectra = safe_division(errspectra, ftf_cor)
 
@@ -2541,6 +2548,8 @@ specrow = table.row
 for i in np.arange(len(scispectra)):
     specrow['spectrum'] = scispectra[i] * norm
     specrow['error'] = errspectra[i] * norm
+    specrow['sky'] = skyrect[i]
+    specrow['sci'] = scirect[i]
     #specrow['chi2spec'] = C1[i]
     #specrow['fiber_to_fiber'] = ftf[i]
     #specrow['fiber_to_fiber_adj'] = Adj[i]
