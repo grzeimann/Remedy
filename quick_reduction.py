@@ -2238,7 +2238,7 @@ for k in np.arange(nexp):
     back = np.dot(coeffs[:, 1:], components[:, 1:].T)
     error = np.sqrt(errorrect[sel]**2 + (0.1*sky_map[np.newaxis, :])**2)
     chi2 = (np.nansum((model-scirect[sel])**2 / error**2, axis=1) /
-            (1 + np.isnan(scirect).sum(axis=1)))
+            (1 + np.isnan(scirect[sel]).sum(axis=1)))
     ac = biweight(chi2)
     log.info('Average chi2: %0.2f' % ac)
     chi2[:] = chi2 / ac
