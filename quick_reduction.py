@@ -2242,7 +2242,7 @@ for k in np.arange(nexp):
     ac = biweight(chi2)
     log.info('Average chi2: %0.2f' % ac)
     chi2[:] = chi2 / ac
-    outliers = (np.abs(coeffs[:, 0]- 1.) > 0.3) + (chi2 > 5.)
+    outliers = (np.abs(coeffs[:, 0]- 1.) > 0.2)
     log.info('Outliers for exposure %i: %i / %i' %
              (k+1, outliers.sum(), len(outliers)))
     y = coeffs[:, 0] * 1.
