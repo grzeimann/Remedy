@@ -2212,6 +2212,14 @@ def fiber_to_fiber_correction(scirect, scispectra, nexp):
 ftf_cor, skyrect, scirect = fiber_to_fiber_correction(scirect, scispectra, nexp)
 scispectra = safe_division(scispectra, ftf_cor)
 errspectra = safe_division(errspectra, ftf_cor)
+ftf_res = fits.open('/work/03730/gregz/maverick/20191214_res_ftf.fits')[0].data
+l = []
+for k in np.arange(nexp):
+    l.append(ftf_res)
+scirect[:] = scirect / np.hstack(l)[:, np.newaxis]
+ftf_res = np.hstack(l)[:, np.newaxis] * np.ones((1, 1032))
+scispectra = safe_division(scispectra, ftf_res)
+errspectra = safe_division(errspectra, ftf_res)
 
 # =============================================================================
 # Sky Subtraction
