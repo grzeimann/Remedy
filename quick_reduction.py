@@ -2236,7 +2236,8 @@ for k in np.arange(nexp):
         coeffs[i] = np.linalg.lstsq(comp, sci_good[i])[0]
     model = np.dot(coeffs, components.T)
     back = np.dot(coeffs[:, 1:], components[:, 1:].T)
-    chi2 = (np.nansum((model-scirect)**2 / errorrect**2, axis=1) /
+    error = np.sqrt(errorrect[sel]**2 + (0.01*sky_map[np.newaxis, :])**2)
+    chi2 = (np.nansum((model-scirect[sel])**2 / error**2, axis=1) /
             (1 + np.isnan(scirect).sum(axis=1)))
     chi2[:] = chi2 / biweight(chi2)
     outliers = (np.abs(coeffs[:, 0]- 1.) > 0.3) + (chi2 > 5.)
