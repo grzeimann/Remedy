@@ -2245,7 +2245,7 @@ for k in np.arange(nexp):
     y = coeffs[:, 0] * 1.
     y[outliers] = np.nan
     kmask, cont = identify_sky_pixels(y, kernel=2.5)
-    ftf_adj[sel] = cont
+    ftf_adj[sel] = cont[:, np.newaxis] * np.ones((1, ftf_adj.shape[1]))
     scirect[sel] = (scirect[sel]-back) / cont[:, np.newaxis]
     for i, j in enumerate(sel):
         scispectra[j] = scispectra[j] - np.interp(wave_all[j], def_wave,
