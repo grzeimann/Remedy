@@ -39,4 +39,5 @@ for j, filename in enumerate(filenames):
         sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
         res_map[:, cnt] = biweight(sci[sel, 700:800] / sky[sel, 700:800], axis=1)
         cnt += 1
+    T.close()
 fits.PrimaryHDU(res_map).writeto('test.fits', overwrite=True)
