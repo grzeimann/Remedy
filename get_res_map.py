@@ -40,7 +40,8 @@ for j, filename in enumerate(filenames):
         res_map[:, cnt] = biweight(sci[sel, 700:800] / sky[sel, 700:800], axis=1)
         cnt += 1
     T.close()
-bl, bm = biweight(res_map, axis=1, calc_std=True)
+sel = np.hstack([np.arange(2), np.arange(8, cnt)])
+bl, bm = biweight(res_map[:, sel], axis=1, calc_std=True)
 mask = np.abs(res_map - bl[:, np.newaxis]) > 2. * bm[:, np.newaxis]
 res = res_map - bl[:, np.newaxis]
 res[mask] = np.nan
