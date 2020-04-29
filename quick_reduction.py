@@ -2236,10 +2236,12 @@ for k in np.arange(nexp):
         coeffs[i] = np.linalg.lstsq(comp, sci_good[i])[0]
     model = np.dot(coeffs, components.T)
     back = np.dot(coeffs[:, 1:], components[:, 1:].T)
-    error = np.sqrt(errorrect[sel]**2 + (0.01*sky_map[np.newaxis, :])**2)
+    error = np.sqrt(errorrect[sel]**2 + (0.03*sky_map[np.newaxis, :])**2)
     chi2 = (np.nansum((model-scirect[sel])**2 / error**2, axis=1) /
             (1 + np.isnan(scirect).sum(axis=1)))
-    chi2[:] = chi2 / biweight(chi2)
+    ac = biweight(chi2)
+    log.info('Average chi2: %0.2f' % ac)
+    chi2[:] = chi2 / ac
     outliers = (np.abs(coeffs[:, 0]- 1.) > 0.3) + (chi2 > 5.)
     log.info('Outliers for exposure %i: %i / %i' %
              (k+1, outliers.sum(), len(outliers)))
