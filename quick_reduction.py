@@ -2188,9 +2188,13 @@ if not args.no_masking:
 scispectra = safe_division(scispectra, ftf)
 errspectra = safe_division(errspectra, ftf)
 scirect = np.zeros((scispectra.shape[0], len(def_wave)))
+errorrect = np.zeros((scispectra.shape[0], len(def_wave)))
+
 for i in np.arange(scispectra.shape[0]):
     scirect[i] = np.interp(def_wave, wave_all[i], scispectra[i], left=np.nan,
                         right=np.nan)
+    errorrect[j] = np.sqrt(np.interp(def_wave, wave_all[j],
+                            errspectra[j]**2, left=np.nan, right=np.nan))
 
 def fiber_to_fiber_correction(scirect, scispectra, nexp):
     norm = scispectra * 0.
@@ -2212,14 +2216,43 @@ def fiber_to_fiber_correction(scirect, scispectra, nexp):
 ftf_cor, skyrect, scirect = fiber_to_fiber_correction(scirect, scispectra, nexp)
 scispectra = safe_division(scispectra, ftf_cor)
 errspectra = safe_division(errspectra, ftf_cor)
-ftf_res = fits.open('/work/03730/gregz/maverick/20191214_res_ftf.fits')[0].data
-l = []
+ftf_adj = ftf_cor * 1.
 for k in np.arange(nexp):
-    l.append(ftf_res)
-scirect[:] = scirect / np.hstack(l)[:, np.newaxis]
-ftf_res = np.hstack(l)[:, np.newaxis] * np.ones((1, 1032))
-scispectra = safe_division(scispectra, ftf_res)
-errspectra = safe_division(errspectra, ftf_res)
+    sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
+    sky_map = biweight(scirect[sel], axis=0)
+    x = (1. * np.arange(len(sky_map))) / len(sky_map)
+    components = np.zeros((len(sky_map), 4))
+    components[:, 0] = sky_map
+    components[:, 1] = 1.
+    components[:, 2] = x
+    components[:, 3] = x**2
+    components[np.isnan(components)] = 0.0
+    sci_good = scirect * 1.
+    sci_good[np.isnan(scirect)] = 0.
+    coeffs = np.zeros((sci_good.shape[0], components.shape[1]))
+    for i in np.arange(sci_good.shape[0]):
+        comp = components * 1.
+        comp[sci_good[i] == 0., :] = 0.0
+        coeffs[i] = np.linalg.lstsq(comp, sci_good[i])[0]
+    model = np.dot(coeffs, components.T)
+    back = np.dot(coeffs[:, 1:], components[:, 1:].T)
+    chi2 = (np.nansum((model-scirect)**2 / errorrect**2, axis=1) /
+            (1 + np.isnan(scirect).sum(axis=1)))
+    chi2[:] = chi2 / biweight(chi2)
+    outliers = (np.abs(coeffs[:, 0]- 1.) > 0.1) * (chi2 > 5.)
+    log.info('Outliers for exposure %i: %i / %i' %
+             (k+1, outliers.sum(), len(outliers)))
+    y = coeffs[:, 0] * 1.
+    y[outliers] = np.nan
+    cont = identify_sky_pixels(y, kernel=2.5)
+    ftf_adj[sel] = cont
+    scirect[sel] = scirect[sel] / cont[:, np.newaxis]
+    for j in sel:
+        scispectra[j] = scispectra[j] - np.interp(wave_all[j], def_wave,
+                                                  back[j], left=np.nan,
+                                                  right=np.nan)
+scispectra = safe_division(scispectra, ftf_adj)
+errspectra = safe_division(errspectra, ftf_adj)   
 
 # =============================================================================
 # Sky Subtraction
