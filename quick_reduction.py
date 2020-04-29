@@ -2236,7 +2236,7 @@ for k in np.arange(nexp):
         coeffs[i] = np.linalg.lstsq(comp, sci_good[i])[0]
     model = np.dot(coeffs, components.T)
     back = np.dot(coeffs[:, 1:], components[:, 1:].T)
-    error = np.sqrt(errorrect[sel]**2 + (0.1*sky_map[np.newaxis, :])**2)
+    error = np.sqrt(errorrect[sel]**2 + (0.05*sky_map[np.newaxis, :])**2)
     chi2 = (np.nansum((model-scirect[sel])**2 / error**2, axis=1) /
             (1 + np.isnan(scirect[sel]).sum(axis=1)))
     ac = biweight(chi2)
@@ -2249,11 +2249,8 @@ for k in np.arange(nexp):
     y[outliers] = np.nan
     kmask, cont = identify_sky_pixels(y, kernel=2.5)
     ftf_adj[sel] = cont[:, np.newaxis] * np.ones((1, ftf_adj.shape[1]))
-    scirect[sel] = (scirect[sel]-back) / cont[:, np.newaxis]
-    for i, j in enumerate(sel):
-        scispectra[j] = scispectra[j] - np.interp(wave_all[j], def_wave,
-                                                  back[i], left=np.nan,
-                                                  right=np.nan)
+    scirect[sel] = (scirect[sel]) / cont[:, np.newaxis]
+
 scispectra = safe_division(scispectra, ftf_adj)
 errspectra = safe_division(errspectra, ftf_adj)   
 
