@@ -2227,8 +2227,8 @@ for k in np.arange(nexp):
     components[:, 2] = x
     components[:, 3] = x**2
     components[np.isnan(components)] = 0.0
-    sci_good = scirect * 1.
-    sci_good[np.isnan(scirect)] = 0.
+    sci_good = scirect[sel] * 1.
+    sci_good[np.isnan(scirect[sel])] = 0.
     coeffs = np.zeros((sci_good.shape[0], components.shape[1]))
     for i in np.arange(sci_good.shape[0]):
         comp = components * 1.
