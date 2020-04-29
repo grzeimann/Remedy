@@ -24,6 +24,7 @@ for j, filename in enumerate(filenames):
     print('%s has %i exposures' % (op.basename(filename), nexp))
     cnt += nexp
 res_map = np.zeros((nfibers, cnt))
+sky_map = np.zeros((cnt, 1036))
 cnt = 0
 for j, filename in enumerate(filenames):
     print('Working on %s' % op.basename(filename))
@@ -37,6 +38,7 @@ for j, filename in enumerate(filenames):
     inds = np.arange(len(ifuslots))
     for k in np.arange(nexp):
         sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
+        sky_map[cnt] = biweight(sky[sel], axis=0)
         res_map[:, cnt] = biweight(sci[sel, 700:800] / sky[sel, 700:800], axis=1)
         cnt += 1
     T.close()
@@ -45,4 +47,5 @@ bl, bm = biweight(res_map[:, sel], axis=1, calc_std=True)
 mask = np.abs(res_map - bl[:, np.newaxis]) > 2. * bm[:, np.newaxis]
 res = res_map - bl[:, np.newaxis]
 res[mask] = np.nan
+fits.PrimaryHDU(sky_map).writeto('20191214_skys.fits', overwrite=True)
 fits.PrimaryHDU(bl).writeto('20191214_res_ftf.fits', overwrite=True)
