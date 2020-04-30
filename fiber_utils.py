@@ -245,7 +245,7 @@ def get_powerlaw(image, trace, order=2):
     Pos[:, 0] = XM
     Pos[:, 1] = YM
     plaw = griddata(Pos, ZM, (xind, yind), method='linear')
-    G = Gaussian2DKernel(15.)
+    G = Gaussian2DKernel(5.)
     plaw = convolve(plaw, G, boundary='extend')
     #P = Polynomial2D(order)
     #fit = LevMarLSQFitter()(P, XM, YM, ZM)
