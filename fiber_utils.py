@@ -245,8 +245,8 @@ def get_powerlaw(image, trace, order=2):
     #Pos[:, 0] = XM
     #Pos[:, 1] = YM
     #plaw = griddata(Pos, ZM, (xind, yind), method='linear')
-    f = interp2d(XM, YM, ZM, kind='linear')
-    plaw = f(xind[0, :], yind[0, :])
+    f = interp2d(XM, YM, ZM, kind='linear', bounds_error=False)
+    plaw = f(xind, yind)
     return plaw
 
 
