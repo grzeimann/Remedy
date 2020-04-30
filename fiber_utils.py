@@ -199,9 +199,15 @@ def get_powerlaw(image, trace, order=2):
     XV = np.array_split(X, 25)
     T = np.array_split(trace, 25, axis=1)
     XM, YM, ZM = ([], [], [])
-    for xchunk, tchunk in zip(XV, T):
+    cnts = np.arange(25)
+    for xchunk, tchunk, cnt in zip(XV, T, cnts):
         avgy, avgz = ([], [])
-        avgx = int(np.mean(xchunk))
+        if cnt == 0:
+            avgx = 0.
+        elif cnt == 24:
+            avgx = 1031.
+        else:
+            avgx = int(np.mean(xchunk))
         x, y = ([], [])
         dy = np.array(np.ceil(trace[0, xchunk])-7, dtype=int)
         for j, xc in enumerate(xchunk):
@@ -244,7 +250,7 @@ def get_powerlaw(image, trace, order=2):
     Pos = np.zeros((len(XM), 2))
     Pos[:, 0] = XM
     Pos[:, 1] = YM
-    plaw = griddata(Pos, ZM, (xind, yind), method='nearest')
+    plaw = griddata(Pos, ZM, (xind, yind), method='linear')
     return plaw
 
 
