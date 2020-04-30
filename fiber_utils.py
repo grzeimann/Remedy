@@ -241,12 +241,12 @@ def get_powerlaw(image, trace, order=2):
         YM.append(avgy)
         ZM.append(avgz)
     XM, YM, ZM = (np.hstack(XM), np.hstack(YM), np.hstack(ZM))
-    #Pos = np.zeros((len(XM), 2))
-    #Pos[:, 0] = XM
-    #Pos[:, 1] = YM
-    #plaw = griddata(Pos, ZM, (xind, yind), method='linear')
-    f = interp2d(XM, YM, ZM, kind='linear', bounds_error=False)
-    plaw = f(xind, yind)
+#    Pos = np.zeros((len(XM), 2))
+#    Pos[:, 0] = XM
+#    Pos[:, 1] = YM
+#    plaw = griddata(Pos, ZM, (xind, yind), method='linear')
+    I = interp2d(XM, YM, ZM, kind='linear', bounds_error=False)
+    plaw = I(yind[:,0], xind[0, :])
     return plaw
 
 
