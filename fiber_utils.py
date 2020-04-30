@@ -218,7 +218,7 @@ def get_powerlaw(image, trace, order=2):
         if len(y):
             y, x = [np.array(np.hstack(i), dtype=int) for i in [y, x]]
             avgy.append(0.)
-            avgz.append(np.median(image[y, x]))
+            avgz.append(np.nanmedian(image[y, x]))
         for fib in fibgap:
             x, y = ([], [])
             dy = np.array(np.ceil(trace[fib, xchunk])+7, dtype=int)
@@ -231,7 +231,7 @@ def get_powerlaw(image, trace, order=2):
             if len(y):
                 y, x = [np.array(np.hstack(i), dtype=int) for i in [y, x]]
                 avgy.append(np.mean(y))
-                avgz.append(np.median(image[y, x]))
+                avgz.append(np.nanmedian(image[y, x]))
         x, y = ([], [])
         dy = np.array(np.ceil(trace[-1, xchunk])+7, dtype=int)
         for j, xc in enumerate(xchunk):
@@ -242,15 +242,19 @@ def get_powerlaw(image, trace, order=2):
         if len(y):
             y, x = [np.array(np.hstack(i), dtype=int) for i in [y, x]]
             avgy.append(1031.)
-            avgz.append(np.median(image[y, x]))
+            avgz.append(np.nanmedian(image[y, x]))
         XM.append([avgx] * len(avgy))
         YM.append(avgy)
         ZM.append(avgz)
     XM, YM, ZM = (np.hstack(XM), np.hstack(YM), np.hstack(ZM))
     Pos = np.zeros((len(XM), 2))
-    Pos[:, 0] = XM
-    Pos[:, 1] = YM
-    plaw = griddata(Pos, ZM, (xind, yind), method='linear')
+    sel = np.isfinite(ZM)
+    if sel.sum() > 5:
+        Pos[:, 0] = XM[sel]
+        Pos[:, 1] = YM[sel]
+        plaw = griddata(Pos, ZM[sel], (xind, yind), method='linear')
+    else:
+        plaw = 0. * image
     return plaw
 
 
