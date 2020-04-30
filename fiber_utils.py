@@ -200,6 +200,8 @@ def get_powerlaw(image, trace, order=2):
     T = np.array_split(trace, 25, axis=1)
     XM, YM, ZM = ([], [], [])
     cnts = np.arange(25)
+    if np.all(trace == 0.):
+        return 0. * image
     for xchunk, tchunk, cnt in zip(XV, T, cnts):
         avgy, avgz = ([], [])
         if cnt == 0:
