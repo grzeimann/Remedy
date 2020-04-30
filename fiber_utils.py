@@ -14,12 +14,12 @@ import tarfile
 from astropy.io import fits
 from math_utils import biweight
 from datetime import datetime
-from scipy.interpolate import interp2d, interp1d, LinearNDInterpolator
+from scipy.interpolate import interp2d, interp1d, LinearNDInterpolator, griddata
 
 from astropy.modeling.models import Gaussian1D, Polynomial2D
 from astropy.modeling.fitting import LevMarLSQFitter
 from astropy.stats import sigma_clip, mad_std, sigma_clipped_stats
-from astropy.convolution import Gaussian1DKernel, convolve
+from astropy.convolution import Gaussian1DKernel, convolve, Gaussian2DKernel
 from astropy.convolution import interpolate_replace_nans
 
 from sklearn.cluster import AgglomerativeClustering
@@ -241,9 +241,15 @@ def get_powerlaw(image, trace, order=2):
         YM.append(avgy)
         ZM.append(avgz)
     XM, YM, ZM = (np.hstack(XM), np.hstack(YM), np.hstack(ZM))
-    P = Polynomial2D(order)
-    fit = LevMarLSQFitter()(P, XM, YM, ZM)
-    plaw = fit(xind, yind)
+    Pos = np.zeros((len(XM), 2))
+    Pos[:, 0] = XM
+    Pos[:, 1] = YM
+    plaw = griddata(Pos, ZM, (xind, yind), kind='linear')
+    G = Gaussian2DKernel(15.)
+    plaw = convolve(plaw, G, boundary='extend')
+    #P = Polynomial2D(order)
+    #fit = LevMarLSQFitter()(P, XM, YM, ZM)
+    #plaw = fit(xind, yind)
     return plaw
 
 
