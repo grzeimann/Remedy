@@ -244,7 +244,7 @@ def get_powerlaw(image, trace, order=2):
     Pos = np.zeros((len(XM), 2))
     Pos[:, 0] = XM
     Pos[:, 1] = YM
-    plaw = griddata(Pos, ZM, (xind, yind), kind='linear')
+    plaw = griddata(Pos, ZM, (xind, yind), method='linear')
     G = Gaussian2DKernel(15.)
     plaw = convolve(plaw, G, boundary='extend')
     #P = Polynomial2D(order)
