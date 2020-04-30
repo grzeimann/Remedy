@@ -217,7 +217,7 @@ def get_powerlaw(image, trace, order=2):
                 x.append([xc] * len(d))
         if len(y):
             y, x = [np.array(np.hstack(i), dtype=int) for i in [y, x]]
-            avgy.append(np.mean(y))
+            avgy.append(0.)
             avgz.append(np.median(image[y, x]))
         for fib in fibgap:
             x, y = ([], [])
@@ -241,7 +241,7 @@ def get_powerlaw(image, trace, order=2):
                 x.append([xc] * len(d))
         if len(y):
             y, x = [np.array(np.hstack(i), dtype=int) for i in [y, x]]
-            avgy.append(np.mean(y))
+            avgy.append(1031.)
             avgz.append(np.median(image[y, x]))
         XM.append([avgx] * len(avgy))
         YM.append(avgy)
