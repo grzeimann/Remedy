@@ -245,9 +245,8 @@ def get_powerlaw(image, trace, order=2):
     Pos[:, 0] = XM
     Pos[:, 1] = YM
     plaw = griddata(Pos, ZM, (xind, yind), method='linear')
-    #P = Polynomial2D(order)
-    #fit = LevMarLSQFitter()(P, XM, YM, ZM)
-    #plaw = fit(xind, yind)
+    plaw2 = griddata(Pos, ZM, (xind, yind), method='nearest')
+    plaw[np.isnan(plaw)] = plaw2[np.isnan(plaw)]
     return plaw
 
 
