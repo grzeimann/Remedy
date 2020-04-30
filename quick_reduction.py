@@ -2569,7 +2569,6 @@ specrow = table.row
 for i in np.arange(len(scispectra)):
     specrow['spectrum'] = scispectra[i] * norm
     specrow['error'] = errspectra[i] * norm
-    specrow['sky'] = skyrect[i]
     specrow['sci'] = scirect[i]
     #specrow['chi2spec'] = C1[i]
     #specrow['fiber_to_fiber'] = ftf[i]
