@@ -45,6 +45,7 @@ from photutils import DAOStarFinder, aperture_photometry, CircularAperture
 from photutils import centroid_com
 from scipy.interpolate import griddata, interp1d, interp2d
 from scipy.signal import savgol_filter
+from sklearn.decomposition import PCA
 from tables import open_file, IsDescription, Float32Col, StringCol, Int32Col
 from matplotlib.ticker import MultipleLocator
 from matplotlib.colors import ListedColormap
@@ -1027,6 +1028,8 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         dw = np.diff(wave, axis=1)
         dw = np.hstack([dw[:, 0:1], dw])
         trace = h5table[ind]['trace']
+        if np.min(trace) < 0.:
+            trace = 0. * trace
         readnoise = h5table[ind]['readnoise']
         masterflt = h5table[ind]['mastertwi']
         mastersci = h5table[ind]['mastersci']
