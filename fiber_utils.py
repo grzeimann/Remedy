@@ -173,7 +173,7 @@ def get_powerlaw_ydir(trace, spec, amp, col):
     return yz, np.array(plaw)   
 
 
-def get_powerlaw(image, trace):
+def get_powerlaw(image, trace, order=2):
     '''
     Solve for scatter light from powerlaw
     
@@ -241,7 +241,7 @@ def get_powerlaw(image, trace):
         YM.append(avgy)
         ZM.append(avgz)
     XM, YM, ZM = (np.hstack(XM), np.hstack(YM), np.hstack(ZM))
-    P = Polynomial2D(2)
+    P = Polynomial2D(order)
     fit = LevMarLSQFitter()(P, XM, YM, ZM)
     plaw = fit(xind, yind)
     return plaw
@@ -508,7 +508,6 @@ def safe_sigma_clip(y):
 def identify_sky_pixels(sky, kernel=10.0):
     G = Gaussian1DKernel(kernel)
     cont = convolve(sky, G, boundary='extend')
-    
     mask = safe_sigma_clip(sky - cont)
     for i in np.arange(5):
         nsky = sky * 1.
