@@ -245,7 +245,7 @@ def get_powerlaw(image, trace, order=2):
     Pos[:, 0] = XM
     Pos[:, 1] = YM
     plaw = griddata(Pos, ZM, (xind, yind), method='linear')
-    Pos = np.zeros((np.isfinite(plaw), 2))
+    Pos = np.zeros((np.isfinite(plaw).sum(), 2))
     Pos[:, 0] = xind[np.isfinite(plaw)]
     Pos[:, 1] = yind[np.isfinite(plaw)]
     plaw2 = griddata(Pos, plaw[np.isfinite(plaw)], (xind, yind), method='nearest')
