@@ -1956,6 +1956,35 @@ def get_sky_fibers(norm_array):
     nsky = per_array[ind]
     return (norm_array-nsky) < (2 * bm)
 
+def get_skysub(S, sky):
+    dummy = S - sky
+    for i in np.arange(4):
+        dummy[i*112:(i+1)*112] -= biweight(dummy[i*112:(i+1)*112])
+    hl = np.nanpercentile(dummy, 98)
+    ll = np.nanpercentile(dummy, 2)
+    dummy[(dummy<ll) + (dummy>hl)] = np.nan
+    G = Gaussian2DKernel(7.)
+    G1 = Gaussian1DKernel(7.)
+    filled = dummy * 1.
+    for k in np.arange(S.shape[1]):
+        filled[:, k] = interpolate_replace_nans(filled[:, k], G1)
+    good_cols = np.isnan(filled).sum(axis=0) < 1.
+    pca = PCA(n_components=55)
+    pca.fit_transform(filled[:, good_cols].swapaxes(0, 1))
+    dummy = convolve(dummy, G, boundary='extend')
+    while np.isnan(dummy).sum():
+        dummy = interpolate_replace_nans(dummy, G)
+    return dummy, pca
+
+def get_residual_map(data, pca):
+    res = data * 0.
+    for i in np.arange(data.shape[1]):
+        sel = np.isfinite(data[:, i])
+        coeff = np.dot(data[sel, i], pca.components_.T[sel])
+        model = np.dot(coeff, pca.components_)
+        res[:, i] = model
+    return res
+
 def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
     K = sci * 1.
     inds = np.arange(sci.shape[0])
@@ -2196,43 +2225,6 @@ for i in np.arange(scispectra.shape[0]):
     errorrect[i] = np.sqrt(np.interp(def_wave, wave_all[i],
                             errspectra[i]**2, left=np.nan, right=np.nan))
 
-#ftf_adj = ftf * 1.
-#for k in np.arange(nexp):
-#    sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
-#    sky_map = biweight(scirect[sel], axis=0)
-#    x = (1. * np.arange(len(sky_map))) / len(sky_map)
-#    components = np.zeros((len(sky_map), 4))
-#    components[:, 0] = sky_map
-#    components[:, 1] = 1.
-#    components[:, 2] = x
-#    components[:, 3] = x**2
-#    components[np.isnan(components)] = 0.0
-#    sci_good = scirect[sel] * 1.
-#    sci_good[np.isnan(scirect[sel])] = 0.
-#    coeffs = np.zeros((sci_good.shape[0], components.shape[1]))
-#    for i in np.arange(sci_good.shape[0]):
-#        comp = components * 1.
-#        comp[sci_good[i] == 0., :] = 0.0
-#        coeffs[i] = np.linalg.lstsq(comp, sci_good[i])[0]
-#    model = np.dot(coeffs, components.T)
-#    back = np.dot(coeffs[:, 1:], components[:, 1:].T)
-#    error = np.sqrt(errorrect[sel]**2 + (0.05*sky_map[np.newaxis, :])**2)
-#    chi2 = (np.nansum((model-scirect[sel])**2 / error**2, axis=1) /
-#            (1 + np.isnan(scirect[sel]).sum(axis=1)))
-#    ac = biweight(chi2)
-#    log.info('Average chi2: %0.2f' % ac)
-#    chi2[:] = chi2 / ac
-#    outliers = (np.abs(coeffs[:, 0]- 1.) > 0.2)
-#    log.info('Outliers for exposure %i: %i / %i' %
-#             (k+1, outliers.sum(), len(outliers)))
-#    y = coeffs[:, 0] * 1.
-#    y[outliers] = np.nan
-#    kmask, cont = identify_sky_pixels(y, kernel=2.5)
-#    ftf_adj[sel] = cont[:, np.newaxis] * np.ones((1, ftf_adj.shape[1]))
-#    scirect[sel] = (scirect[sel]) / cont[:, np.newaxis]
-#
-#scispectra = safe_division(scispectra, ftf_adj)
-#errspectra = safe_division(errspectra, ftf_adj)   
 
 # =============================================================================
 # Sky Subtraction
@@ -2240,28 +2232,29 @@ for i in np.arange(scispectra.shape[0]):
 log.info('Subtracting sky for all ifuslots')
 skies = []
 
+
 skysubrect = scirect * 0.
 errorrect = scirect * 0.
+skyrect = scirect * 0.
+skyrect_orig = scirect * 0.
 for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
-    skyfibers = get_sky_fibers(biweight(scirect[sel, 800:900], axis=1))
-    log.info('Number of fibers with sky: %i / %i' %
-             (skyfibers.sum(), len(sel)))
-    W = wave_all[sel][skyfibers].ravel()
-    sinds = np.argsort(W)
-    S = scispectra[sel][skyfibers].ravel()
-    W = np.array([np.mean(chunk) 
-                    for chunk in np.array_split(W[sinds], 3000)])
-    sky = np.array([biweight(chunk) 
-                    for chunk in np.array_split(S[sinds], 3000)])
-    skies.append(sky)
-    S = interp1d(W, sky, bounds_error=False, fill_value=np.nan)
-    for j in sel:
-        skysub = scispectra[j] - S(wave_all[j])
-        skysubrect[j] = np.interp(def_wave, wave_all[j], skysub,
-                                  left=np.nan, right=np.nan)
-        errorrect[j] = np.sqrt(np.interp(def_wave, wave_all[j],
-                               errspectra[j]**2, left=np.nan, right=np.nan))
+    nifus = int(len(sel) / 448.)
+    sky = biweight(scirect[sel], axis=0)
+    for j in np.arange(nifus):
+        I = sel[int(j*448):int((j+1)*448)]
+        sky_smooth, pca = get_skysub(scirect[I], sky)
+        intermediate = scirect[I] - sky - sky_smooth
+        hl = np.nanpercentile(intermediate, 99)
+        ll = np.nanpercentile(intermediate, 1)
+        intermediate[(intermediate<ll) + (intermediate>hl)] = np.nan
+        pca_res = get_residual_map(intermediate, pca)
+        z = scirect[I] - sky - sky_smooth - pca_res
+        bl, bm = biweight(z, calc_std=True)
+        z[z < (-4. * bm)] = np.nan
+        skysubrect[I] = z
+        skyrect[I] = sky + sky_smooth + pca_res
+        skyrect_orig[I] = sky
 
 scispectra = skysubrect * 1.
 errspectra = errorrect * 1.
