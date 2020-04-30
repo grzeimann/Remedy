@@ -340,8 +340,6 @@ for ifuslot_key in ifuslots:
                                       for z in [_info[3], ifuslot, _info[4]]]
             if kind == 'twi':
                 mastersci = _info[0] * 1.
-                plaw = get_powerlaw(mastersci - masterdark)
-                spec = get_spectra(mastersci - masterdark - plaw, trace)
             if kind == 'zro':
                 masterbias = _info[0] * 1.
             if kind == 'drk':
