@@ -210,7 +210,7 @@ def build_master_frame(file_list, tarinfo_list, ifuslot, amp, kind, log,
         fn = itm + '%s%s_%s.fits' % (ifuslot, amp, kind)
         try:
             I, E, header = base_reduction(fn, tinfo, get_header=True)
-            if kind == 'flt':
+            if (kind == 'flt') or (kind == 'twi'):
                 if (np.mean(I) < 50.) or (np.mean(I) > 50000):
                     continue
             if kind == 'sci':
@@ -278,7 +278,7 @@ parser.add_argument("-i", "--ifuslot",  help='''IFUSLOT''', type=str,
 args = parser.parse_args(args=None)
 args.log = setup_logging(logname='build_master_bias')
 args = set_daterange(args)
-kinds = ['zro', 'drk', 'flt', 'cmp', 'sci']
+kinds = ['zro', 'drk', 'flt', 'cmp', 'twi']
 mkpath(args.folder)
 dirname = get_script_path()
 
@@ -338,7 +338,7 @@ for ifuslot_key in ifuslots:
                 break
             specid, ifuSlot, ifuid = ['%03d' % int(z)
                                       for z in [_info[3], ifuslot, _info[4]]]
-            if kind == 'sci':
+            if kind == 'twi':
                 mastersci = _info[0] * 1.
                 plaw = get_powerlaw(mastersci - masterdark)
                 spec = get_spectra(mastersci - masterdark - plaw, trace)
