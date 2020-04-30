@@ -244,9 +244,12 @@ def get_powerlaw(image, trace, order=2):
     Pos = np.zeros((len(XM), 2))
     Pos[:, 0] = XM
     Pos[:, 1] = YM
-    G = Gaussian2DKernel(15.)
     plaw = griddata(Pos, ZM, (xind, yind), method='linear')
-    plaw = interpolate_replace_nans(plaw, G)
+    Pos = np.zeros((np.isfinite(plaw), 2))
+    Pos[:, 0] = xind[np.isfinite(plaw)]
+    Pos[:, 1] = yind[np.isfinite(plaw)]
+    plaw2 = griddata(Pos, plaw[np.isfinite(plaw)], (xind, yind), method='nearest')
+    plaw[np.isnan(plaw)] = plaw2[np.isnan(plaw)]
     return plaw
 
 
