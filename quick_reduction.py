@@ -1119,7 +1119,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
     return p, t, s, e, wa, filenames, scitarfile, _i, c1, intm, ExP, ms
 
 
-def make_cube(xloc, yloc, data, error, Dx, Dy, ftf, scale, ran,
+def make_cube(xloc, yloc, data, error, Dx, Dy, scale, ran,
               seeing_fac=1.8, radius=1.5):
     '''
     Make data cube for a given ifuslot
@@ -1162,10 +1162,6 @@ def make_cube(xloc, yloc, data, error, Dx, Dy, ftf, scale, ran,
     area = np.pi * 0.75**2
     G = Gaussian2DKernel(seeing / 2.35)
     S = np.zeros((data.shape[0], 2))
-    D = np.sqrt((xloc - xloc[:, np.newaxis])**2 +
-                (yloc - yloc[:, np.newaxis])**2)
-    W = np.zeros(D.shape, dtype=bool)
-    W[D < radius] = True
     Gp = Gaussian1DKernel(5.)
     c = data * 0.
     for i in np.arange(data.shape[0]):
@@ -1174,8 +1170,7 @@ def make_cube(xloc, yloc, data, error, Dx, Dy, ftf, scale, ran,
     for k in np.arange(b):
         S[:, 0] = xloc - Dx[k]
         S[:, 1] = yloc - Dy[k]
-        sel = (data[:, k] / np.nansum(data[:, k] * W, axis=1)) <= 0.5
-        sel *= np.isfinite(data[:, k]) * (ftf > 0.5)
+        sel = np.isfinite(data[:, k])
         if np.any(sel):
             grid_z = griddata(S[sel], data[sel, k],
                               (xgrid, ygrid), method='linear')
@@ -2677,7 +2672,7 @@ with warnings.catch_warnings():
     warnings.simplefilter("ignore")
     zgrid, egrid, xgrid, ygrid = make_cube(pos[:448*nexp, 0], pos[:448*nexp, 1], scispectra[:448*nexp], 
                                            errspectra[:448*nexp],
-                                           ADRx, 0. * def_wave, np.nanmedian(ftf[:448*nexp], axis=1), scale, ran)
+                                           ADRx, 0. * def_wave, scale, ran)
 
     write_cube(def_wave, xgrid, ygrid, zgrid, cubename, he)
     write_cube(def_wave, xgrid, ygrid, egrid, ecubename, he)
