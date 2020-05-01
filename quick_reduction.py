@@ -1986,6 +1986,7 @@ def get_skysub(S, sky):
         bl, bm = biweight(skysub, calc_std=True)
         skysub[skysub < (-4. * bm)] = np.nan
         totsky = sky + dummy + res
+        log.info('successful skysub')
     else:
         log.warning('Not enough cols for skysub')
         skysub = np.nan * S
