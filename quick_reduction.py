@@ -2251,7 +2251,6 @@ skies = []
 
 
 skysubrect = scirect * 0.
-errorrect = scirect * 0.
 skyrect = scirect * 0.
 skyrect_orig = scirect * 0.
 for k in np.arange(nexp):
