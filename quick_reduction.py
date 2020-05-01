@@ -1894,7 +1894,7 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
         isel = np.ones(stats[:, 0].shape, dtype=bool)
     for i in np.arange(5):
         log.info('Number of sources for photometric modelling: %i' % isel.sum())
-        mean, median, std = sigma_clipped_stats(stats[isel, 1], stdfunc=np.std)
+        mean, median, std = sigma_clipped_stats(stats[isel, 1], stdfunc=np.nanstd)
         fwhm_virus = median
         std = np.max([std, 0.02])
         log.info('The mean, median, and std for the best seeing for %s_%07d: '
@@ -1903,7 +1903,7 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
         sel = ((GMag[:, 0] < 20.) * (stats[:, 0] < 5.) *
                (np.abs((stats[:, 1]-median)) < 2 * std))
         mean, median, std = sigma_clipped_stats((GMag[sel, 0] - GMag[sel, 1]),
-                                                stdfunc=np.std)
+                                                stdfunc=np.nanstd)
         std = np.max([std, 0.02])
         log.info('The mean, median, and std for the mag offset is for %s_%07d: '
                  '%0.2f, %0.2f, %0.2f' % (args.date, args.observation, mean,
