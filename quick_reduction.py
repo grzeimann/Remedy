@@ -1958,8 +1958,10 @@ def get_sky_fibers(norm_array):
 
 def get_skysub(S, sky):
     dummy = S - sky
+    back = dummy * 0.
     for i in np.arange(4):
-        dummy[i*112:(i+1)*112] -= biweight(dummy[i*112:(i+1)*112])
+        back[i*112:(i+1)*112] += biweight(dummy[i*112:(i+1)*112])
+    dummy -= back
     hl = np.nanpercentile(dummy, 98)
     ll = np.nanpercentile(dummy, 2)
     dummy[(dummy<ll) + (dummy>hl)] = np.nan
@@ -1968,7 +1970,7 @@ def get_skysub(S, sky):
     dummy = convolve(dummy, G, boundary='extend')
     while np.isnan(dummy).sum():
         dummy = interpolate_replace_nans(dummy, G)
-    intermediate = S - sky - dummy
+    intermediate = S - sky - dummy - back
     hl = np.nanpercentile(intermediate, 99)
     ll = np.nanpercentile(intermediate, 1)
     y = biweight(intermediate, axis=1)
@@ -1982,10 +1984,10 @@ def get_skysub(S, sky):
         pca = PCA(n_components=55)
         pca.fit_transform(intermediate[:, good_cols].swapaxes(0, 1))
         res = get_residual_map(intermediate, pca)
-        skysub = S - sky - dummy - res
+        skysub = S - sky - dummy - res - back
         bl, bm = biweight(skysub, calc_std=True)
         skysub[skysub < (-4. * bm)] = np.nan
-        totsky = sky + dummy + res
+        totsky = sky + dummy + res + back
         log.info('successful skysub')
     else:
         log.warning('Not enough cols for skysub')
