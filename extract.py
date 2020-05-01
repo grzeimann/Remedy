@@ -576,7 +576,7 @@ class Extract:
         weights = weights / norm[np.newaxis, :]
         result = self.get_spectrum(data, error, mask_extract, weights)
         spectrum, spectrum_error, mweight = [res for res in result]
-        spectrum, spectrum_error = [x/norm for x in [spectrum, spectrum_error]]
+        spectrum, spectrum_error = [x*norm for x in [spectrum, spectrum_error]]
         spec_package = [rafibers[:, np.newaxis]-self.ADRra, 
                         decfibers[:, np.newaxis]-self.ADRdec,
                         data, error, mask]
