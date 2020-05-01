@@ -1982,7 +1982,7 @@ def get_skysub(S, sky):
         pca = PCA(n_components=55)
         pca.fit_transform(intermediate[:, good_cols].swapaxes(0, 1))
         res = get_residual_map(intermediate, pca)
-        skysub = scirect[inds] - sky - dummy - res
+        skysub = S - sky - dummy - res
         bl, bm = biweight(skysub, calc_std=True)
         skysub[skysub < (-4. * bm)] = np.nan
         totsky = sky + dummy + res
