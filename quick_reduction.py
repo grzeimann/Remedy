@@ -2680,8 +2680,6 @@ with warnings.catch_warnings():
     
     header = A.tp_ifuslot.to_header()
     for key in header.keys():
-        if key in he:
-            continue
         if ('CCDSEC' in key) or ('DATASEC' in key):
             continue
         if ('BSCALE' in key) or ('BZERO' in key):
