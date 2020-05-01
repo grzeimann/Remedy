@@ -455,7 +455,7 @@ def base_reduction(filename, get_header=False, tfile=None, rdnoise=None):
     gain = np.where(gain > 0., gain, 0.85)
     if rdnoise is None:
         rdnoise = a[0].header['RDNOISE']
-        rdnoise = np.where(rdnoise > 0., rdnoise, 3.)
+    rdnoise = np.where(rdnoise > 0., rdnoise, 3.)
     amp = (a[0].header['CCDPOS'].replace(' ', '') +
            a[0].header['CCDHALF'].replace(' ', ''))
     try:
@@ -2258,6 +2258,7 @@ for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
     nifus = int(len(sel) / 448.)
     sky = biweight(scirect[sel], axis=0)
+    skies.append(sky)
     for j in np.arange(nifus):
         I = sel[int(j*448):int((j+1)*448)]
         skysub, totsky = get_skysub(scirect[I], sky)
