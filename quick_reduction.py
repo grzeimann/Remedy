@@ -1119,8 +1119,8 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
     return p, t, s, e, wa, filenames, scitarfile, _i, c1, intm, ExP, ms
 
 
-def make_cube(xloc, yloc, data, Dx, Dy, ftf, scale, ran,
-              seeing_fac=2.3, radius=1.5):
+def make_cube(xloc, yloc, data, error, Dx, Dy, ftf, scale, ran,
+              seeing_fac=1.8, radius=1.5):
     '''
     Make data cube for a given ifuslot
     
@@ -1158,6 +1158,7 @@ def make_cube(xloc, yloc, data, Dx, Dy, ftf, scale, ran,
     xgrid, ygrid = np.meshgrid(np.linspace(ran[0], ran[1], N1),
                                np.linspace(ran[2], ran[3], N2))
     Dcube = np.zeros((b,)+xgrid.shape)
+    Ecube = Dcube * 0.
     area = np.pi * 0.75**2
     G = Gaussian2DKernel(seeing / 2.35)
     S = np.zeros((data.shape[0], 2))
@@ -1180,7 +1181,11 @@ def make_cube(xloc, yloc, data, Dx, Dy, ftf, scale, ran,
                               (xgrid, ygrid), method='linear')
             Dcube[k, :, :] = (convolve(grid_z, G, boundary='extend') *
                               scale**2 / area)
-    return Dcube[:, 1:-1, 1:-1], xgrid[1:-1, 1:-1], ygrid[1:-1, 1:-1]
+            grid_z = griddata(S[sel], error[sel, k],
+                              (xgrid, ygrid), method='linear')
+            Ecube[k, :, :] = (convolve(grid_z, G, boundary='extend') *
+                              scale**2 / area)
+    return Dcube[:, 1:-1, 1:-1], Ecube[:, 1:-1, 1:-1], xgrid[1:-1, 1:-1], ygrid[1:-1, 1:-1]
 
 
 def write_cube(wave, xgrid, ygrid, Dcube, outname, he):
@@ -2644,34 +2649,38 @@ h5spec = None
 #    scispectra[N*i:(i+1)*N] = simdata * 1.
 #
 #
-#if args.simulate:
-#    name = ('%s_%07d_%03d_sim.fits' %
-#                (args.date, args.observation, args.ifuslot))
-#    cubename = ('%s_%07d_%03d_cube_sim.fits' %
-#                (args.date, args.observation, args.ifuslot))
-#else:
-#    name = ('%s_%07d_%03d.fits' %
-#                (args.date, args.observation, args.ifuslot))
-#    cubename = ('%s_%07d_%03d_cube.fits' %
-#                (args.date, args.observation, args.ifuslot))
+if args.simulate:
+    name = ('%s_%07d_%03d_sim.fits' %
+                (args.date, args.observation, args.ifuslot))
+    cubename = ('%s_%07d_%03d_cube_sim.fits' %
+                (args.date, args.observation, args.ifuslot))
+else:
+    name = ('%s_%07d_%03d.fits' %
+                (args.date, args.observation, args.ifuslot))
+    cubename = ('%s_%07d_%03d_cube.fits' %
+                (args.date, args.observation, args.ifuslot))
+    ecubename = ('%s_%07d_%03d_error_cube.fits' %
+                (args.date, args.observation, args.ifuslot))
 
-#if tfile is not None:
-#    t = tarfile.open(tfile, 'r')
-#    a = fits.open(t.extractfile(fn))
-#    t.close()
-#else:
-#    a = fits.open(fn)
-#
-#he = a[0].header
-#
+if tfile is not None:
+    t = tarfile.open(tfile, 'r')
+    a = fits.open(t.extractfile(fn))
+    t.close()
+else:
+    a = fits.open(fn)
+
+he = a[0].header
+
 ## Making data cube
-#log.info('Making Cube')
-#with warnings.catch_warnings():
-#    warnings.simplefilter("ignore")
-#    zgrid, xgrid, ygrid = make_cube(pos[:448*nexp, 0], pos[:448*nexp, 1], scispectra[:448*nexp], 
-#                                     ADRx, 0. * def_wave, np.nanmedian(ftf[:448*nexp], axis=1), scale, ran)
-#
-#    write_cube(def_wave, xgrid, ygrid, zgrid, cubename, he)
+log.info('Making Cube')
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    zgrid, egrid, xgrid, ygrid = make_cube(pos[:448*nexp, 0], pos[:448*nexp, 1], scispectra[:448*nexp], 
+                                     ADRx, 0. * def_wave, np.nanmedian(ftf[:448*nexp], axis=1), scale, ran)
+
+    write_cube(def_wave, xgrid, ygrid, zgrid, cubename, he)
+    write_cube(def_wave, xgrid, ygrid, egrid, ecubename, he)
+
 
 
     
