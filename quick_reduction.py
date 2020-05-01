@@ -2670,8 +2670,9 @@ he = a[0].header
 log.info('Making Cube')
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
-    zgrid, egrid, xgrid, ygrid = make_cube(pos[:448*nexp, 0], pos[:448*nexp, 1], scispectra[:448*nexp]*1e17, 
-                                           errspectra[:448*nexp]*1e17,
+    zgrid, egrid, xgrid, ygrid = make_cube(pos[:448*nexp, 0], pos[:448*nexp, 1],
+                                           scispectra[:448*nexp]*1e17*norm, 
+                                           errspectra[:448*nexp]*1e17*norm,
                                            ADRx, 0. * def_wave, scale, ran)
 
     write_cube(def_wave, xgrid, ygrid, zgrid, cubename, he)
