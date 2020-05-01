@@ -2680,13 +2680,13 @@ with warnings.catch_warnings():
     
     header = A.tp_ifuslot.to_header()
     for key in header.keys():
-        if key in he.header:
+        if key in he:
             continue
         if ('CCDSEC' in key) or ('DATASEC' in key):
             continue
         if ('BSCALE' in key) or ('BZERO' in key):
             continue
-        he.header[key] = header[key]
+        he[key] = header[key]
     write_cube(def_wave, xgrid, ygrid, zgrid, cubename, he)
     write_cube(def_wave, xgrid, ygrid, egrid, ecubename, he)
 
