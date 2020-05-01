@@ -2483,7 +2483,7 @@ E.mask = np.isfinite(scispectra)
 spec_list = []
 for i in np.arange(len(E.coords)):
     specinfo = E.get_spectrum_by_coord_index(i)
-    gmask = np.isfinite(specinfo[0]) * (specinfo[2] > (0.7))
+    gmask = np.isfinite(specinfo[0]) * (specinfo[2] > (0.7*np.nanmedian(specinfo[2])))
     if gmask.sum() > 50.:
         gmag = np.dot(specinfo[0][gmask], filtg[gmask]) / np.sum(filtg[gmask])
         GMag[i, 1] = -2.5 * np.log10(gmag) + 23.9
