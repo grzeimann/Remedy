@@ -2464,7 +2464,7 @@ E = Extract()
 tophat = E.tophat_psf(3., 10.5, 0.1)
 moffat = E.moffat_psf(np.median(gseeing), 10.5, 0.1)
 newpsf = tophat[0] * moffat[0] / np.max(tophat[0])
-psf = [newpsf, moffat[1], moffat[2], ]
+psf = [newpsf, moffat[1], moffat[2]]
 E.psf = psf
 E.get_ADR_RAdec(A)
 log.info('Extracting %i Bright Sources for PSF' % objsel.sum())
@@ -2674,7 +2674,19 @@ with warnings.catch_warnings():
                                            scispectra[:448*nexp]*1e17*norm, 
                                            errspectra[:448*nexp]*1e17*norm,
                                            ADRx, 0. * def_wave, scale, ran)
-
+    crx = np.abs(ran[0]) / scale + 1.
+    cry = np.abs(ran[2]) / scale + 1.
+    A.get_ifuslot_projection('%03d' % args.ifuslot, scale, crx, cry)
+    
+    header = A.tp_ifuslot.to_header()
+    for key in header.keys():
+        if key in he.header:
+            continue
+        if ('CCDSEC' in key) or ('DATASEC' in key):
+            continue
+        if ('BSCALE' in key) or ('BZERO' in key):
+            continue
+        he.header[key] = header[key]
     write_cube(def_wave, xgrid, ygrid, zgrid, cubename, he)
     write_cube(def_wave, xgrid, ygrid, egrid, ecubename, he)
 
