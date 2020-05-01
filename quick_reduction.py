@@ -2676,7 +2676,8 @@ log.info('Making Cube')
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
     zgrid, egrid, xgrid, ygrid = make_cube(pos[:448*nexp, 0], pos[:448*nexp, 1], scispectra[:448*nexp], 
-                                     ADRx, 0. * def_wave, np.nanmedian(ftf[:448*nexp], axis=1), scale, ran)
+                                           errspectra[:448*nexp],
+                                           ADRx, 0. * def_wave, np.nanmedian(ftf[:448*nexp], axis=1), scale, ran)
 
     write_cube(def_wave, xgrid, ygrid, zgrid, cubename, he)
     write_cube(def_wave, xgrid, ygrid, egrid, ecubename, he)
