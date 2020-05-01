@@ -1965,16 +1965,32 @@ def get_skysub(S, sky):
     dummy[(dummy<ll) + (dummy>hl)] = np.nan
     G = Gaussian2DKernel(7.)
     G1 = Gaussian1DKernel(7.)
-    filled = dummy * 1.
-    for k in np.arange(S.shape[1]):
-        filled[:, k] = interpolate_replace_nans(filled[:, k], G1)
-    good_cols = np.isnan(filled).sum(axis=0) < 1.
-    pca = PCA(n_components=55)
-    pca.fit_transform(filled[:, good_cols].swapaxes(0, 1))
     dummy = convolve(dummy, G, boundary='extend')
     while np.isnan(dummy).sum():
         dummy = interpolate_replace_nans(dummy, G)
-    return dummy, pca
+    intermediate = S - sky - dummy
+    hl = np.nanpercentile(intermediate, 99)
+    ll = np.nanpercentile(intermediate, 1)
+    y = biweight(intermediate, axis=1)
+    skyfibers = get_sky_fibers(y)
+    intermediate[(intermediate<ll) + (intermediate>hl)] = np.nan
+    intermediate[~skyfibers] = np.nan
+    for k in np.arange(S.shape[1]):
+        intermediate[:, k] = interpolate_replace_nans(intermediate[:, k], G1)
+    good_cols = np.isnan(intermediate).sum(axis=0) < 1.
+    if good_cols.sum() > 60:
+        pca = PCA(n_components=55)
+        pca.fit_transform(intermediate[:, good_cols].swapaxes(0, 1))
+        res = get_residual_map(intermediate, pca)
+        skysub = scirect[inds] - sky - dummy - res
+        bl, bm = biweight(skysub, calc_std=True)
+        skysub[skysub < (-4. * bm)] = np.nan
+        totsky = sky + dummy + res
+    else:
+        log.warning('Not enough cols for skysub')
+        skysub = np.nan * S
+        totsky = np.nan * S
+    return skysub, totsky
 
 def get_residual_map(data, pca):
     res = data * 0.
@@ -2243,17 +2259,9 @@ for k in np.arange(nexp):
     sky = biweight(scirect[sel], axis=0)
     for j in np.arange(nifus):
         I = sel[int(j*448):int((j+1)*448)]
-        sky_smooth, pca = get_skysub(scirect[I], sky)
-        intermediate = scirect[I] - sky - sky_smooth
-        hl = np.nanpercentile(intermediate, 99)
-        ll = np.nanpercentile(intermediate, 1)
-        intermediate[(intermediate<ll) + (intermediate>hl)] = np.nan
-        pca_res = get_residual_map(intermediate, pca)
-        z = scirect[I] - sky - sky_smooth - pca_res
-        bl, bm = biweight(z, calc_std=True)
-        z[z < (-4. * bm)] = np.nan
-        skysubrect[I] = z
-        skyrect[I] = sky + sky_smooth + pca_res
+        skysub, totsky = get_skysub(scirect[I], sky)
+        skysubrect[I] = skysub
+        skyrect[I] = totsky
         skyrect_orig[I] = sky
 
 scispectra = skysubrect * 1.
