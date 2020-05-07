@@ -813,6 +813,7 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
             errcube[i, j, :] = WE
     Y = cube / errcube
     bl, bm = biweight(Y.ravel(), calc_std=True)
+    log.info('Error Correction: %0.2f' % bm)
     test = Y > thresh * bm
     L = np.zeros((0, 7))
     K = np.zeros((0, len(def_wave), 3))
