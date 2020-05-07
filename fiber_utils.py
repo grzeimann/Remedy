@@ -817,7 +817,7 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
     test = Y > thresh * bm
     L = np.zeros((0, 7))
     K = np.zeros((0, len(def_wave), 3))
-    log.info('Number of sources found: %i' % test.sum())
+    log.info('Number of >thresh spaxels found: %i' % test.sum())
     if (test.sum()>0) * (test.sum()<2000):
         ids = np.where(test)
         Z = Y[ids[0],ids[1],ids[2]]
@@ -836,6 +836,7 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
                       gridy[ids_sorted[0], ids_sorted[1]],
                       def_wave[ids_sorted[2]]]).swapaxes(0, 1)
         US = np.unique(clustering.labels_)
+        log.info('Number of sources found: %i' % len(US))
         L = np.zeros((len(US), 7))
         K = np.zeros((len(US), len(def_wave), 3))
         fitter = LevMarLSQFitter()
