@@ -814,7 +814,8 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
     Y = cube / errcube
     bl, bm = biweight(Y.ravel(), calc_std=True)
     log.info('Error Correction: %0.2f' % bm)
-    test = Y > thresh * bm
+    Y[:] /= bm
+    test = Y > thresh
     L = np.zeros((0, 7))
     K = np.zeros((0, len(def_wave), 3))
     log.info('Number of >thresh spaxels found: %i' % test.sum())
