@@ -817,7 +817,7 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
     L = np.zeros((0, 7))
     K = np.zeros((0, len(def_wave), 3))
     log.info('Number of sources found: %i' % test.sum())
-    if test.sum():
+    if (test.sum()>0) * (test.sum()<2000):
         ids = np.where(test)
         Z = Y[ids[0],ids[1],ids[2]]
         sid = np.argsort(Z)[::-1]
