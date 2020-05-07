@@ -807,8 +807,8 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
             w = np.sum(weights[:, np.newaxis] * imask, axis=0)
             cube[i, j, w<0.7] = np.nan
             errcube[i, j, w<0.7] = np.nan
-            WS = convolve(origcube[i, j], G, preserve_nan=True, fill_value=0.0) / np.sum(G.array**2)
-            WE = np.sqrt(convolve(origerrcube[i, j]**2, G, preserve_nan=True, fill_value=0.0) / np.sum(G.array**2))
+            WS = convolve(origcube[i, j], G, preserve_nan=True, boundary='extend') / np.sum(G.array**2)
+            WE = np.sqrt(convolve(origerrcube[i, j]**2, G, preserve_nan=True, boundary='extend') / np.sum(G.array**2))
             cube[i, j, :] = WS
             errcube[i, j, :] = WE
     Y = cube / errcube
