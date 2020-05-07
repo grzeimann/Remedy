@@ -2554,6 +2554,7 @@ psf = [newpsf, moffat[1], moffat[2]]
 E.psf = psf
 detect_info = []
 for i, ui in enumerate(allifus): 
+    ifuslot = '%03d' % ui
     N = 448 * nexp
     data = scispectra[N*i:(i+1)*N]
     error = errspectra[N*i:(i+1)*N]
@@ -2564,12 +2565,10 @@ for i, ui in enumerate(allifus):
     sources = detect_sources(P[:, 0], P[:, 1], data, error, M, def_wave, psf,
                              ran, scale, spec_res=5.6, thresh=5.)
     for l, k in zip(sources[4], sources[5]):
-        
-    
         fx, fy = (l[0]*scale + ran[0] + ifux,
                   l[1]*scale + ran[2] + ifuy)
         sra, sdec = A.tp.wcs_pix2world(fx, fy, 1)
-        detect_info.append([ui, ui_dict[ui][0], ui_dict[ui][1], l[0], l[1], fx,
+        detect_info.append([ui, ui_dict[ifuslot][0], ui_dict[ifuslot][1], l[0], l[1], fx,
                             fy, sra, sdec, l[2], l[3], l[4], l[5], l[6],
                             k[:, 0], k[:, 1], k[:, 2]])
 
