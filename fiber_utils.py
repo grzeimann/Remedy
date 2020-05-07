@@ -823,7 +823,7 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale,
         z = np.array([gridx[ids_sorted[0], ids_sorted[1]]*3.,
                       gridy[ids_sorted[0], ids_sorted[1]]*3.,
                       def_wave[ids_sorted[2]]]).swapaxes(0, 1)
-    
+        SN = Y[ids_sorted[0], ids_sorted[1], ids_sorted[2]]
         clustering = AgglomerativeClustering(n_clusters=None, 
                                              compute_full_tree=True,
                                              distance_threshold=50,
@@ -833,7 +833,7 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale,
                       gridy[ids_sorted[0], ids_sorted[1]],
                       def_wave[ids_sorted[2]]]).swapaxes(0, 1)
         US = np.unique(clustering.labels_)
-        L = np.zeros((len(US), 5))
+        L = np.zeros((len(US), 7))
         K = np.zeros((len(US), len(def_wave), 3))
         fitter = LevMarLSQFitter()
         for i, ui in enumerate(US):
@@ -851,9 +851,6 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale,
             yc = np.sum(y[fsel]*v[fsel]) / np.sum(v[fsel])
             sel = np.where(np.sqrt((dx-xc)**2 + (dy-yc)**2)<=4.0)[0]
             weights = I(dx[sel]-xc, dy[sel]-yc) * area / psfpixscale**2
-            if weights.sum() < 0.7:
-                L[i, :] = 0.0
-                continue
             imask = ~(mask[sel])
             X = S[sel]*1.
             X[mask[sel]] = 0.0
@@ -883,8 +880,10 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale,
             L[i, 0] = xc
             L[i, 1] = yc
             L[i, 2] = wc
-            L[i, 3] = fit.stddev.value
+            L[i, 3] = fit.stddev.value * 2.35
             L[i, 4] = chi2
+            L[i, 5] = fits.amplitude.value
+            L[i, 6] = np.max(SN[sel])
             K[i, :, 0] = spatial_spec_or
             K[i, :, 1] = spatial_spec_err_or
             K[i, :, 2] = fit(def_wave)
