@@ -2555,6 +2555,7 @@ E.psf = psf
 detect_info = []
 for i, ui in enumerate(allifus): 
     ifuslot = '%03d' % ui
+    log.info('Detections for %s' % ifuslot)
     N = 448 * nexp
     data = scispectra[N*i:(i+1)*N]
     error = errspectra[N*i:(i+1)*N]
@@ -2563,7 +2564,7 @@ for i, ui in enumerate(allifus):
     ifu = A.fplane.by_ifuslot('%03d' % ui)
     ifux, ifuy = (ifu.y, ifu.x) 
     sources = detect_sources(P[:, 0], P[:, 1], data, error, M, def_wave, psf,
-                             ran, scale, spec_res=5.6, thresh=5.)
+                             ran, scale, log, spec_res=5.6, thresh=5.)
     for l, k in zip(sources[4], sources[5]):
         fx, fy = (l[0]*scale + ran[0] + ifux,
                   l[1]*scale + ran[2] + ifuy)
