@@ -814,7 +814,8 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale,
     Y = cube / errcube
     bl, bm = biweight(Y.ravel(), calc_std=True)
     test = Y > thresh * bm
-    L = np.zeros((0, 3))
+    L = np.zeros((0, 7))
+    K = np.zeros((0, len(def_wave), 3))
     if test.sum():
         ids = np.where(test)
         Z = Y[ids[0],ids[1],ids[2]]
