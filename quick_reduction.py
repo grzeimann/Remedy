@@ -1945,7 +1945,7 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
     plt.xlabel("Pan-STARRS g' (AB mag)", fontsize=16, labelpad=10)
     plt.ylabel("Pan-STARRS g' - VIRUS g' + Cor", fontsize=16, labelpad=10)
     plt.savefig('mag_offset_%s_%07d.png'  % (args.date, args.observation), dpi=300)
-    return sel, GMag[:, 0] - GMag[:, 1] - median
+    return sel, GMag[:, 0] - GMag[:, 1] - median, 10**(-0.4*median), fwhm_virus
 
 def get_sky_fibers(norm_array):
     bl, bm = biweight(norm_array, calc_std=True)
@@ -2108,6 +2108,26 @@ class Info(IsDescription):
      ifuid  = Int32Col()   # float  (single-precision)
      amp  = StringCol(2)
      exp = Int32Col()
+     
+class Detections(IsDescription):
+     ra  = Float32Col()    # float  (single-precision)
+     dec  = Float32Col()    # float  (single-precision)
+     ifux  = Float32Col()    # float  (single-precision)
+     ifuy  = Float32Col()    # float  (single-precision)
+     fx  = Float32Col()    # float  (single-precision)
+     fy  = Float32Col()    # float  (single-precision)
+     specid  = Int32Col()    # float  (single-precision)
+     ifuslot  = Int32Col()    # float  (single-precision)
+     ifuid  = Int32Col()   # float  (single-precision)
+     wave  = Float32Col()    # float  (single-precision)
+     flux  = Float32Col()    # float  (single-precision)
+     sn  = Float32Col()    # float  (single-precision)
+     chi2  = Float32Col()    # float  (single-precision)
+     fwhm  = Float32Col()    # float  (single-precision)
+     spectrum  = Float32Col((1036,))    # float  (single-precision)
+     error  = Float32Col((1036,))     # float  (single-precision)
+     model  = Float32Col((1036,))     # float  (single-precision)
+
 
 class CatSpectra(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
@@ -2410,30 +2430,6 @@ for i, _info in enumerate(info):
 RAFibers, DecFibers = [np.hstack(x) for x in [RAFibers, DecFibers]]
 
 
-# =============================================================================
-# Detections
-# =============================================================================
-#E = Extract()
-#tophat = E.tophat_psf(3., 10.5, 0.25)
-#moffat = E.moffat_psf(1.75, 10.5, 0.25)
-#newpsf = tophat[0]*moffat[0]
-#newpsf /= newpsf.sum()
-#psf = [newpsf, moffat[1], moffat[2]]
-#E.psf = psf
-#
-#for i, ui in enumerate(allifus): 
-#    N = 448 * nexp
-#    data = scispectra[N*i:(i+1)*N]
-#    error = errspectra[N*i:(i+1)*N]
-#    M = mask[N*i:(i+1)*N]
-#    P = pos[N*i:(i+1)*N]
-#    ifu = A.fplane.by_ifuslot('%03d' % ui)
-#    ifux, ifuy = (ifu.y, ifu.x) 
-#    sources = detect_sources(P[:, 0], P[:, 1], data, error, M, def_wave, psf,
-#                             ran, scale, spec_res=5.6, thresh=5.)
-#    fx, fy = (sources['xcentroid']*scale + ran[0] + ifux,
-#              sources['ycentroid']*scale + ran[2] + ifuy)
-#    sra, sdec = A.tp.wcs_pix2world(fx, fy, 1)
 # Making g-band images
 filename_array = []
 ifunums = []
@@ -2537,10 +2533,40 @@ E.ADRra = E.ADRra + np.interp(def_wave, nwave,
 E.ADRdec = E.ADRdec + np.interp(def_wave, nwave,
                                 np.median(Y, axis=0)-np.median(Y))
 
-othersel, colors = plot_photometry(GMag, stats, vmin=seeing_array.min(),
+othersel, colors, offset, fwhm_virus = plot_photometry(GMag, stats, vmin=seeing_array.min(),
                                    vmax=seeing_array.max(),
                                    fwhm_guider=np.median(gseeing))
 plot_astrometry(f, A, np.where(objsel)[0], colors)
+
+# =============================================================================
+# Detections
+# =============================================================================
+E = Extract()
+tophat = E.tophat_psf(3., 10.5, 0.1)
+moffat = E.moffat_psf(fwhm_virus, 10.5, 0.1)
+newpsf = tophat[0] * moffat[0] / np.max(tophat[0])
+psf = [newpsf, moffat[1], moffat[2]]
+E.psf = psf
+detect_info = []
+for i, ui in enumerate(allifus): 
+    N = 448 * nexp
+    data = scispectra[N*i:(i+1)*N]
+    error = errspectra[N*i:(i+1)*N]
+    M = np.isnan(data)
+    P = pos[N*i:(i+1)*N]
+    ifu = A.fplane.by_ifuslot('%03d' % ui)
+    ifux, ifuy = (ifu.y, ifu.x) 
+    sources = detect_sources(P[:, 0], P[:, 1], data, error, M, def_wave, psf,
+                             ran, scale, spec_res=5.6, thresh=5.)
+    for l, k in zip(sources[4], sources[5]):
+        
+    
+        fx, fy = (l[0]*scale + ran[0] + ifux,
+                  l[1]*scale + ran[2] + ifuy)
+        sra, sdec = A.tp.wcs_pix2world(fx, fy, 1)
+        detect_info.append([ui, ui_dict[ui][0], ui_dict[ui][1], l[0], l[1], fx,
+                            fy, sra, sdec, l[2], l[3], l[4], l[5], l[6],
+                            k[:, 0], k[:, 1], k[:, 2]])
 
 table = h5spec.create_table(h5spec.root, 'CatSpectra', CatSpectra, 
                             "Spectral Extraction Information")
@@ -2600,7 +2626,32 @@ for i in np.arange(len(E.ra)):
     specrow.append()
 table.flush()
 
-log.info('Finished writing Info')
+if nexp == 3:
+    table = h5spec.create_table(h5spec.root, 'Detections', Detections, 
+                            "Detection Information")
+    specrow = table.row
+    for dinfo in detect_info:
+        specrow['ra'] = dinfo[7]
+        specrow['dec'] = dinfo[8]
+        specrow['fx'] = dinfo[5]
+        specrow['fy'] = dinfo[6]
+        specrow['ifux'] = dinfo[3]
+        specrow['ifuy'] = dinfo[4]
+        specrow['specid'] = dinfo[1]
+        specrow['ifuid'] = dinfo[2]
+        specrow['ifuslot'] = dinfo[0]
+        specrow['wave'] = dinfo[9]
+        specrow['fwhm'] = dinfo[10]
+        specrow['chi2'] = dinfo[11]
+        specrow['flux'] = dinfo[12]
+        specrow['sn'] = dinfo[13]
+        specrow['spectrum'] = dinfo[14]
+        specrow['error'] = dinfo[15]
+        specrow['model'] = dinfo[16]
+        specrow.append()
+    table.flush()
+
+log.info('Finished writing Detections')
 
 #table = h5spec.create_table(h5spec.root, 'Images', Images, 
 #                            "Images")
