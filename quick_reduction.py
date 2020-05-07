@@ -1969,9 +1969,12 @@ def get_skysub(S, sky):
         back[i*112:(i+1)*112] += biweight(dummy[i*112:(i+1)*112])
     dummy -= back
     dummy = dummy[goodfibers]
+    y = biweight(dummy, axis=1)
+    skyfibers = get_sky_fibers(y)
     hl = np.nanpercentile(dummy, 98)
     ll = np.nanpercentile(dummy, 2)
     dummy[(dummy<ll) + (dummy>hl)] = np.nan
+    dummy[~skyfibers] = np.nan
     G = Gaussian2DKernel(7.)
     G1 = Gaussian1DKernel(7.)
     dummy = convolve(dummy, G, boundary='extend')
@@ -1986,7 +1989,6 @@ def get_skysub(S, sky):
     intermediate[~skyfibers] = np.nan
     log.info('Number of good fibers for sky subtraction: %i' %
              (skyfibers).sum())
-
     for k in np.arange(S.shape[1]):
         intermediate[:, k] = interpolate_replace_nans(intermediate[:, k], G1)
     good_cols = np.isnan(intermediate).sum(axis=0) < 1.
@@ -2266,6 +2268,8 @@ log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
 log.info('Masking bad pixels/fibers/amps')
 inds = np.arange(scispectra.shape[0])
 mask = get_mask(scispectra, C1, ftf, res, nexp)
+mask[:, :-1] += mask[:, 1:]
+mask[:, 1:] += mask[:, :-1]
 if not args.no_masking:
     scispectra[mask] = np.nan
     errspectra[mask] = np.nan
