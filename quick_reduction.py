@@ -2546,12 +2546,11 @@ errspectra[:] *= norm
 # =============================================================================
 # Detections
 # =============================================================================
-E = Extract()
-tophat = E.tophat_psf(3., 10.5, 0.1)
-moffat = E.moffat_psf(fwhm_virus, 10.5, 0.1)
+Ed = Extract()
+tophat = Ed.tophat_psf(3., 10.5, 0.1)
+moffat = Ed.moffat_psf(fwhm_virus, 10.5, 0.1)
 newpsf = tophat[0] * moffat[0] / np.max(tophat[0])
 psf = [newpsf, moffat[1], moffat[2]]
-E.psf = psf
 detect_info = []
 for i, ui in enumerate(allifus): 
     ifuslot = '%03d' % ui
