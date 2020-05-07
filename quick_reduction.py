@@ -1985,7 +1985,7 @@ def get_skysub(S, sky):
     intermediate[(intermediate<ll) + (intermediate>hl)] = np.nan
     intermediate[~skyfibers] = np.nan
     log.info('Number of good fibers for sky subtraction: %i' %
-             (~skyfibers).sum())
+             (skyfibers).sum())
 
     for k in np.arange(S.shape[1]):
         intermediate[:, k] = interpolate_replace_nans(intermediate[:, k], G1)
