@@ -1977,7 +1977,7 @@ def get_skysub(S, sky):
     dummy = convolve(dummy, G, boundary='extend')
     while np.isnan(dummy).sum():
         dummy = interpolate_replace_nans(dummy, G)
-    intermediate = S - sky - dummy - back
+    intermediate = S[goodfibers] - sky - dummy - back[goodfibers]
     hl = np.nanpercentile(intermediate, 99)
     ll = np.nanpercentile(intermediate, 1)
     y = biweight(intermediate, axis=1)
@@ -1994,10 +1994,10 @@ def get_skysub(S, sky):
         pca = PCA(n_components=55)
         pca.fit_transform(intermediate[:, good_cols].swapaxes(0, 1))
         res = get_residual_map(intermediate, pca)
-        skysub = S - sky - dummy - res - back
+        skysub = S[goodfibers] - sky - dummy - res - back[goodfibers]
         bl, bm = biweight(skysub, calc_std=True)
         skysub[skysub < (-4. * bm)] = np.nan
-        totsky = sky + dummy + res + back
+        totsky = sky + dummy + res + back[goodfibers]
         skysub1 = np.nan * S
         skysub1[goodfibers] = skysub
         totsky1 = np.nan * S
