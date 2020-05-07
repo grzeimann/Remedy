@@ -744,7 +744,7 @@ def get_continuum(spectra, nbins=25):
     return cont
 
 
-def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale,
+def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
                    spec_res=5.6, thresh=5.):
     '''
     Detection algorithm
@@ -816,6 +816,7 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale,
     test = Y > thresh * bm
     L = np.zeros((0, 7))
     K = np.zeros((0, len(def_wave), 3))
+    log.info('Number of sources found: %i' % test.sum())
     if test.sum():
         ids = np.where(test)
         Z = Y[ids[0],ids[1],ids[2]]
