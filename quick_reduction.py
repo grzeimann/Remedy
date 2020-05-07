@@ -2366,11 +2366,20 @@ for k, _V in enumerate(intm):
 # =============================================================================
 # Correct error to sigma = 1., error typically too large by 25%
 # =============================================================================
-back_val, error_cor = biweight((scispectra / errspectra)[:, 800:900],
-                               calc_std=True)
-log.info('Error Correction: %0.2f' % error_cor)
-error_cor = np.min([np.max([error_cor, 0.5]), 1.5])
-errspectra *= error_cor
+namps = int(len(scispectra) / 112. / nexp)
+for i in np.arange(namps):
+    ll = int(i * (112*nexp))
+    hl = int((i+1) * (112*nexp))
+    y = biweight(scispectra[ll:hl, 800:900], axis=1)
+    skyfibers = get_sky_fibers(y)
+    x1 = scispectra[ll:hl]
+    x2 = errspectra[ll:hl]
+    if skyfibers.sum():
+        back_val, error_cor = biweight(x1[skyfibers] / x2[skyfibers], axis=0,
+                                       calc_std=True)
+        errspectra[ll:hl] *= error_cor[np.newaxis, :]
+        log.info('Average Error Correction for amp %i: %0.2f' %
+                 (i+1, np.nanmedian(error_cor)))
 
 # =============================================================================
 # Calculate ratio of skies from multiple exposures. Normalization factor??
