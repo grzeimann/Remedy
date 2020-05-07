@@ -847,7 +847,7 @@ def get_mask(scispectra, C1, ftf, res, nexp):
         mask[y[n], x1[n]] = True
     
     # Fiber to fiber < 0.5 (dead fiber) and |res| > 0.25, meaning mastersky residuals > 25%
-    badftf = (ftf < 0.5) + (np.abs(res) > 0.25)
+    badftf = (ftf < 0.5) #+ (np.abs(res) > 0.25)
     mask[badftf] = True
     
     # Error spectra with 0.0 are either outside the wavelength range or pixels masked by bad pixel mask
@@ -1957,11 +1957,18 @@ def get_sky_fibers(norm_array):
     return (norm_array-nsky) < (2 * bm)
 
 def get_skysub(S, sky):
+    goodfibers = np.isnan(S).sum(axis=1) < 200
+    if goodfibers.sum() == 0:
+        log.warning('No good fibers for sky subtraction')
+        skysub = np.nan * S
+        totsky = np.nan * S
+        return skysub, totsky
     dummy = S - sky
     back = dummy * 0.
     for i in np.arange(4):
         back[i*112:(i+1)*112] += biweight(dummy[i*112:(i+1)*112])
     dummy -= back
+    dummy = dummy[goodfibers]
     hl = np.nanpercentile(dummy, 98)
     ll = np.nanpercentile(dummy, 2)
     dummy[(dummy<ll) + (dummy>hl)] = np.nan
@@ -1977,6 +1984,9 @@ def get_skysub(S, sky):
     skyfibers = get_sky_fibers(y)
     intermediate[(intermediate<ll) + (intermediate>hl)] = np.nan
     intermediate[~skyfibers] = np.nan
+    log.info('Number of good fibers for sky subtraction: %i' %
+             (~skyfibers).sum())
+
     for k in np.arange(S.shape[1]):
         intermediate[:, k] = interpolate_replace_nans(intermediate[:, k], G1)
     good_cols = np.isnan(intermediate).sum(axis=0) < 1.
@@ -1988,6 +1998,12 @@ def get_skysub(S, sky):
         bl, bm = biweight(skysub, calc_std=True)
         skysub[skysub < (-4. * bm)] = np.nan
         totsky = sky + dummy + res + back
+        skysub1 = np.nan * S
+        skysub1[goodfibers] = skysub
+        totsky1 = np.nan * S
+        totsky1[goodfibers] = totsky
+        skysub = skysub1
+        totsky = totsky1
         log.info('successful skysub')
     else:
         log.warning('Not enough cols for skysub')
@@ -2264,7 +2280,10 @@ for i in np.arange(scispectra.shape[0]):
     errorrect[i] = np.sqrt(np.interp(def_wave, wave_all[i],
                             errspectra[i]**2, left=np.nan, right=np.nan))
 
-
+qual_check = np.abs(scirect)<1e-8
+scirect[qual_check] = np.nan
+errorrect[qual_check] = np.nan
+del qual_check
 # =============================================================================
 # Sky Subtraction
 # =============================================================================
