@@ -841,6 +841,7 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale,
             L[i, 0] = np.mean(z[sel, 0])
             L[i, 1] = np.mean(z[sel, 1])
             L[i, 2] = np.mean(z[sel, 2])
+            L[i, 6] = np.max(SN[sel])
             dsel = np.sqrt((gridx - L[i, 0])**2 + (gridy - L[i, 1])**2) < 2.5
             wi = int(np.interp(L[i, 2], def_wave, np.arange(len(def_wave))))
             x = gridx[dsel]
@@ -883,7 +884,7 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale,
             L[i, 3] = fit.stddev.value * 2.35
             L[i, 4] = chi2
             L[i, 5] = fit.amplitude.value
-            L[i, 6] = np.max(SN[sel])
+            
             K[i, :, 0] = spatial_spec_or
             K[i, :, 1] = spatial_spec_err_or
             K[i, :, 2] = fit(def_wave)
