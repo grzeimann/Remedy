@@ -2538,6 +2538,10 @@ othersel, colors, offset, fwhm_virus = plot_photometry(GMag, stats, vmin=seeing_
                                    fwhm_guider=np.median(gseeing))
 plot_astrometry(f, A, np.where(objsel)[0], colors)
 
+if np.isfinite(offset):
+    scispectra[:] *= offset
+    errspectra[:] *= offset
+
 # =============================================================================
 # Detections
 # =============================================================================
