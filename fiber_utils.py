@@ -888,7 +888,7 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
             L[i, 2] = wc
             L[i, 3] = fit.stddev.value * 2.35
             L[i, 4] = chi2
-            L[i, 5] = fit.amplitude.value
+            L[i, 5] = fit.amplitude.value * 2.
             
             K[i, :, 0] = spatial_spec_or
             K[i, :, 1] = spatial_spec_err_or
