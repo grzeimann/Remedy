@@ -847,6 +847,9 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
                       gridy[ids_sorted[0], ids_sorted[1]]*3.,
                       def_wave[ids_sorted[2]]]).swapaxes(0, 1)
         SN = Y[ids_sorted[0], ids_sorted[1], ids_sorted[2]]
+        if z.shape[0] == 1:
+            z = np.vstack([z, z])
+            SN = np.hstack([SN, SN])
         clustering = AgglomerativeClustering(n_clusters=None, 
                                              compute_full_tree=True,
                                              distance_threshold=50,
