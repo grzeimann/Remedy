@@ -858,6 +858,9 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
         z = np.array([gridx[ids_sorted[0], ids_sorted[1]],
                       gridy[ids_sorted[0], ids_sorted[1]],
                       def_wave[ids_sorted[2]]]).swapaxes(0, 1)
+        if z.shape[0] == 1:
+            z = np.vstack([z, z])
+            SN = np.hstack([SN, SN])
         US = np.unique(clustering.labels_)
         log.info('Number of sources found: %i' % len(US))
         L = np.zeros((len(US), 7))
