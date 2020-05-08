@@ -796,7 +796,7 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
             xg = gridx[i, j]
             yg = gridy[i, j]
             sel = np.where(np.sqrt((dx-xg)**2 + (dy-yg)**2)<=4.0)[0]
-            weights = I(dx[sel]-xg, dy[sel]-yg) * area / psfpixscale**2
+            weights = I(dx[sel]-xg, dy[sel]-yg)
             imask = ~(mask[sel])
             X = S[sel]*1.
             X[mask[sel]] = 0.0
@@ -856,7 +856,7 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
             xc = np.sum(x[fsel]*v[fsel]) / np.sum(v[fsel])
             yc = np.sum(y[fsel]*v[fsel]) / np.sum(v[fsel])
             sel = np.where(np.sqrt((dx-xc)**2 + (dy-yc)**2)<=4.0)[0]
-            weights = I(dx[sel]-xc, dy[sel]-yc) * area / psfpixscale**2
+            weights = I(dx[sel]-xc, dy[sel]-yc)
             imask = ~(mask[sel])
             X = S[sel]*1.
             X[mask[sel]] = 0.0
