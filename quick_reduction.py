@@ -2286,7 +2286,7 @@ for i in np.arange(scispectra.shape[0]):
 indices1 = indices1.ravel()
 indices2 = indices1 - 1
 indices2[indices2 < 0] = 0
-indices1[indices1 == len(def_wave)] = len(def_wave) - 1
+indices1[indices1 == len(indices1)] = len(indices1) - 1
 x_var = (def_wave[np.newaxis, :] * np.ones((scirect.shape[0],1))).ravel()
 x_fix = wave_all.ravel()
 distances1 = np.abs(x_fix[indices1] - x_var)
