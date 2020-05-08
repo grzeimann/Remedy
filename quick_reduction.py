@@ -2296,8 +2296,8 @@ distances2 = np.abs(x_fix[indices2] - x_var)
 total_distance = distances1 + distances2
 weight1 = distances1 / total_distance
 weight2 = distances2 / total_distance
-errorrect = (weight2 * errspectra.ravel()[indices1]**2 +
-             weight1 * errspectra.ravel()[indices2]**2)
+errorrect = (weight2**2 * errspectra.ravel()[indices1]**2 +
+             weight1**2 * errspectra.ravel()[indices2]**2)
 errorrect = np.sqrt(errorrect)
 errorrect = np.reshape(errorrect, scirect.shape)
 errorrect[np.isnan(scirect)] = np.nan
