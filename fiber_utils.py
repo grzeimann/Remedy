@@ -781,14 +781,12 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
                                np.linspace(ran[2], ran[3], N2))
     T = np.array([psf[1].ravel(), psf[2].ravel()]).swapaxes(0, 1)
     I = LinearNDInterpolator(T, psf[0].ravel(), fill_value=0.0)
-    psfpixscale = np.abs(psf[1][0, 1] - psf[1][0, 0])
-    area = 0.75**2 * np.pi
     cube = np.zeros((gridx.shape[0], gridx.shape[1], len(def_wave)))
     errcube = np.zeros((gridx.shape[0], gridx.shape[1], len(def_wave)))
     origcube = np.zeros((gridx.shape[0], gridx.shape[1], len(def_wave)))
     origerrcube = np.zeros((gridx.shape[0], gridx.shape[1], len(def_wave)))
     mask = ~np.isfinite(spec)
-    G = Gaussian1DKernel(spec_res/2.35/(def_wave[1]-def_wave[0]))
+    G = Gaussian1DKernel(spec_res / 2.35 / (def_wave[1] - def_wave[0]))
     cont = get_continuum(spec, nbins=25)
     S = spec - cont
     for i in np.arange(gridx.shape[0]):
