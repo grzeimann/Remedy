@@ -743,6 +743,19 @@ def get_continuum(spectra, nbins=25):
             cont[i] = 0.0
     return cont
 
+def manual_convolution(a, G, error=False):
+    b = np.zeros((len(a), len(G.array)))
+    N = int(len(G.array) / 2. - 0.5)
+    M = len(G.array)
+    for i in np.arange(0, N):
+        b[(N-i):, i] = a[:-(N-i)]
+    b[:, N] = a
+    for i in np.arange(N+1, M):
+        b[:-(i-N), i] = a[(i-N):]
+    if error:
+        return np.dot(b**2, G.array**2)
+    return np.dot(b, G.array)
+
 
 def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
                    spec_res=5.6, thresh=5.):
@@ -794,19 +807,27 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
             xg = gridx[i, j]
             yg = gridy[i, j]
             sel = np.where(np.sqrt((dx-xg)**2 + (dy-yg)**2)<=4.0)[0]
-            weights = I(dx[sel]-xg, dy[sel]-yg)
+            weights = I(dx[sel]-xg, dy[sel]-yg) 
+            norm = weights.sum()
+            weights /= norm
             imask = ~(mask[sel])
             X = S[sel]*1.
             X[mask[sel]] = 0.0
             Y = err[sel]*1.
             Y[mask[sel]] = 0.0
-            origcube[i, j, :] = np.sum(weights[:, np.newaxis]*X*imask/Y**2, axis=0) / np.sum(weights[:, np.newaxis]**2 * imask / Y**2, axis=0)
-            origerrcube[i, j, :] = np.sqrt(np.sum(weights[:, np.newaxis]*imask, axis=0) / np.sum(weights[:, np.newaxis]**2 * imask / Y**2, axis=0))
-            w = np.sum(weights[:, np.newaxis] * imask, axis=0)
+            origcube[i, j, :] = (np.sum(weights[:, np.newaxis] * X * imask / Y**2,
+                                        axis=0) /
+                                 np.sum(weights[:, np.newaxis]**2 * imask / Y**2, 
+                                        axis=0)) 
+            origerrcube[i, j, :] = (np.sum(weights[:, np.newaxis] * imask,
+                                        axis=0) /
+                                 np.sum(weights[:, np.newaxis]**2 * imask / Y**2, 
+                                        axis=0)) 
+            w = np.sum(weights[:, np.newaxis] * imask, axis=0) * norm
             cube[i, j, w<0.7] = np.nan
             errcube[i, j, w<0.7] = np.nan
-            WS = convolve(origcube[i, j], G, preserve_nan=True, boundary='extend') / np.sum(G.array**2)
-            WE = np.sqrt(convolve(origerrcube[i, j]**2, G, preserve_nan=True, boundary='extend') / np.sum(G.array**2))
+            WS = manual_convolution(origcube[i, j], G)
+            WE = manual_convolution(origerrcube[i, j], G)
             cube[i, j, :] = WS
             errcube[i, j, :] = WE
     Y = cube / errcube
