@@ -2276,13 +2276,32 @@ if not args.no_masking:
 scispectra = safe_division(scispectra, ftf)
 errspectra = safe_division(errspectra, ftf)
 scirect = np.zeros((scispectra.shape[0], len(def_wave)))
-errorrect = np.zeros((scispectra.shape[0], len(def_wave)))
 
+log.info('Rectifying Spectra')
+indices1 = scirect * 0.
 for i in np.arange(scispectra.shape[0]):
     scirect[i] = np.interp(def_wave, wave_all[i], scispectra[i], left=np.nan,
                         right=np.nan)
-    errorrect[i] = np.sqrt(np.interp(def_wave, wave_all[i],
-                            errspectra[i]**2, left=np.nan, right=np.nan))
+    indices1[i] = np.searchsorted(wave_all[i], def_wave) + i * 1036
+indices1 = indices1.ravel()
+indices2 = indices1 - 1
+indices2[indices2 < 0] = 0
+indices1[indices1 == len(def_wave)] = len(def_wave) - 1
+x_var = (def_wave[np.newaxis, :] * np.ones((scirect.shape[0],1))).ravel()
+x_fix = wave_all.ravel()
+distances1 = np.abs(x_fix[indices1] - x_var)
+distances2 = np.abs(x_fix[indices2] - x_var)
+total_distance = distances1 + distances2
+weight1 = distances1 / total_distance
+weight2 = distances2 / total_distance
+errorrect = (weight2 * errspectra.ravel()[indices1]**2 +
+             weight1 * errspectra.ravel()[indices2]**2)
+errorrect = np.sqrt(errorrect)
+errorrect = np.reshape(errorrect, scirect.shape)
+errorrect[np.isnan(scirect)] = np.nan
+
+del total_distance, distances1, distances2, indices1, indices2, x_var, x_fix, weight1, weight2
+gc.collect()
 
 qual_check = np.abs(scirect)<1e-8
 scirect[qual_check] = np.nan
