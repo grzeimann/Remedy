@@ -753,7 +753,7 @@ def manual_convolution(a, G, error=False):
     for i in np.arange(N+1, M):
         b[:-(i-N), i] = a[(i-N):]
     if error:
-        return np.dot(b**2, G.array**2)
+        return np.sqrt(np.dot(b**2, G.array**2))
     return np.dot(b, G.array)
 
 
@@ -819,10 +819,10 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
                                         axis=0) /
                                  np.sum(weights[:, np.newaxis]**2 * imask / Y**2, 
                                         axis=0)) 
-            origerrcube[i, j, :] = (np.sum(weights[:, np.newaxis] * imask,
+            origerrcube[i, j, :] = np.sqrt((np.sum(weights[:, np.newaxis] * imask,
                                         axis=0) /
                                  np.sum(weights[:, np.newaxis]**2 * imask / Y**2, 
-                                        axis=0)) 
+                                        axis=0)) )
             w = np.sum(weights[:, np.newaxis] * imask, axis=0) * norm
             cube[i, j, w<0.7] = np.nan
             errcube[i, j, w<0.7] = np.nan
