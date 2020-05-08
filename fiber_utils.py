@@ -802,8 +802,8 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
             X[mask[sel]] = 0.0
             Y = err[sel]*1.
             Y[mask[sel]] = 0.0
-            origcube[i, j, :] = np.sum(weights[:, np.newaxis]*X*imask, axis=0) / np.sum(weights[:, np.newaxis]**2 * imask, axis=0)
-            origerrcube[i, j, :] = np.sqrt(np.sum(weights[:, np.newaxis]*Y**2*imask, axis=0) / np.sum(weights[:, np.newaxis]**2 * imask, axis=0))
+            origcube[i, j, :] = np.sum(weights[:, np.newaxis]*X*imask/Y**2, axis=0) / np.sum(weights[:, np.newaxis]**2 * imask / Y**2, axis=0)
+            origerrcube[i, j, :] = np.sqrt(np.sum(weights[:, np.newaxis]*imask, axis=0) / np.sum(weights[:, np.newaxis]**2 * imask / Y**2, axis=0))
             w = np.sum(weights[:, np.newaxis] * imask, axis=0)
             cube[i, j, w<0.7] = np.nan
             errcube[i, j, w<0.7] = np.nan
@@ -862,14 +862,14 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
             X[mask[sel]] = 0.0
             Y = err[sel]*1.
             Y[mask[sel]] = 0.0
-            spatial_spec = np.sum(weights[:, np.newaxis]*X*imask, axis=0) / np.sum(weights[:, np.newaxis]**2 * imask, axis=0)
-            spatial_spec_err = np.sqrt(np.sum(weights[:, np.newaxis]*Y**2*imask, axis=0) / np.sum(weights[:, np.newaxis]**2 * imask, axis=0))
+            spatial_spec = np.sum(weights[:, np.newaxis]*X*imask/Y**2, axis=0) / np.sum(weights[:, np.newaxis]**2 * imask / Y**2, axis=0)
+            spatial_spec_err = np.sqrt(np.sum(weights[:, np.newaxis]*imask, axis=0) / np.sum(weights[:, np.newaxis]**2 * imask / Y**2, axis=0))
             X = spec[sel]*1.
             X[mask[sel]] = 0.0
             Y = err[sel]*1.
             Y[mask[sel]] = 0.0
-            spatial_spec_or = np.sum(weights[:, np.newaxis]*X*imask, axis=0) / np.sum(weights[:, np.newaxis]**2 * imask, axis=0)
-            spatial_spec_err_or = np.sqrt(np.sum(weights[:, np.newaxis]*Y**2*imask, axis=0) / np.sum(weights[:, np.newaxis]**2 * imask, axis=0))
+            spatial_spec_or = np.sum(weights[:, np.newaxis]*X*imask/Y**2, axis=0) / np.sum(weights[:, np.newaxis]**2 * imask / Y**2, axis=0)
+            spatial_spec_err_or = np.sqrt(np.sum(weights[:, np.newaxis]*imask, axis=0) / np.sum(weights[:, np.newaxis]**2 * imask / Y**2, axis=0))
             wsel = np.where(np.abs(def_wave - L[i, 2]) <= 8.)[0]
             if (~np.isfinite(spatial_spec[wsel])).sum() > 0.:
                 L[i, :] = 0.0
