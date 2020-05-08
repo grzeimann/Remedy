@@ -2278,11 +2278,11 @@ errspectra = safe_division(errspectra, ftf)
 scirect = np.zeros((scispectra.shape[0], len(def_wave)))
 
 log.info('Rectifying Spectra')
-indices1 = scirect * 0.
+indices1 = np.ones(scirect.shape, dtype=int)
 for i in np.arange(scispectra.shape[0]):
     scirect[i] = np.interp(def_wave, wave_all[i], scispectra[i], left=np.nan,
                         right=np.nan)
-    indices1[i] = np.array(np.searchsorted(wave_all[i], def_wave) + i * 1036, dtype=int)
+    indices1[i] = np.searchsorted(wave_all[i], def_wave) + i * 1036
 indices1 = indices1.ravel()
 indices2 = indices1 - 1
 indices2[indices2 < 0] = 0
