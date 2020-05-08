@@ -2282,14 +2282,14 @@ indices1 = np.ones(scirect.shape, dtype=int)
 for i in np.arange(scispectra.shape[0]):
     scirect[i] = np.interp(def_wave, wave_all[i], scispectra[i], left=np.nan,
                         right=np.nan)
-    indices1[i] = np.searchsorted(wave_all[i], def_wave) + i * 1036
+    indices1[i] = np.searchsorted(wave_all[i], def_wave) + i * 1032
 
 x_var = (def_wave[np.newaxis, :] * np.ones((scirect.shape[0],1))).ravel()
 x_fix = wave_all.ravel()
 indices1 = indices1.ravel()
 indices2 = indices1 - 1
 indices2[indices2 < 0] = 0
-indices1[indices1 == len(x_fix)] = len(x_fix) - 1
+indices1[indices1 >= len(x_fix)] = len(x_fix) - 1
 
 distances1 = np.abs(x_fix[indices1] - x_var)
 distances2 = np.abs(x_fix[indices2] - x_var)
