@@ -820,8 +820,8 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
             origerrcube[i, j, :] = np.sqrt((np.sum(weights[:, np.newaxis]**2 * imask  / Y**2,
                                         axis=0)))
             w = np.sum(weights[:, np.newaxis] * imask, axis=0) * norm
-            cube[i, j, w<0.7] = np.nan
-            errcube[i, j, w<0.7] = np.nan
+            #cube[i, j, w<0.7] = np.nan
+            #errcube[i, j, w<0.7] = np.nan
             WS = manual_convolution(origcube[i, j], G)
             WE = manual_convolution(origerrcube[i, j], G, error=True)
             cube[i, j, :] = WS
