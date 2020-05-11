@@ -825,7 +825,7 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
             WS = manual_convolution(origcube[i, j], G)
             WE = manual_convolution(origerrcube[i, j], G, error=True)
             WS = origcube[i, j]
-            WE = origerrcube
+            WE = origerrcube[i, j]
             cube[i, j, :] = WS
             errcube[i, j, :] = WE
     Y = cube / errcube
