@@ -817,7 +817,7 @@ def detect_sources(dx, dy, spec, err, mask, def_wave, psf, ran, scale, log,
             Y[mask[sel]] = 0.0
             origcube[i, j, :] = np.sum(weights[:, np.newaxis] * X * imask / Y**2,
                                         axis=0) 
-            origerrcube[i, j, :] = np.sqrt((np.sum(weights[:, np.newaxis]**2 * imask,
+            origerrcube[i, j, :] = np.sqrt((np.sum(weights[:, np.newaxis]**2 * imask  / Y**2,
                                         axis=0)))
             w = np.sum(weights[:, np.newaxis] * imask, axis=0) * norm
             cube[i, j, w<0.7] = np.nan
