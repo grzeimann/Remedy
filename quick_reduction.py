@@ -1995,6 +1995,7 @@ def get_skysub(S, sky):
     skyfibers = get_sky_fibers(y)
     intermediate[(intermediate<ll) + (intermediate>hl)] = np.nan
     intermediate[~skyfibers] = np.nan
+    orig = intermediate * 1.
     log.info('Number of good fibers for sky subtraction: %i' %
              (skyfibers).sum())
     for k in np.arange(S.shape[1]):
@@ -2003,7 +2004,7 @@ def get_skysub(S, sky):
     if good_cols.sum() > 60:
         pca = PCA(n_components=15)
         pca.fit_transform(intermediate[:, good_cols].swapaxes(0, 1))
-        res = get_residual_map(intermediate, pca)
+        res = get_residual_map(orig, pca)
         skysub = S[goodfibers] - sky - dummy - res - back[goodfibers]
         bl, bm = biweight(skysub, calc_std=True)
         skysub[skysub < (-4. * bm)] = np.nan
@@ -2025,8 +2026,11 @@ def get_residual_map(data, pca):
     res = data * 0.
     for i in np.arange(data.shape[1]):
         sel = np.isfinite(data[:, i])
-        coeff = np.dot(data[sel, i], pca.components_.T[sel])
-        model = np.dot(coeff, pca.components_)
+        if sel.sum() > data.shape[0]/2.:
+            coeff = np.dot(data[sel, i], pca.components_.T[sel])
+            model = np.dot(coeff, pca.components_)
+        else: 
+            model = np.zeros((data.shape[0],))
         res[:, i] = model
     return res
 
