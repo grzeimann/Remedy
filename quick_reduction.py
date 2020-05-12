@@ -875,8 +875,6 @@ def get_mask(scispectra, C1, ftf, res, nexp):
         idx = int(k / 4)
         ampid = amps[k % 4]
         bad_columns = np.sum(mask[ll:hl], axis=0) > (0.2 * nexp * 112)
-        log.info('%03d%s number of columns marked bad: %i' %
-                 (allifus[idx], ampid, bad_columns.sum()))
         mask[ll:hl, bad_columns] = True
         mfrac = ((mask[ll:hl].sum()*1.) / 
                  (mask[ll:hl].shape[0]*mask[ll:hl].shape[1])*1.)
