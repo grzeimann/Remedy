@@ -215,6 +215,14 @@ def get_ra_dec_from_header(tfile, fn):
     try:
         ra = a[0].header['TRAJCRA'] * 15.
         dec = a[0].header['TRAJCDEC'] * 1.
+        ra1 = a[0].header['TRAJRA'] * 15.
+        dec1 = a[0].header['TRAJDEC'] * 1.
+        dra = (ra - ra1)*np.cos(dec*np.pi/180.)*3600.
+        ddec = (dec - dec1)*3600.
+        d = np.sqrt(dra**2+ddec**2)
+        if d > 25.:
+            ra = ra1
+            dec = dec1
     except:
         ra = a[0].header['TRAJRA'] * 15.
         dec = a[0].header['TRAJDEC'] * 1.
