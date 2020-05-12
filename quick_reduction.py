@@ -2002,7 +2002,7 @@ def get_skysub(S, sky):
     skysub = np.nan * S
     skysub[goodfibers] = S[goodfibers] - sky - dummy - intermediate
     totsky = np.nan * S
-    totsky = sky + dummy + intermediate
+    totsky[goodfibers] = sky + dummy + intermediate
 #    for k in np.arange(S.shape[1]):
 #        intermediate[:, k] = interpolate_replace_nans(intermediate[:, k], G1)
 #    good_cols = np.isnan(intermediate).sum(axis=0) < 1.
