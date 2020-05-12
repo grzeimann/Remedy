@@ -753,7 +753,7 @@ def manual_convolution(a, G, error=False):
     for i in np.arange(N+1, M):
         b[:-(i-N), i] = a[(i-N):]
     if error:
-        return np.sqrt(np.nansum(b**2 * G.array, axis=1))
+        return np.sqrt(np.nansum(b**2 * G.array**2, axis=1))
     return np.nansum(b * G.array, axis=1)
 
 
