@@ -2402,6 +2402,9 @@ for i in np.arange(namps):
         errspectra[ll:hl] *= error_cor[np.newaxis, :]
         log.info('Average Error Correction for amp %i: %0.2f' %
                  (i+1, np.nanmedian(error_cor)))
+        if np.abs(np.nanmedian(error_cor) - 1.) > 0.1:
+            errspectra[ll:hl] = np.nan
+            scispectra[ll:hl] = np.nan
 
 # =============================================================================
 # Calculate ratio of skies from multiple exposures. Normalization factor??
@@ -2622,6 +2625,8 @@ for i, ui in enumerate(allifus):
         fx, fy = (l[0]*scale + ran[0] + ifux,
                   l[1]*scale + ran[2] + ifuy)
         sra, sdec = A.tp.wcs_pix2world(fx, fy, 1)
+        if np.all(k[:, 0] == 0.):
+            continue
         detect_info.append([ui, ui_dict[ifuslot][0], ui_dict[ifuslot][1], l[0], l[1], fx,
                             fy, sra, sdec, l[2], l[3], l[4], l[5], l[6],
                             k[:, 0], k[:, 1], k[:, 2]])
