@@ -2390,7 +2390,7 @@ for k, _V in enumerate(intm):
 # =============================================================================
 namps = int(len(scispectra) / 112. / nexp)
 for i in np.arange(namps):
-    _V = intm[i]
+    _V = intm[int(i*nexp)]
     specid, ifuslot, ifuid, amp, expn = _V[2].split('_')
     ll = int(i * (112*nexp))
     hl = int((i+1) * (112*nexp))
