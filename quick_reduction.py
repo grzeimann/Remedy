@@ -1985,7 +1985,9 @@ def get_skysub(S, sky):
     dummy[~skyfibers] = np.nan
     G = Gaussian2DKernel(7.)
     G1 = Gaussian1DKernel(7.)
-    dummy = convolve(dummy, G, boundary='extend')
+    for i in np.arange(4):
+        dummy[i*112:(i+1)*112] = convolve(dummy[i*112:(i+1)*112], G,
+             boundary='extend')
     while np.isnan(dummy).sum():
         dummy = interpolate_replace_nans(dummy, G)
     intermediate = S[goodfibers] - sky - dummy - back[goodfibers]
