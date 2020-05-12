@@ -2628,8 +2628,8 @@ for i, ui in enumerate(allifus):
     if ifuslot == '047':
         fits.PrimaryHDU(sources[0]/sources[1]).writeto('test_047.fits', overwrite=True)
     for l, k in zip(sources[4], sources[5]):
-        fx, fy = (l[0]*scale + ran[0] + ifux,
-                  l[1]*scale + ran[2] + ifuy)
+        fx, fy = (l[0] + ifux,
+                  l[1] + ifuy)
         sra, sdec = A.tp.wcs_pix2world(fx, fy, 1)
         if np.all(k[:, 0] == 0.):
             continue
