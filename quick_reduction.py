@@ -1972,7 +1972,7 @@ def get_skysub(S, sky):
         totsky = np.nan * S
         return skysub, totsky
     dummy = S - sky
-    y = biweight(dummy, axis=1)
+    y = biweight(dummy[:, 400:600], axis=1)
     skyfibers = get_sky_fibers(y)
     hl = np.nanpercentile(dummy, 98, axis=0)
     ll = np.nanpercentile(dummy, 2, axis=0)
