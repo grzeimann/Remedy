@@ -2002,6 +2002,7 @@ def get_skysub(S, sky):
         pca = PCA(n_components=15)
         pca.fit_transform(intermediate[:, good_cols].swapaxes(0, 1))
         res = get_residual_map(orig, pca)
+        res = 0.
         skysub = S[goodfibers] - sky - dummy - res
         bl, bm = biweight(skysub, calc_std=True)
         skysub[skysub < (-4. * bm)] = np.nan
