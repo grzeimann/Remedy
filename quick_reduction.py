@@ -1972,25 +1972,20 @@ def get_skysub(S, sky):
         totsky = np.nan * S
         return skysub, totsky
     dummy = S - sky
-    back = dummy * 0.
-    for i in np.arange(4):
-        back[i*112:(i+1)*112] += biweight(dummy[i*112:(i+1)*112])
-    dummy -= back
-    dummy = dummy[goodfibers]
     y = biweight(dummy, axis=1)
     skyfibers = get_sky_fibers(y)
-    hl = np.nanpercentile(dummy, 98)
-    ll = np.nanpercentile(dummy, 2)
-    dummy[(dummy<ll) + (dummy>hl)] = np.nan
+    hl = np.nanpercentile(dummy, 98, axis=0)
+    ll = np.nanpercentile(dummy, 2, axis=0)
+    dummy[(dummy<ll[np.newaxis, :]) + (dummy>hl[np.newaxis, :])] = np.nan
     dummy[~skyfibers] = np.nan
     G = Gaussian2DKernel(7.)
-    G1 = Gaussian1DKernel(7.)
     for i in np.arange(4):
-        dummy[i*112:(i+1)*112] = convolve(dummy[i*112:(i+1)*112], G,
-             boundary='extend')
-    while np.isnan(dummy).sum():
-        dummy = interpolate_replace_nans(dummy, G)
-    intermediate = S[goodfibers] - sky - dummy - back[goodfibers]
+        if goodfibers[i*112:(i+1)*112].sum() > 15:
+            dummy[i*112:(i+1)*112] = convolve(dummy[i*112:(i+1)*112], G,
+                                              boundary='extend')
+    dummy = dummy[goodfibers]
+    G1 = Gaussian1DKernel(7.)
+    intermediate = S[goodfibers] - sky - dummy
     hl = np.nanpercentile(intermediate, 99)
     ll = np.nanpercentile(intermediate, 1)
     y = biweight(intermediate, axis=1)
@@ -2007,10 +2002,10 @@ def get_skysub(S, sky):
         pca = PCA(n_components=15)
         pca.fit_transform(intermediate[:, good_cols].swapaxes(0, 1))
         res = get_residual_map(orig, pca)
-        skysub = S[goodfibers] - sky - dummy - res - back[goodfibers]
+        skysub = S[goodfibers] - sky - dummy - res
         bl, bm = biweight(skysub, calc_std=True)
         skysub[skysub < (-4. * bm)] = np.nan
-        totsky = sky + dummy + res + back[goodfibers]
+        totsky = sky + dummy + res
         skysub1 = np.nan * S
         skysub1[goodfibers] = skysub
         totsky1 = np.nan * S
