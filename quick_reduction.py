@@ -1974,15 +1974,16 @@ def get_skysub(S, sky):
     dummy = S - sky
     y = biweight(dummy[:, 400:600], axis=1)
     skyfibers = get_sky_fibers(y)
+    backfibers = skyfibers * goodfibers
     log.info('Number of good fibers for sky subtraction for Round 1: %i' %
-             (skyfibers).sum())
+             (backfibers).sum())
     hl = np.nanpercentile(dummy, 98, axis=0)
     ll = np.nanpercentile(dummy, 2, axis=0)
     dummy[(dummy<ll[np.newaxis, :]) + (dummy>hl[np.newaxis, :])] = np.nan
     dummy[~skyfibers] = np.nan
     G = Gaussian2DKernel(7.)
     for i in np.arange(4):
-        if goodfibers[i*112:(i+1)*112].sum() > 15:
+        if backfibers[i*112:(i+1)*112].sum() > 15:
             dummy[i*112:(i+1)*112] = convolve(dummy[i*112:(i+1)*112], G,
                                               boundary='extend')
     dummy = dummy[goodfibers]
@@ -1992,12 +1993,13 @@ def get_skysub(S, sky):
     ll = np.nanpercentile(intermediate, 2, axis=0)
     y = biweight(intermediate[:, 400:600], axis=1)
     skyfibers = get_sky_fibers(y)
+    backfibers = skyfibers * goodfibers
     log.info('Number of good fibers for sky subtraction for Round 2: %i' %
-             (skyfibers).sum())
+             (backfibers).sum())
     intermediate[(intermediate<ll[np.newaxis,:]) + (intermediate>hl[np.newaxis,:])] = np.nan
     intermediate[~skyfibers] = np.nan
     for i in np.arange(4):
-        if goodfibers[i*112:(i+1)*112].sum() > 15:
+        if backfibers[i*112:(i+1)*112].sum() > 15:
             intermediate[i*112:(i+1)*112] = convolve(intermediate[i*112:(i+1)*112], G,
                                               boundary='extend')
     orig = intermediate * 1.
