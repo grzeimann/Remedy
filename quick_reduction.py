@@ -1993,10 +1993,9 @@ def get_skysub(S, sky):
         intermediate[:, k] = interpolate_replace_nans(intermediate[:, k], G1)
     good_cols = np.isnan(intermediate).sum(axis=0) < 1.
     if good_cols.sum() > 60:
-        pca = PCA(n_components=55)
+        pca = PCA(n_components=15)
         pca.fit_transform(intermediate[:, good_cols].swapaxes(0, 1))
         res = get_residual_map(intermediate, pca)
-        res = dummy * 0.
         skysub = S[goodfibers] - sky - dummy - res - back[goodfibers]
         bl, bm = biweight(skysub, calc_std=True)
         skysub[skysub < (-4. * bm)] = np.nan
@@ -2597,6 +2596,7 @@ E.ADRdec = E.ADRdec + np.interp(def_wave, nwave,
 othersel, colors, offset, fwhm_virus = plot_photometry(GMag, stats, vmin=seeing_array.min(),
                                    vmax=seeing_array.max(),
                                    fwhm_guider=np.median(gseeing))
+
 plot_astrometry(f, A, np.where(objsel)[0], colors)
 
 norm = 1e-29 * 2.99792e18 / def_wave**2 * 1e17
