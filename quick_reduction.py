@@ -2390,6 +2390,8 @@ for k, _V in enumerate(intm):
 # =============================================================================
 namps = int(len(scispectra) / 112. / nexp)
 for i in np.arange(namps):
+    _V = intm[i]
+    specid, ifuslot, ifuid, amp, expn = _V[2].split('_')
     ll = int(i * (112*nexp))
     hl = int((i+1) * (112*nexp))
     y = biweight(scispectra[ll:hl, 800:900], axis=1)
@@ -2400,9 +2402,11 @@ for i in np.arange(namps):
         back_val, error_cor = biweight(x1[skyfibers] / x2[skyfibers], axis=0,
                                        calc_std=True)
         errspectra[ll:hl] *= error_cor[np.newaxis, :]
-        log.info('Average Error Correction for amp %i: %0.2f' %
-                 (i+1, np.nanmedian(error_cor)))
+        log.info('Average Error Correction for %s%s: %0.2f' %
+                 (ifuslot, amp, np.nanmedian(error_cor)))
         if np.abs(np.nanmedian(error_cor) - 1.) > 0.1:
+            log.info('Error too large.  Masking amp %s%s' %
+                     (ifuslot, amp))
             errspectra[ll:hl] = np.nan
             scispectra[ll:hl] = np.nan
 
@@ -2621,6 +2625,8 @@ for i, ui in enumerate(allifus):
     ifux, ifuy = (ifu.y, ifu.x) 
     sources = detect_sources(P[:, 0], P[:, 1], data, error, M, def_wave, psf,
                              ran, scale, log, spec_res=5.6, thresh=5.)
+    if ifuslot == '047':
+        fits.PrimaryHDU(sources[0]).writeto('test_047.fits', overwrite=True)
     for l, k in zip(sources[4], sources[5]):
         fx, fy = (l[0]*scale + ran[0] + ifux,
                   l[1]*scale + ran[2] + ifuy)
