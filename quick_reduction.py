@@ -1986,9 +1986,8 @@ def get_skysub(S, sky):
         if backfibers[i*112:(i+1)*112].sum() > 15:
             dummy[i*112:(i+1)*112] = convolve(dummy[i*112:(i+1)*112], G,
                                               boundary='extend')
-    dummy = dummy[goodfibers]
     G1 = Gaussian1DKernel(7.)
-    intermediate = S[goodfibers] - sky - dummy
+    intermediate = S - sky - dummy
     hl = np.nanpercentile(intermediate, 98, axis=0)
     ll = np.nanpercentile(intermediate, 2, axis=0)
     y = biweight(intermediate[:, 400:600], axis=1)
@@ -2003,10 +2002,8 @@ def get_skysub(S, sky):
             intermediate[i*112:(i+1)*112] = convolve(intermediate[i*112:(i+1)*112], G,
                                               boundary='extend')
     orig = intermediate * 1.
-    skysub = np.nan * S
-    skysub[goodfibers] = S[goodfibers] - sky - dummy - intermediate
-    totsky = np.nan * S
-    totsky[goodfibers] = sky + dummy + intermediate
+    skysub =  S - sky - dummy - intermediate
+    totsky = sky + dummy + intermediate
     log.info('Sky Subtraction Successful')
 #    for k in np.arange(S.shape[1]):
 #        intermediate[:, k] = interpolate_replace_nans(intermediate[:, k], G1)
