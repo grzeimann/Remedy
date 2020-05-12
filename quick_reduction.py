@@ -2610,7 +2610,7 @@ plot_astrometry(f, A, np.where(objsel)[0], colors)
 
 norm = 1e-29 * 2.99792e18 / def_wave**2 * 1e17
 if np.isfinite(offset):
-    log.info('Offset multiplication: %0.2f % offset')
+    log.info('Offset multiplication: %0.2f' % offset)
     norm *= offset
 scispectra[:] *= norm
 errspectra[:] *= norm
