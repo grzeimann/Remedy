@@ -251,7 +251,8 @@ def build_master_frame(file_list, tarinfo_list, ifuslot, amp, kind, log,
     else:
         big_array = np.array([v[0] for v in bia_list])
         masterbias = np.median(big_array, axis=0)
-        masterstd = np.std(big_array, axis=0)
+        masterstd = np.median(np.abs(big_array - masterim[np.newaxis, :, :]), axis=0)
+
 
     log.info('Number of frames for %s: %i' % (kind, len(big_array)))
     d1 = bia_list[0][3]
@@ -342,9 +343,9 @@ for ifuslot_key in ifuslots:
                 mastersci = _info[0] * 1.
             if kind == 'zro':
                 masterbias = _info[0] * 1.
+                readnoise = biweight(_info[1])
             if kind == 'drk':
                 masterdark = _info[0] * 1.
-                readnoise = biweight(_info[1])
                 args.log.info('Readnoise for %s %s: %0.2f' %
                               (ifuslot_key, amp, readnoise))
                 args.log.info('Getting pixel mask %03d %s' %
