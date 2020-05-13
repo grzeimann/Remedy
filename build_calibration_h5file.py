@@ -362,7 +362,7 @@ for ifuslot_key in ifuslots:
                 try:
                     trace, ref = get_trace(_info[0], specid, ifuSlot, ifuid,
                                            amp, _info[2][:8], dirname)
-                    twi = get_spectra(_info[0], tra2ce)
+                    twi = get_spectra(_info[0], trace)
                 except:
                     args.log.error('Trace Failed for %s %s.' %
                                        (ifuslot_key, amp))
