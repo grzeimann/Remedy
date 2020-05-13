@@ -2423,7 +2423,7 @@ for i in np.arange(namps):
         log.info('Average Error Correction for %s%s: %0.2f' %
                  (ifuslot, amp, np.nanmedian(error_cor)))
         if np.abs(np.nanmedian(error_cor) - 1.) > 0.2:
-            log.info('Error greater than 20% off expectation so we mask amp %s%s' %
+            log.info('Error greater than 20 percent off expectation so we mask amp %s%s' %
                      (ifuslot, amp))
             errspectra[ll:hl] = np.nan
             scispectra[ll:hl] = np.nan
