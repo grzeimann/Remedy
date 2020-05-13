@@ -1893,8 +1893,8 @@ def plot_astrometry(f, A, sel, colors):
 def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
                     fwhm_virus=None):
     plt.figure(figsize=(7, 6))
-    guess_sel = (np.abs(GMag[:, 0] - 17.) < 2. *
-                 np.abs(stats[:, 1]-fwhm_guider)<0.2)
+    guess_sel = ((np.abs(GMag[:, 0] - 17.) < 2.) *
+                 (np.abs(stats[:, 1]-fwhm_guider)<0.2))
     if guess_sel.sum() > 3:
         isel = guess_sel
     else:
