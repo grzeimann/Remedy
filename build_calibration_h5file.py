@@ -251,7 +251,9 @@ def build_master_frame(file_list, tarinfo_list, ifuslot, amp, kind, log,
     else:
         big_array = np.array([v[0] for v in bia_list])
         masterbias = np.median(big_array, axis=0)
-        masterstd = np.median(np.abs(big_array - masterbias[np.newaxis, :, :]), axis=0)
+        masterstd = (np.median(np.abs(big_array - 
+                                     masterbias[np.newaxis, :, :]), axis=0) *
+                     1.4826)
 
 
     log.info('Number of frames for %s: %i' % (kind, len(big_array)))
@@ -360,7 +362,7 @@ for ifuslot_key in ifuslots:
                 try:
                     trace, ref = get_trace(_info[0], specid, ifuSlot, ifuid,
                                            amp, _info[2][:8], dirname)
-                    twi = get_spectra(_info[0], trace)
+                    twi = get_spectra(_info[0], tra2ce)
                 except:
                     args.log.error('Trace Failed for %s %s.' %
                                        (ifuslot_key, amp))
