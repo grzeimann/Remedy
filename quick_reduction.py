@@ -2422,8 +2422,8 @@ for i in np.arange(namps):
         errspectra[ll:hl] *= error_cor[np.newaxis, :]
         log.info('Average Error Correction for %s%s: %0.2f' %
                  (ifuslot, amp, np.nanmedian(error_cor)))
-        if np.abs(np.nanmedian(error_cor) - 1.) > 0.1:
-            log.info('Error too large.  Masking amp %s%s' %
+        if np.abs(np.nanmedian(error_cor) - 1.) > 0.2:
+            log.info('Error greater than 20% off expectation so we mask amp %s%s' %
                      (ifuslot, amp))
             errspectra[ll:hl] = np.nan
             scispectra[ll:hl] = np.nan
