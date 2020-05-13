@@ -2145,7 +2145,19 @@ class Info(IsDescription):
      ifuid  = Int32Col()   # float  (single-precision)
      amp  = StringCol(2)
      exp = Int32Col()
-     
+
+class Survey(IsDescription):
+     ra  = Float32Col()    # float  (single-precision)
+     dec  = Float32Col()    # float  (single-precision)
+     pa  = Float32Col()    # float  (single-precision)
+     rot  = Float32Col()    # float  (single-precision)
+     millum  = Float32Col()    # float  (single-precision)
+     throughput  = Float32Col()    # float  (single-precision)
+     fwhm  = Float32Col()   # float  (single-precision)
+     fwhmv  = Float32Col()   # float  (single-precision)
+     name  = StringCol(25)
+     exp = Int32Col()
+
 class Detections(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
      dec  = Float32Col()    # float  (single-precision)
@@ -2442,11 +2454,15 @@ for i in np.arange(1, nexp):
 # =============================================================================
 gratio = np.ones((nexp,))
 gseeing = np.ones((nexp,))
+millum = np.ones((nexp,))
+transpar = np.ones((nexp,))
 for i in np.arange(1, nexp+1):
-    millum, transpar, iq = get_mirror_illumination_guider(fns[i-1], ExP[i-1])
+    mill, trans, iq = get_mirror_illumination_guider(fns[i-1], ExP[i-1])
     log.info('Mirror Illumination, Transparency, and seeing for exposure %i'
-             ': %0.2f, %0.2f, %0.2f' % (i, millum/1e4, transpar, iq))
-    gratio[i-1] = (millum * transpar) /  5e5
+             ': %0.2f, %0.2f, %0.2f' % (i, mill/1e4, trans, iq))
+    gratio[i-1] = (mill * trans) /  5e5
+    millum[i-1] = mill
+    transpar[i-1] = trans
     gseeing[i-1] = iq
 
 for i in np.arange(0, nexp):
@@ -2694,6 +2710,34 @@ table.flush()
 
 log.info('Finished writing Fibers')
 
+if tfile is not None:
+    t = tarfile.open(tfile, 'r')
+    a = fits.open(t.extractfile(fn))
+    t.close()
+else:
+    a = fits.open(fn)
+
+he = a[0].header
+
+table = h5spec.create_table(h5spec.root, 'Survey', Survey, 
+                            "Survey Information")
+specrow = table.row
+for i in np.arange(nexp):
+    specrow['ra'] = A.ra0
+    specrow['dec'] = A.dec0
+    specrow['rot'] = A.rot
+    specrow['pa'] = pa
+    specrow['millum'] = millum[i]
+    specrow['throughput'] = transpar[i]    # float  (single-precision)
+    specrow['fwhm']  = gseeing[i]   # float  (single-precision)
+    specrow['fwhmv']  = fwhm_virus   # float  (single-precision)
+    specrow['name']  = he['OBJECT'].ljust(25)
+    specrow['exp'] = i+1
+    specrow.append()
+table.flush()
+
+log.info('Finished writing Fibers')
+
 
 table = h5spec.create_table(h5spec.root, 'Info', Info, 
                             "Fiber Information")
@@ -2794,14 +2838,7 @@ else:
     ecubename = ('%s_%07d_%03d_error_cube.fits' %
                 (args.date, args.observation, args.ifuslot))
 
-if tfile is not None:
-    t = tarfile.open(tfile, 'r')
-    a = fits.open(t.extractfile(fn))
-    t.close()
-else:
-    a = fits.open(fn)
 
-he = a[0].header
 
 ## Making data cube
 log.info('Making Cube')
