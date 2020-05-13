@@ -251,7 +251,7 @@ def build_master_frame(file_list, tarinfo_list, ifuslot, amp, kind, log,
     else:
         big_array = np.array([v[0] for v in bia_list])
         masterbias = np.median(big_array, axis=0)
-        masterstd = np.median(np.abs(big_array - masterim[np.newaxis, :, :]), axis=0)
+        masterstd = np.median(np.abs(big_array - masterbias[np.newaxis, :, :]), axis=0)
 
 
     log.info('Number of frames for %s: %i' % (kind, len(big_array)))
