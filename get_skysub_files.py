@@ -23,4 +23,4 @@ inds = np.arange(S.shape[0])
 for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
     fits.PrimaryHDU(np.array(S[sel], dtype='float32')).writeto(
-            '%s_skysub_exp%02d.fits' % (filename, k+1), overwrite=True)
+            '%s_skysub_exp%02d.fits' % (filename[:-3], k+1), overwrite=True)
