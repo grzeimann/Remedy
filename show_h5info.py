@@ -12,5 +12,5 @@ import sys
 filename = sys.argv[1]
 
 t = tables.open_file(filename)
-
+print(t.root.Survey.colnames)
 print(t.root.Survey[:])
