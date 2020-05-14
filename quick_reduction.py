@@ -2157,6 +2157,7 @@ class Survey(IsDescription):
      fwhmv  = Float32Col()   # float  (single-precision)
      name  = StringCol(25)
      exp = Int32Col()
+     offset  = Float32Col()    # float  (single-precision)
 
 class Detections(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
@@ -2733,6 +2734,7 @@ for i in np.arange(nexp):
     specrow['fwhmv']  = fwhm_virus   # float  (single-precision)
     specrow['name']  = he['OBJECT'].ljust(25)
     specrow['exp'] = i+1
+    specrow['offset'] = offset
     specrow.append()
 table.flush()
 
