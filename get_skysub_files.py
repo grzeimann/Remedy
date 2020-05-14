@@ -16,9 +16,15 @@ filename = sys.argv[1]
 t = tables.open_file(filename)
 specid = t.root.Info.cols.specid[:]
 spectra = t.root.Fibers.cols.spectrum[:] * 2.
-inds = np.argsort(specid)
+us = np.sort(np.unique(specid))
+S = spectra * 0.
+cnt = 0
+for s in us:
+    sel = np.where(specid == s)[0]
+    n = len(sel)
+    S[cnt:cnt+n] = spectra[sel]
+    cnt += n
 nexp = len(t.root.Survey)
-S = spectra[inds]
 inds = np.arange(S.shape[0])
 for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
