@@ -2847,8 +2847,8 @@ log.info('Making Cube')
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
     zgrid, egrid, xgrid, ygrid = make_cube(pos[:448*nexp, 0], pos[:448*nexp, 1],
-                                           scispectra[:448*nexp]*1e17*norm, 
-                                           errspectra[:448*nexp]*1e17*norm,
+                                           scispectra[:448*nexp]*norm, 
+                                           errspectra[:448*nexp]*norm,
                                            ADRx, 0. * def_wave, scale, ran)
     crx = np.abs(ran[0]) / scale + 1.
     cry = np.abs(ran[2]) / scale + 1.
