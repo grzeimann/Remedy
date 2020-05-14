@@ -13,4 +13,4 @@ filename = sys.argv[1]
 
 t = tables.open_file(filename)
 
-print(t.root.Survey)
+print(t.root.Survey.cols)
