@@ -1,4 +1,4 @@
-# Remedy v0.1 (Quick VIRUS Reduction Pipeline)
+# Remedy (Quick VIRUS Reduction Pipeline)
 
 ## Table of Contents
 [Overview](https://github.com/grzeimann/Remedy/blob/master/README.md#Overview)
