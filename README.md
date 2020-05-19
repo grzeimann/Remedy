@@ -1,4 +1,4 @@
-# Remedy (Quick VIRUS Reduction Pipeline)
+# Remedy (VIRUS Reduction Pipeline)
 
 ## Table of Contents
 [Overview](https://github.com/grzeimann/Remedy/blob/master/README.md#Overview)
@@ -12,7 +12,7 @@
 [Examples](https://github.com/grzeimann/Remedy/blob/master/README.md#Examples)
 
 ## Overview
-Remedy is a quick reduction tool for VIRUS which reduces a target IFU or all IFUs in a given observation.  The pipeline should run quickly (~6-10 min) and produce an H5 file of flux-calibrated spectra for each fiber, calibration data for each fiber, extracted bright continuum sources in the field (Pan-STARRS sources), a catalog of emission-line detected sources, and a datacube of the target ifu.  The datacube can be viewed with QFitsView (http://www.mpe.mpg.de/~ott/QFitsView/). 
+Remedy is a reduction tool for VIRUS which reduces a target IFU or all IFUs in a given observation.  The pipeline should run effeciently (~30-40 min) and produce an H5 file of flux-calibrated spectra for each fiber, calibration data for each fiber, extracted bright continuum sources in the field (Pan-STARRS sources), a catalog of emission-line detected sources, and a datacube of the target ifu.  The datacube can be viewed with QFitsView (http://www.mpe.mpg.de/~ott/QFitsView/). 
 
 ## Running Remedy
 ### Download and Install
