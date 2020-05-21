@@ -1738,18 +1738,19 @@ def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-0.3,
                          horizontalalignment='left',
                          verticalalignment='top',
                          weight='bold')
-            if j == 1:
-                name = '%01d' % i
-                ax = plt.subplot(rows, cols, i*cols+j)
-                ax.set_xticks([])
-                ax.set_yticks([])
-                if (((i==0 or i==1 or i==2 or i==7 or i==8 or i==9) and j==1) or
+            if (((i==0 or i==1 or i==2 or i==7 or i==8 or i==9) and j==1) or
                     ((i==0 or i==1 or i==2 or i==7 or i==8 or i==9) and j==10) or
                     ((i==0 or i==9) and j==2) or 
                     ((i==0 or i==9) and j==9) or
                     ((i==4 or i==5 or i==6) and j==5) or
                     ((i==4 or i==5 or i==6) and j==6)):
-                    ax.axis('off')
+                ax.axis('off')
+            if j == 1:
+                name = '%01d' % i
+                ax = plt.subplot(rows, cols, i*cols+j)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                
                 pos1 = ax.get_position()
                 plt.text(pos1.x0-0.01, pos1.y0+0.015, name,
                          transform=fig.transFigure,
