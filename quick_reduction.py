@@ -1744,6 +1744,9 @@ def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-0.3,
                     ((i==0 or i==9) and j==9) or
                     ((i==4 or i==5 or i==6) and j==5) or
                     ((i==4 or i==5 or i==6) and j==6)):
+                ax = plt.subplot(rows, cols, i*cols+j)
+                ax.set_xticks([])
+                ax.set_yticks([])
                 ax.axis('off')
             if j == 1:
                 name = '%01d' % i
