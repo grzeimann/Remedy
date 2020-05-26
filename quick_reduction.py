@@ -2119,11 +2119,9 @@ h5spec = open_file(name, mode="w", title="%s Spectra" % name[:-3])
 class Fibers(IsDescription):
      spectrum  = Float32Col((1036,))    # float  (single-precision)
      error  = Float32Col((1036,))    # float  (single-precision)
-     sky  = Float32Col((1036,))    # float  (single-precision)
-     sci  = Float32Col((1036,))    # float  (single-precision)
-
+     fiber_to_fiber  = Float32Col((1036,))    # float  (single-precision)
      #chi2spec = Float32Col((1036,))
-     #fiber_to_fiber  = Float32Col((1036,))    # float  (single-precision)
+     
      #fiber_to_fiber_adj  = Float32Col((1036,))    # float  (single-precision)     
 
 class Cals(IsDescription):
@@ -2312,11 +2310,14 @@ if not args.no_masking:
 scispectra = safe_division(scispectra, ftf)
 errspectra = safe_division(errspectra, ftf)
 scirect = np.zeros((scispectra.shape[0], len(def_wave)))
+ftfrect = np.zeros((scispectra.shape[0], len(def_wave)))
 
 log.info('Rectifying Spectra')
 indices1 = np.ones(scirect.shape, dtype=int)
 for i in np.arange(scispectra.shape[0]):
     scirect[i] = np.interp(def_wave, wave_all[i], scispectra[i], left=np.nan,
+                        right=np.nan)
+    ftfrect[i] = np.interp(def_wave, wave_all[i], ftf[i], left=np.nan,
                         right=np.nan)
     indices1[i] = np.searchsorted(wave_all[i], def_wave) + i * 1032
 
@@ -2710,7 +2711,7 @@ specrow = table.row
 for i in np.arange(len(scispectra)):
     specrow['spectrum'] = scispectra[i]
     specrow['error'] = errspectra[i]
-    specrow['sci'] = scirect[i]
+    specrow['fibertofiber'] = ftfrect[i]
     specrow.append()
 table.flush()
 
