@@ -2711,7 +2711,7 @@ specrow = table.row
 for i in np.arange(len(scispectra)):
     specrow['spectrum'] = scispectra[i]
     specrow['error'] = errspectra[i]
-    specrow['fibertofiber'] = ftfrect[i]
+    specrow['fiber_to_fiber'] = ftfrect[i]
     specrow.append()
 table.flush()
 
