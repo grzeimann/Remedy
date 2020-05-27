@@ -2310,7 +2310,7 @@ inds = np.arange(scispectra.shape[0])
 mask = get_mask(scispectra, C1, ftf, res, nexp)
 mask[:, :-1] += mask[:, 1:]
 mask[:, 1:] += mask[:, :-1]
-if not args.no_masking:
+if (not args.no_masking) or True:
     scispectra[mask] = np.nan
     errspectra[mask] = np.nan
 scispectra = safe_division(scispectra, ftf)
