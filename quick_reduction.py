@@ -129,12 +129,16 @@ parser.add_argument("-s", "--simulate",
                     help='''Simulate source''',
                     action="count", default=0)
 
-parser.add_argument("-la", "--limit_adj",
-                    help='''Limit Adjustment''',
-                    action="count", default=0)
-
 parser.add_argument("-nm", "--no_masking",
                     help='''No Masking Employed''',
+                    action="count", default=0)
+
+parser.add_argument("-nd", "--no_detect",
+                    help='''No Detection''',
+                    action="count", default=0)
+
+parser.add_argument("-qs", "--quick_sky",
+                    help='''Quick Sky''',
                     action="count", default=0)
 
 parser.add_argument("-sx", "--source_x",
@@ -2363,7 +2367,11 @@ for k in np.arange(nexp):
     skies.append(sky)
     for j in np.arange(nifus):
         I = sel[int(j*448):int((j+1)*448)]
-        skysub, totsky = get_skysub(scirect[I], sky)
+        if args.quick_sky:
+            skysub = scirect[I] - sky
+            totsky = sky
+        else:
+            skysub, totsky = get_skysub(scirect[I], sky)
         skysubrect[I] = skysub
         skyrect[I] = totsky
         skyrect_orig[I] = sky
@@ -2650,35 +2658,36 @@ errspectra[:] *= norm
 # =============================================================================
 # Detections
 # =============================================================================
-Ed = Extract()
-tophat = Ed.tophat_psf(3., 10.5, 0.1)
-moffat = Ed.moffat_psf(fwhm_virus, 10.5, 0.1)
-newpsf = tophat[0] * moffat[0] / np.max(tophat[0])
-psf = [newpsf, moffat[1], moffat[2]]
-detect_info = []
-for i, ui in enumerate(allifus): 
-    ifuslot = '%03d' % ui
-    log.info('Detections for %s' % ifuslot)
-    N = 448 * nexp
-    data = scispectra[N*i:(i+1)*N]
-    error = errspectra[N*i:(i+1)*N]
-    M = np.isnan(data)
-    P = pos[N*i:(i+1)*N]
-    ifu = A.fplane.by_ifuslot('%03d' % ui)
-    ifux, ifuy = (ifu.y, ifu.x) 
-    sources = detect_sources(P[:, 0], P[:, 1], data, error, M, def_wave, psf,
-                             ran, scale, log, spec_res=5.6, thresh=5.)
-    if ifuslot == '047':
-        fits.PrimaryHDU(sources[0]/sources[1]).writeto('test_047.fits', overwrite=True)
-    for l, k in zip(sources[4], sources[5]):
-        fx, fy = (l[0] + ifux,
-                  l[1] + ifuy)
-        sra, sdec = A.tp.wcs_pix2world(fx, fy, 1)
-        if np.all(k[:, 0] == 0.):
-            continue
-        detect_info.append([ui, ui_dict[ifuslot][0], ui_dict[ifuslot][1], l[0], l[1], fx,
-                            fy, sra, sdec, l[2], l[3], l[4], l[5], l[6],
-                            k[:, 0], k[:, 1], k[:, 2]])
+if not args.no_detect:
+    Ed = Extract()
+    tophat = Ed.tophat_psf(3., 10.5, 0.1)
+    moffat = Ed.moffat_psf(fwhm_virus, 10.5, 0.1)
+    newpsf = tophat[0] * moffat[0] / np.max(tophat[0])
+    psf = [newpsf, moffat[1], moffat[2]]
+    detect_info = []
+    for i, ui in enumerate(allifus): 
+        ifuslot = '%03d' % ui
+        log.info('Detections for %s' % ifuslot)
+        N = 448 * nexp
+        data = scispectra[N*i:(i+1)*N]
+        error = errspectra[N*i:(i+1)*N]
+        M = np.isnan(data)
+        P = pos[N*i:(i+1)*N]
+        ifu = A.fplane.by_ifuslot('%03d' % ui)
+        ifux, ifuy = (ifu.y, ifu.x) 
+        sources = detect_sources(P[:, 0], P[:, 1], data, error, M, def_wave, psf,
+                                 ran, scale, log, spec_res=5.6, thresh=5.)
+        if ifuslot == '047':
+            fits.PrimaryHDU(sources[0]/sources[1]).writeto('test_047.fits', overwrite=True)
+        for l, k in zip(sources[4], sources[5]):
+            fx, fy = (l[0] + ifux,
+                      l[1] + ifuy)
+            sra, sdec = A.tp.wcs_pix2world(fx, fy, 1)
+            if np.all(k[:, 0] == 0.):
+                continue
+            detect_info.append([ui, ui_dict[ifuslot][0], ui_dict[ifuslot][1], l[0], l[1], fx,
+                                fy, sra, sdec, l[2], l[3], l[4], l[5], l[6],
+                                k[:, 0], k[:, 1], k[:, 2]])
 
 table = h5spec.create_table(h5spec.root, 'CatSpectra', CatSpectra, 
                             "Spectral Extraction Information")
