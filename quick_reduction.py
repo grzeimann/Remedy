@@ -133,7 +133,7 @@ parser.add_argument("-nm", "--no_masking",
                     help='''No Masking Employed''',
                     action="count", default=0)
 
-parser.add_argument("-nd", "--no_detect",
+parser.add_argument("-nD", "--no_detect",
                     help='''No Detection''',
                     action="count", default=0)
 
