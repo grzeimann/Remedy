@@ -1964,7 +1964,9 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
 
 def get_sky_fibers(norm_array):
     bl, bm = biweight(norm_array, calc_std=True)
-    per_array = np.linspace(bl-2*bm, bl+2*bm, 81)
+    low = np.nanpercentile(norm_array, 5)
+    high = np.nanpercentile(norm_array, 60)
+    per_array = np.linspace(low, high, 81)
     Neighbors = np.sum(np.abs(norm_array[:, np.newaxis] - per_array) < bm,
                        axis=0)
     ind = np.argmax(Neighbors)
@@ -2363,7 +2365,9 @@ skyrect_orig = scirect * 0.
 for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
     nifus = int(len(sel) / 448.)
-    sky = biweight(scirect[sel], axis=0)
+    y = biweight(scirect[sel, 800:900], axis=1)
+    skyfibers = get_sky_fibers(y)
+    sky = biweight(scirect[sel][skyfibers], axis=0)
     skies.append(sky)
     for j in np.arange(nifus):
         I = sel[int(j*448):int((j+1)*448)]
