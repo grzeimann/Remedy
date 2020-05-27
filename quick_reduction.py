@@ -851,7 +851,7 @@ def get_mask(scispectra, C1, ftf, res, nexp):
     mask = np.zeros(scispectra.shape, dtype=bool)
 
     # Chi2 cut (pre-error adjustment, which is usually 0.8, so may need to think more)
-    badchi2 = (C1 > 5000.)
+    badchi2 = (C1 > 5.)
     y, x = np.where(badchi2)
     for i in np.arange(-2, 3):
         x1 = x + i
@@ -2310,7 +2310,7 @@ inds = np.arange(scispectra.shape[0])
 mask = get_mask(scispectra, C1, ftf, res, nexp)
 mask[:, :-1] += mask[:, 1:]
 mask[:, 1:] += mask[:, :-1]
-if (not args.no_masking) or True:
+if not args.no_masking:
     scispectra[mask] = np.nan
     errspectra[mask] = np.nan
 scispectra = safe_division(scispectra, ftf)
