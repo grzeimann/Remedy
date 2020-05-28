@@ -2310,7 +2310,7 @@ inds = np.arange(scispectra.shape[0])
 mask = get_mask(scispectra, C1, ftf, res, nexp)
 mask[:, :-1] += mask[:, 1:]
 mask[:, 1:] += mask[:, :-1]
-if not args.no_masking:
+if True: #not args.no_masking:
     scispectra[mask] = np.nan
     errspectra[mask] = np.nan
 scispectra = safe_division(scispectra, ftf)
@@ -2453,8 +2453,8 @@ for i in np.arange(namps):
         log.info('Average Error Correction for %s%s: %0.2f' %
                  (ifuslot, amp, np.nanmedian(error_cor)))
         v = np.nanmedian(error_cor) - 1.
-        if ((v < -0.3) or (v > 1.)) and (not args.no_masking):
-            log.info('Error greater than 20 percent off expectation so we mask amp %s%s' %
+        if v < -0.3:
+            log.info('Error less than 30 percent below expectation so we mask amp %s%s' %
                      (ifuslot, amp))
             errspectra[ll:hl] = np.nan
             scispectra[ll:hl] = np.nan
