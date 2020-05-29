@@ -2662,13 +2662,14 @@ errspectra[:] *= norm
 # =============================================================================
 # Detections
 # =============================================================================
+detect_info = []
+
 if not args.no_detect:
     Ed = Extract()
     tophat = Ed.tophat_psf(3., 10.5, 0.1)
     moffat = Ed.moffat_psf(fwhm_virus, 10.5, 0.1)
     newpsf = tophat[0] * moffat[0] / np.max(tophat[0])
     psf = [newpsf, moffat[1], moffat[2]]
-    detect_info = []
     for i, ui in enumerate(allifus): 
         ifuslot = '%03d' % ui
         log.info('Detections for %s' % ifuslot)
