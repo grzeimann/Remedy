@@ -2566,7 +2566,7 @@ objsel = (f['Cgmag'] < 22.) * (f['dist'] < 1.5)
 nobjsel = (f['Cgmag'] < 22.)
 cofes_plots(ifunums, specnums, filename_array, outfile_name, f[nobjsel])
 
-log.info('Astrometry: %0.6f %0.5f %0.2f' % (A.ra0, A.dec0, A.rot))
+log.info('%s_%07d Astrometry: %0.6f %0.5f %0.2f' % (args.date, args.observation, A.ra0, A.dec0, A.rot))
 # =============================================================================
 # Extraction of nearby sources
 # =============================================================================
