@@ -89,5 +89,14 @@ for i, master in enumerate([masterflt, mastertwi, mastersci]):
                  fill_value='extrapolate')
     modelimageF = J(bigF)
     flatimage = master / modelimage / modelimageF
+    if i == 0:
+        Flat = flatimage * 1.
+    if i == 2:
+        skyimage = Flat * modelimage
+        skysub = master - skyimage
+        fits.HDUList([fits.PrimaryHDU(np.array(master, dtype='float32')),
+                      fits.ImageHDU(np.array(skyimage, dtype='float32')),
+                      fits.ImageHDU(np.array(skysub, dtype='float32'))]).writeto('masterskysub_%03d%s.fits' %
+                      (ifuslot, amp), overwrite=True)
     fits.PrimaryHDU(np.array(flatimage, dtype='float32')).writeto('%s_%03d%s.fits' %
                    (names[i], ifuslot, amp), overwrite=True)
