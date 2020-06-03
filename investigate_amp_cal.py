@@ -64,7 +64,7 @@ for i, master in enumerate([masterflt, mastertwi, mastersci]):
     for i in np.arange(spectra.shape[0]):
         scirect[i] = np.interp(def_wave, wave[i], spectra[i], left=np.nan,
                         right=np.nan)
-    Avgspec = np.nanmedian(scirect)
+    Avgspec = np.nanmedian(scirect, axis=0)
     bigW = get_bigW(wave, trace, master)
     sel = np.isfinite(Avgspec)
     I = interp1d(def_wave[sel], Avgspec[sel], kind='quadratic',
