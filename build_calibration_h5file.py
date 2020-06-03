@@ -49,6 +49,7 @@ class VIRUSImage(tb.IsDescription):
     amp = tb.StringCol(2)
     readnoise = tb.Float32Col()
     pixelmask = tb.Int32Col((1032, 1032))
+    masterflt = tb.Float32Col((1032, 1032))
     mastertwi = tb.Float32Col((1032, 1032))
     mastercmp = tb.Float32Col((1032, 1032))
     mastersci = tb.Float32Col((1032, 1032))
@@ -56,8 +57,8 @@ class VIRUSImage(tb.IsDescription):
 
 
 def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
-                           amp, readnoise, pixelmask, masterdark, mastertwi,
-                           mastercmp, mastersci, masterbias, spec,
+                           amp, readnoise, pixelmask, masterdark, masterflt,
+                           mastertwi, mastercmp, mastersci, masterbias, spec,
                            lampspec, contid):
     row['wavelength'] = wave * 1.
     row['trace'] = trace * 1.
@@ -70,6 +71,7 @@ def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
     row['pixelmask'] = pixelmask
     row['masterdark'] = masterdark
     row['mastertwi'] = mastertwi
+    row['masterflt'] = masterflt
     row['mastersci'] = mastersci
     row['masterbias'] = masterbias
     row['scispec'] = spec
@@ -281,7 +283,7 @@ parser.add_argument("-i", "--ifuslot",  help='''IFUSLOT''', type=str,
 args = parser.parse_args(args=None)
 args.log = setup_logging(logname='build_master_bias')
 args = set_daterange(args)
-kinds = ['zro', 'drk', 'flt', 'cmp', 'twi']
+kinds = ['zro', 'drk', 'flt', 'cmp', 'twi', 'sci']
 mkpath(args.folder)
 dirname = get_script_path()
 
@@ -320,6 +322,7 @@ for ifuslot_key in ifuslots:
     for amp in ['LL', 'LU', 'RL', 'RU']:
         row = imagetable.row
         masterdark = np.zeros((1032, 1032))
+        masterflt = np.zeros((1032, 1032))
         mastertwi = np.zeros((1032, 1032))
         mastersci = np.zeros((1032, 1032))
         masterbias = np.zeros((1032, 1032))
@@ -341,33 +344,35 @@ for ifuslot_key in ifuslots:
                 break
             specid, ifuSlot, ifuid = ['%03d' % int(z)
                                       for z in [_info[3], ifuslot, _info[4]]]
-            if kind == 'twi':
+            if kind == 'sci':
                 mastersci = _info[0] * 1.
+            if kind == 'twi':
+                mastertwi = _info[0] * 1.
             if kind == 'zro':
                 masterbias = _info[0] * 1.
                 readnoise = biweight(_info[1])
-            if kind == 'drk':
-                masterdark = _info[0] * 1.
                 args.log.info('Readnoise for %s %s: %0.2f' %
                               (ifuslot_key, amp, readnoise))
+            if kind == 'drk':
+                masterdark = _info[0] * 1.
                 args.log.info('Getting pixel mask %03d %s' %
                               (int(ifuslot), amp))
                 pixelmask = get_pixelmask(masterdark)
             if kind == 'flt':
                 ifupos = get_ifucenfile(dirname, ifuid, amp)
-                mastertwi = _info[0] * 1.
+                masterflt = _info[0] * 1.
 
                 args.log.info('Getting trace for %s %s' %
                               (ifuslot_key, amp))
                 try:
                     trace, ref = get_trace(_info[0], specid, ifuSlot, ifuid,
                                            amp, _info[2][:8], dirname)
-                    twi = get_spectra(_info[0], trace)
+                    flt = get_spectra(_info[0], trace)
                 except:
                     args.log.error('Trace Failed for %s %s.' %
                                        (ifuslot_key, amp))
                 try:
-                    cm, cl, ch = measure_contrast(_info[0], twi, trace)
+                    cm, cl, ch = measure_contrast(_info[0], flt, trace)
                     if cm is not None:
                         args.log.info('Contrast 5th, 50th, and 95th percentiles for '
                                       '%s %s: %0.2f, %0.2f, %0.2f' %
@@ -394,8 +399,8 @@ for ifuslot_key in ifuslots:
                 
         success = append_fibers_to_table(row, wave, trace, ifupos, ifuslot,
                                          ifuid, specid, amp, readnoise,
-                                         pixelmask, masterdark, mastertwi, 
-                                         mastercmp, mastersci, masterbias,
-                                         spec, cmp, contid)
+                                         pixelmask, masterdark, masterflt,
+                                         mastertwi, mastercmp, mastersci,
+                                         masterbias, spec, cmp, contid)
         if success:
             imagetable.flush()
