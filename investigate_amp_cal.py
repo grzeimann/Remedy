@@ -31,6 +31,19 @@ def get_bigW(array_wave, array_trace, image):
     return bigW
 
 
+def get_bigF(array_trace, image):
+    bigF = np.zeros(image.shape)
+    Y, X = np.indices(array_trace.shape)
+    YY, XX = np.indices(image.shape)
+    n, m = array_trace.shape
+    F0 = array_trace[:, m/2]
+    for j in np.arange(image.shape[1]):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            p0 = np.polyfit(array_trace[:, j], F0, 7)
+        bigF[:, j] = np.polyval(p0, YY[:, j])
+    return bigF, F0
+
 t = tables.open_file(sys.argv[1])
 amp = sys.argv[3]
 ifuslot = int(sys.argv[2])
@@ -65,11 +78,16 @@ for i, master in enumerate([masterflt, mastertwi, mastersci]):
         scirect[j] = np.interp(def_wave, wave[j], spectra[j], left=np.nan,
                         right=np.nan)
     Avgspec = np.nanmedian(scirect, axis=0)
+    avgfiber = np.nanmedian(scirect / Avgspec, axis=1)
     bigW = get_bigW(wave, trace, master)
+    bigF, F0 = get_bigF(trace, master)
     sel = np.isfinite(Avgspec)
     I = interp1d(def_wave[sel], Avgspec[sel], kind='quadratic',
                  fill_value='extrapolate')
     modelimage = I(bigW)
-    flatimage = master / modelimage
-    fits.PrimaryHDU(flatimage).writeto('%s_%03d%s.fits' %
+    J = interp1d(F0, avgfiber, kind='quadratic',
+                 fill_value='extrapolate')
+    modelimageF = I(bigF)
+    flatimage = master / modelimage / modelimageF
+    fits.PrimaryHDU(np.array(flatimage, dtype='float32')).writeto('%s_%03d%s.fits' %
                    (names[i], ifuslot, amp), overwrite=True)
