@@ -8,7 +8,7 @@ Created on Wed Jun  3 12:54:50 2020
 
 import tables
 import numpy as np
-from fiber_utils import get_powerlaw, get_spectra
+from fiber_utils import get_powerlaw, get_spectra, get_spectra_error
 import sys
 from astropy.io import fits
 import warnings
@@ -63,6 +63,7 @@ masterdark = t.root.Cals.cols.masterdark[ind]
 masterflt = t.root.Cals.cols.masterflt[ind]
 mastertwi = t.root.Cals.cols.mastertwi[ind]
 mastersci = t.root.Cals.cols.mastersci[ind]
+readnoise = t.root.Cals.cols.readnoise[ind]
 
 def_wave = np.linspace(3470., 5540., 1036*2)
 names = ['masterflt', 'mastertwi', 'mastersci']
@@ -94,11 +95,14 @@ for i, master in enumerate([masterflt, mastertwi, mastersci]):
     if i == 2:
         skyimage = Flat * modelimage * modelimageF
         skysub = master - skyimage
-        error = np.sqrt(3.**2 + master)
+        error = np.sqrt(readnoise**2 + master)
+        spec = get_spectra(skysub, trace)
+        specerr = get_spectra_error(error, trace)
         fits.HDUList([fits.PrimaryHDU(np.array(master, dtype='float32')),
                       fits.ImageHDU(np.array(skyimage, dtype='float32')),
                       fits.ImageHDU(np.array(skysub, dtype='float32')),
-                      fits.ImageHDU(np.array(skysub / error, dtype='float32'))]).writeto('masterskysub_%03d%s.fits' %
+                      fits.ImageHDU(np.array(skysub / error, dtype='float32')),
+                      fits.ImageHDU(np.array(spec / specerr, dtype='float32'))]).writeto('masterskysub_%03d%s.fits' %
                       (ifuslot, amp), overwrite=True)
     fits.PrimaryHDU(np.array(flatimage, dtype='float32')).writeto('%s_%03d%s.fits' %
                    (names[i], ifuslot, amp), overwrite=True)
