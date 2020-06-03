@@ -92,7 +92,7 @@ for i, master in enumerate([masterflt, mastertwi, mastersci]):
     if i == 0:
         Flat = flatimage * 1.
     if i == 2:
-        skyimage = Flat * modelimage
+        skyimage = Flat * modelimage * modelimageF
         skysub = master - skyimage
         fits.HDUList([fits.PrimaryHDU(np.array(master, dtype='float32')),
                       fits.ImageHDU(np.array(skyimage, dtype='float32')),
