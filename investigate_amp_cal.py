@@ -87,7 +87,7 @@ for i, master in enumerate([masterflt, mastertwi, mastersci]):
     modelimage = I(bigW)
     J = interp1d(F0, avgfiber, kind='quadratic',
                  fill_value='extrapolate')
-    modelimageF = I(bigF)
+    modelimageF = J(bigF)
     flatimage = master / modelimage / modelimageF
     fits.PrimaryHDU(np.array(flatimage, dtype='float32')).writeto('%s_%03d%s.fits' %
                    (names[i], ifuslot, amp), overwrite=True)
