@@ -32,8 +32,8 @@ def get_bigW(array_wave, array_trace, image):
 
 
 t = tables.open_file(sys.argv[1])
-amp = sys.argv[2]
-ifuslot = int(sys.argv[3])
+amp = sys.argv[3]
+ifuslot = int(sys.argv[2])
 
 ifuslots = t.root.Cals.cols.ifuslot[:]
 amps = np.array([i.decode("utf-8") for i in t.root.Cals.cols.amp[:]])
