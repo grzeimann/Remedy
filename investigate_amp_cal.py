@@ -61,8 +61,8 @@ for i, master in enumerate([masterflt, mastertwi, mastersci]):
     master[:] -= plaw
     spectra = get_spectra(master, trace)
     scirect = np.zeros((spectra.shape[0], len(def_wave)))
-    for i in np.arange(spectra.shape[0]):
-        scirect[i] = np.interp(def_wave, wave[i], spectra[i], left=np.nan,
+    for j in np.arange(spectra.shape[0]):
+        scirect[j] = np.interp(def_wave, wave[j], spectra[j], left=np.nan,
                         right=np.nan)
     Avgspec = np.nanmedian(scirect, axis=0)
     bigW = get_bigW(wave, trace, master)
