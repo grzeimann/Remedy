@@ -79,6 +79,10 @@ for i, master in enumerate([masterflt, mastertwi, mastersci]):
         scirect[j] = np.interp(def_wave, wave[j], spectra[j], left=np.nan,
                         right=np.nan)
     Avgspec = np.nanmedian(scirect, axis=0)
+    d1 = np.abs(Avgspec[1:-1] - Avgspec[:-2])
+    d2 = np.abs(Avgspec[2:] - Avgspec[1:-1])
+    ad = (d1 + d2) / 2.
+    specdiff = np.hstack([ad[0], ad, ad[-1]])
     avgfiber = np.nanmedian(scirect / Avgspec, axis=1)
     bigW = get_bigW(wave, trace, master)
     bigF, F0 = get_bigF(trace, master)
@@ -90,7 +94,7 @@ for i, master in enumerate([masterflt, mastertwi, mastersci]):
                  fill_value='extrapolate')
     modelimageF = J(bigF)
     flatimage = master / modelimage / modelimageF
-    if i == 0:
+    if i == 1:
         Flat = flatimage * 1.
     if i == 2:
         skyimage = Flat * modelimage * modelimageF
