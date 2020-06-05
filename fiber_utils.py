@@ -250,7 +250,7 @@ def get_powerlaw(image, trace, order=2):
         ZM.append(avgz)
     XM, YM, ZM = (np.hstack(XM), np.hstack(YM), np.hstack(ZM))
     P = Polynomial2D(order)
-    fit = LevMarLSQFitter(P, XM, YM, ZM)
+    fit = LevMarLSQFitter()(P, XM, YM, ZM)
     plaw = fit(xind, yind)
 #    Pos = np.zeros((len(XM), 2))
 #    sel = np.isfinite(ZM)
