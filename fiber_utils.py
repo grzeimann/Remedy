@@ -249,14 +249,17 @@ def get_powerlaw(image, trace, order=2):
         YM.append(avgy)
         ZM.append(avgz)
     XM, YM, ZM = (np.hstack(XM), np.hstack(YM), np.hstack(ZM))
-    Pos = np.zeros((len(XM), 2))
-    sel = np.isfinite(ZM)
-    if sel.sum() > 5:
-        Pos[:, 0] = XM[sel]
-        Pos[:, 1] = YM[sel]
-        plaw = griddata(Pos, ZM[sel], (xind, yind), method='linear')
-    else:
-        plaw = 0. * image
+    P = Polynomial2D(order)
+    fit = LevMarLSQFitter(P, XM, YM, ZM)
+    plaw = fit(xind, yind)
+#    Pos = np.zeros((len(XM), 2))
+#    sel = np.isfinite(ZM)
+#    if sel.sum() > 5:
+#        Pos[:, 0] = XM[sel]
+#        Pos[:, 1] = YM[sel]
+#        plaw = griddata(Pos, ZM[sel], (xind, yind), method='linear')
+#    else:
+#        plaw = 0. * image
     return plaw
 
 
