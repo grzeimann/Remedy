@@ -13,6 +13,7 @@ import sys
 from astropy.io import fits
 import warnings
 from scipy.interpolate import interp1d
+from astropy.convolution import convolve, Gaussian2DKernel
 
 def get_bigW(array_wave, array_trace, image):
     bigW = np.zeros(image.shape)
@@ -94,7 +95,7 @@ for i, master in enumerate([masterflt, mastertwi, mastersci]):
                  fill_value='extrapolate')
     modelimageF = J(bigF)
     flatimage = master / modelimage / modelimageF
-    if i == 1:
+    if i == 0:
         Flat = flatimage * 1.
     if i == 2:
         skyimage = Flat * modelimage * modelimageF
@@ -102,11 +103,29 @@ for i, master in enumerate([masterflt, mastertwi, mastersci]):
         error = np.sqrt(readnoise**2 + master)
         spec = get_spectra(skysub, trace)
         specerr = get_spectra_error(error, trace)
+        G = Gaussian2DKernel(7.)
+        data = skysub / error
+        imask = np.abs(data)>0.5
+        data[imask] = np.nan
+        c = convolve(data, G, boundary='extend')
+        data[:] -= c
+        G = Gaussian2DKernel(3.)
+        N = data.shape[0] * 1.
+        arr = np.arange(data.shape[0]-2)
+        if (amp == 'LU') or (amp == 'RL'):
+            data = data[::-1, :]
+        for i in arr:
+            inds = np.where(np.sum(np.isnan(data[i:]), axis=0) > (N-i)/3.)[0]
+            for ind in inds:
+                if np.isnan(data[i, ind]):
+                    data[i:, ind] = np.nan
+        if (amp == 'LU') or (amp == 'RL'):
+            data = data[::-1, :]
         fits.HDUList([fits.PrimaryHDU(np.array(master, dtype='float32')),
                       fits.ImageHDU(np.array(skyimage, dtype='float32')),
                       fits.ImageHDU(np.array(skysub, dtype='float32')),
                       fits.ImageHDU(np.array(skysub / error, dtype='float32')),
-                      fits.ImageHDU(np.array(spec / specerr, dtype='float32'))]).writeto('masterskysub_%03d%s.fits' %
+                      fits.ImageHDU(np.array(data, dtype='float32'))]).writeto('masterskysub_%03d%s.fits' %
                       (ifuslot, amp), overwrite=True)
     fits.PrimaryHDU(np.array(flatimage, dtype='float32')).writeto('%s_%03d%s.fits' %
                    (names[i], ifuslot, amp), overwrite=True)
