@@ -114,11 +114,11 @@ for i, master in enumerate([masterflt, mastertwi, mastersci]):
         arr = np.arange(data.shape[0]-2)
         if (amp == 'LU') or (amp == 'RL'):
             data = data[::-1, :]
-        for i in arr:
-            inds = np.where(np.sum(np.isnan(data[i:]), axis=0) > (N-i)/3.)[0]
+        for j in arr:
+            inds = np.where(np.sum(np.isnan(data[j:]), axis=0) > (N-j)/3.)[0]
             for ind in inds:
-                if np.isnan(data[i, ind]):
-                    data[i:, ind] = np.nan
+                if np.isnan(data[j, ind]):
+                    data[j:, ind] = np.nan
         if (amp == 'LU') or (amp == 'RL'):
             data = data[::-1, :]
         fits.HDUList([fits.PrimaryHDU(np.array(master, dtype='float32')),
