@@ -104,7 +104,7 @@ for i, master in enumerate([masterflt, mastertwi, mastersci]):
         spec = get_spectra(skysub, trace)
         specerr = get_spectra_error(error, trace)
         G = Gaussian2DKernel(7.)
-        data = skysub / error
+        data = spec / specerr
         imask = np.abs(data)>0.5
         data[imask] = np.nan
         c = convolve(data, G, boundary='extend')
