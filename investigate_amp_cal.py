@@ -70,8 +70,8 @@ def_wave = np.linspace(3470., 5540., 1036*2)
 names = ['masterflt', 'mastertwi', 'mastersci']
 for i, master in enumerate([masterflt, mastertwi, mastersci]):
     master[:] -= masterbias
-    if i == 2:
-        master[:] -= masterdark
+    #if i == 2:
+    #    master[:] -= masterdark
     plaw = get_powerlaw(master, trace)
     #master[:] -= plaw
     spectra = get_spectra(master, trace)
