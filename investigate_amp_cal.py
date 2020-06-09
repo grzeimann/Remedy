@@ -112,9 +112,9 @@ for i, master in enumerate([masterflt, mastertwi, mastersci]):
              ad = (d1 + d2) / 2.
              syserr[k] = np.hstack([ad[0], ad, ad[-1]])
         specerr = get_spectra_error(error, trace)
-        specerr = np.sqrt(specerr**2 + (syserr*0.2)**2)
+        toterr = np.sqrt(specerr**2 + (syserr*0.2)**2)
         G = Gaussian2DKernel(7.)
-        data = spec / specerr
+        data = spec / toterr
         imask = np.abs(data)>0.5
         data[imask] = np.nan
         c = convolve(data, G, boundary='extend')
@@ -135,7 +135,9 @@ for i, master in enumerate([masterflt, mastertwi, mastersci]):
                       fits.ImageHDU(np.array(skyimage, dtype='float32')),
                       fits.ImageHDU(np.array(skysub, dtype='float32')),
                       fits.ImageHDU(np.array(skysub / error, dtype='float32')),
-                      fits.ImageHDU(np.array(data, dtype='float32'))]).writeto('masterskysub_%03d%s.fits' %
+                      fits.ImageHDU(np.array(data, dtype='float32')),
+                      fits.ImageHDU(np.array(specerr, dtype='float32')),
+                      fits.ImageHDU(np.array(syserr*0.2, dtype='float32'))]).writeto('masterskysub_%03d%s.fits' %
                       (ifuslot, amp), overwrite=True)
     fits.PrimaryHDU(np.array(flatimage, dtype='float32')).writeto('%s_%03d%s.fits' %
                    (names[i], ifuslot, amp), overwrite=True)
