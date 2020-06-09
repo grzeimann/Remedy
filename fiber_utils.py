@@ -193,23 +193,27 @@ def get_powerlaw(image, trace, order=2):
     plaw : 2d numpy array
         scatter light image from powerlaw
     '''
+    def gauss_eval(x1, y1, z1, x2, y2, sigma=300.):
+        d = np.sqrt((x1[:, np.newaxis]-x2[np.newaxis, :])**2 +
+                    (y1[:, np.newaxis]-y2[np.newaxis, :])**2)
+        w = np.exp(-0.5 * d**2 / sigma**2)
+        w = w / w.sum(axis=0)[np.newaxis, :]
+        z2 = (z1[:, np.newaxis] * w).sum(axis=0)
+        return z2
     fibgap = np.where(np.diff(trace[:, 400]) > 10.)[0]
     X = np.arange(image.shape[1])
     yind, xind = np.indices(image.shape)
     XV = np.array_split(X, 25)
     T = np.array_split(trace, 25, axis=1)
     XM, YM, ZM = ([], [], [])
+    xg, yg = np.meshrid(np.linspace(0, 1031, 25), np.linspace(0, 1031, 25))
+    xg, yg = (xg.ravel(), yg.ravel())
     cnts = np.arange(25)
     if np.all(trace == 0.):
         return 0. * image
     for xchunk, tchunk, cnt in zip(XV, T, cnts):
         avgy, avgz = ([], [])
-        if cnt == 0:
-            avgx = 0.
-        elif cnt == 24:
-            avgx = 1031.
-        else:
-            avgx = int(np.mean(xchunk))
+        avgx = int(np.mean(xchunk))
         x, y = ([], [])
         dy = np.array(np.ceil(trace[0, xchunk])-7, dtype=int)
         for j, xc in enumerate(xchunk):
@@ -249,17 +253,18 @@ def get_powerlaw(image, trace, order=2):
         YM.append(avgy)
         ZM.append(avgz)
     XM, YM, ZM = (np.hstack(XM), np.hstack(YM), np.hstack(ZM))
-    P = Polynomial2D(order)
-    fit = LevMarLSQFitter()(P, XM, YM, ZM)
-    plaw = fit(xind, yind)
-#    Pos = np.zeros((len(XM), 2))
-#    sel = np.isfinite(ZM)
-#    if sel.sum() > 5:
-#        Pos[:, 0] = XM[sel]
-#        Pos[:, 1] = YM[sel]
-#        plaw = griddata(Pos, ZM[sel], (xind, yind), method='linear')
-#    else:
-#        plaw = 0. * image
+    zg = gauss_eval(XM, YM, ZM, xg, yg)
+    #P = Polynomial2D(order)
+    #fit = LevMarLSQFitter()(P, XM, YM, ZM)
+    #plaw = fit(xind, yind)
+    Pos = np.zeros((len(xg), 2))
+    sel = np.isfinite(zg)
+    if sel.sum() > 5:
+        Pos[:, 0] = xg[sel]
+        Pos[:, 1] = yg[sel]
+        plaw = griddata(Pos, zg[sel], (xind, yind), method='linear')
+    else:
+        plaw = 0. * image
     return plaw
 
 
