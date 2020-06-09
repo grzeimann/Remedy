@@ -135,7 +135,7 @@ for i, master in enumerate([masterflt, mastertwi, mastersci]):
                       fits.ImageHDU(np.array(skyimage, dtype='float32')),
                       fits.ImageHDU(np.array(skysub, dtype='float32')),
                       fits.ImageHDU(np.array(skysub / error, dtype='float32')),
-                      fits.ImageHDU(np.array(data, dtype='float32')),
+                      fits.ImageHDU(np.array(spec / toterr, dtype='float32')),
                       fits.ImageHDU(np.array(specerr, dtype='float32')),
                       fits.ImageHDU(np.array(syserr*1.0, dtype='float32'))]).writeto('masterskysub_%03d%s.fits' %
                       (ifuslot, amp), overwrite=True)
