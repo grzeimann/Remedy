@@ -10,6 +10,7 @@ import glob
 import numpy as np
 import os.path as op
 import tarfile
+import warnings
 
 from astropy.io import fits
 from math_utils import biweight
@@ -123,6 +124,36 @@ def base_reduction(filename, tinfo, get_header=False):
     if get_header:
         return a, E, header
     return a, E
+
+def get_bigW(array_wave, array_trace, image):
+    bigW = np.zeros(image.shape)
+    Y, X = np.indices(array_wave.shape)
+    YY, XX = np.indices(image.shape)
+    for x, at, aw, xx, yy in zip(np.array_split(X, 2, axis=0),
+                                 np.array_split(array_trace, 2, axis=0),
+                                 np.array_split(array_wave, 2, axis=0),
+                                 np.array_split(XX, 2, axis=0),
+                                 np.array_split(YY, 2, axis=0)):
+        for j in np.arange(at.shape[1]):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                p0 = np.polyfit(at[:, j], aw[:, j], 7)
+            bigW[yy[:, j], j] = np.polyval(p0, yy[:, j])
+    return bigW
+
+
+def get_bigF(array_trace, image):
+    bigF = np.zeros(image.shape)
+    Y, X = np.indices(array_trace.shape)
+    YY, XX = np.indices(image.shape)
+    n, m = array_trace.shape
+    F0 = array_trace[:, int(m/2)]
+    for j in np.arange(image.shape[1]):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            p0 = np.polyfit(array_trace[:, j], F0, 7)
+        bigF[:, j] = np.polyval(p0, YY[:, j])
+    return bigF, F0
 
 def power_law(x, c1, c2=.5, c3=.15, c4=1., sig=2.5):
     '''
