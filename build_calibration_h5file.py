@@ -13,16 +13,18 @@ import tarfile
 import warnings
 import tables as tb
 
+from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.io import fits
 from astropy.stats import mad_std
 from astropy.table import Table
 from datetime import datetime, timedelta
 from distutils.dir_util import mkpath
-from fiber_utils import base_reduction, get_trace, get_spectra
+from fiber_utils import base_reduction, get_trace, get_spectra, get_spectra_error
 from fiber_utils import get_powerlaw, get_ifucenfile, get_wave, get_pixelmask
-from fiber_utils import measure_contrast
+from fiber_utils import measure_contrast, get_bigW, get_bigF
 from input_utils import setup_parser, set_daterange, setup_logging
 from math_utils import biweight
+from scipy.interpolate import interp1d
 
 karl_tarlist = '/work/00115/gebhardt/maverick/gettar/%starlist'
 karl_scilist = '/work/00115/gebhardt/maverick/gettar/%ssci'
@@ -40,6 +42,7 @@ class VIRUSImage(tb.IsDescription):
     trace = tb.Float32Col((112, 1032))
     lampspec = tb.Float32Col((112, 1032))
     scispec = tb.Float32Col((112, 1032))
+    maskspec = tb.Float32Col((112, 1032))
     masterdark = tb.Float32Col((1032, 1032))
     ifupos = tb.Float32Col((112, 2))
     ifuslot = tb.Int32Col()
@@ -59,7 +62,7 @@ class VIRUSImage(tb.IsDescription):
 def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
                            amp, readnoise, pixelmask, masterdark, masterflt,
                            mastertwi, mastercmp, mastersci, masterbias, spec,
-                           lampspec, contid):
+                           lampspec, maskspec, contid):
     row['wavelength'] = wave * 1.
     row['trace'] = trace * 1.
     row['ifupos'] = ifupos * 1.
@@ -77,6 +80,7 @@ def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
     row['scispec'] = spec
     row['mastercmp'] = mastercmp
     row['lampspec'] = lampspec
+    row['maskspec'] = maskspec
     row['amp'] = amp
     row.append()
     return True
@@ -267,6 +271,73 @@ def build_master_frame(file_list, tarinfo_list, ifuslot, amp, kind, log,
                                              d4.hour, d4.minute, d4.second)
     return masterbias, masterstd, avgdate, bia_list[0][1], bia_list[0][4], bia_list[0][5]
 
+def get_specmask(amp, wave, trace, masterbias, masterdark, readnoise,
+                 masterflt, mastersci):
+    def_wave = np.linspace(3470., 5540., 1036*2)
+
+    for i, master in enumerate([masterflt, mastersci]):
+        master[:] -= masterbias
+        if i == 1:
+            master[:] -= masterdark
+        plaw = get_powerlaw(master, trace)
+        master[:] -= plaw
+        spectra = get_spectra(master, trace)
+        scirect = np.zeros((spectra.shape[0], len(def_wave)))
+        for j in np.arange(spectra.shape[0]):
+            scirect[j] = np.interp(def_wave, wave[j], spectra[j], left=np.nan,
+                            right=np.nan)
+        Avgspec = np.nanmedian(scirect, axis=0)
+        avgfiber = np.nanmedian(scirect / Avgspec, axis=1)
+        bigW = get_bigW(wave, trace, master)
+        bigF, F0 = get_bigF(trace, master)
+        sel = np.isfinite(Avgspec)
+        I = interp1d(def_wave[sel], Avgspec[sel], kind='quadratic',
+                     fill_value='extrapolate')
+        modelimage = I(bigW)
+        J = interp1d(F0, avgfiber, kind='quadratic',
+                     fill_value='extrapolate')
+        modelimageF = J(bigF)
+        flatimage = master / modelimage / modelimageF
+        if i == 0:
+            Flat = flatimage * 1.
+        if i == 1:
+            skyimage = Flat * modelimage * modelimageF
+            skysub = master - skyimage
+            error = np.sqrt(readnoise**2 + master)
+            spec = get_spectra(skysub, trace)
+            syserr = spec * 0.
+            for k in np.arange(spec.shape[0]):
+                 dummy = np.interp(wave[k], def_wave, Avgspec, left=0.0,
+                                   right=0.0)
+                 d1 = np.abs(dummy[1:-1] - dummy[:-2])
+                 d2 = np.abs(dummy[2:] - dummy[1:-1])
+                 ad = (d1 + d2) / 2.
+                 syserr[k] = np.hstack([ad[0], ad, ad[-1]])
+            specerr = get_spectra_error(error, trace)
+            toterr = np.sqrt(specerr**2 + (syserr*1.0)**2)
+            G = Gaussian2DKernel(7.)
+            data = spec / toterr
+            imask = np.abs(data) > 0.5
+            data[imask] = np.nan
+            c = convolve(data, G, boundary='extend')
+            data = spec / toterr
+            data[:] -= c
+            imask = np.abs(data) > 0.5
+            data[imask] = np.nan
+            G = Gaussian2DKernel(3.)
+            N = data.shape[0] * 1.
+            arr = np.arange(data.shape[0]-2)
+            if (amp == 'LU') or (amp == 'RL'):
+                data = data[::-1, :]
+            for j in arr:
+                inds = np.where(np.sum(np.isnan(data[j:]), axis=0) > (N-j)/3.)[0]
+                for ind in inds:
+                    if np.isnan(data[j, ind]):
+                        data[j:, ind] = np.nan
+            if (amp == 'LU') or (amp == 'RL'):
+                data = data[::-1, :]
+    return np.array(np.isnan(data), dtype='float32')
+
 parser = setup_parser()
 parser.add_argument('outfilename', type=str,
                     help='''name of the output file''')
@@ -329,6 +400,7 @@ for ifuslot_key in ifuslots:
         wave = np.zeros((112, 1032))
         trace = np.zeros((112, 1032))
         spec = np.zeros((112, 1032))
+        maskspec = np.zeros((112, 1032))
         readnoise = 3.
         pixelmask = np.zeros((1032, 1032))
         for kind in kinds:
@@ -346,6 +418,7 @@ for ifuslot_key in ifuslots:
                                       for z in [_info[3], ifuslot, _info[4]]]
             if kind == 'sci':
                 mastersci = _info[0] * 1.
+                spec = get_spectra(_info[0], trace)
             if kind == 'twi':
                 mastertwi = _info[0] * 1.
             if kind == 'zro':
@@ -396,11 +469,13 @@ for ifuslot_key in ifuslots:
                 except:
                     args.log.error('Wavelength Failed for %s %s.' %
                                        (ifuslot_key, amp))
-                
+        maskspec = get_specmask(amp, wave, trace, masterbias, masterdark,
+                                readnoise, masterflt, mastersci)       
         success = append_fibers_to_table(row, wave, trace, ifupos, ifuslot,
                                          ifuid, specid, amp, readnoise,
                                          pixelmask, masterdark, masterflt,
                                          mastertwi, mastercmp, mastersci,
-                                         masterbias, spec, cmp, contid)
+                                         masterbias, spec, cmp, maskspec,
+                                         contid)
         if success:
             imagetable.flush()
