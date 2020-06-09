@@ -193,7 +193,7 @@ def get_powerlaw(image, trace, order=2):
     plaw : 2d numpy array
         scatter light image from powerlaw
     '''
-    def gauss_eval(x1, y1, z1, x2, y2, sigma=300.):
+    def gauss_eval(x1, y1, z1, x2, y2, sigma=150.):
         d = np.sqrt((x1[:, np.newaxis]-x2[np.newaxis, :])**2 +
                     (y1[:, np.newaxis]-y2[np.newaxis, :])**2)
         w = np.exp(-0.5 * d**2 / sigma**2)
@@ -206,7 +206,7 @@ def get_powerlaw(image, trace, order=2):
     XV = np.array_split(X, 25)
     T = np.array_split(trace, 25, axis=1)
     XM, YM, ZM = ([], [], [])
-    xg, yg = np.meshrid(np.linspace(0, 1031, 25), np.linspace(0, 1031, 25))
+    xg, yg = np.meshgrid(np.linspace(0, 1031, 25), np.linspace(0, 1031, 25))
     xg, yg = (xg.ravel(), yg.ravel())
     cnts = np.arange(25)
     if np.all(trace == 0.):
