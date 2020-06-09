@@ -100,7 +100,7 @@ for i, master in enumerate([masterflt, mastertwi, mastersci]):
     if i == 2:
         skyimage = Flat * modelimage * modelimageF
         skysub = master - skyimage
-        error = np.sqrt(readnoise**2 + master)
+        error = np.sqrt(readnoise**2 + master + (specdiff*0.2)**2)
         spec = get_spectra(skysub, trace)
         specerr = get_spectra_error(error, trace)
         G = Gaussian2DKernel(7.)
