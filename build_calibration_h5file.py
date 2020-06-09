@@ -469,7 +469,7 @@ for ifuslot_key in ifuslots:
                 except:
                     args.log.error('Wavelength Failed for %s %s.' %
                                        (ifuslot_key, amp))
-        if (np.mean(masterflt) > 0.) and (np.mean(mastersci) > 0.):
+        if (np.mean(masterflt) > 0.) and (np.mean(mastersci) > 0.) and (np.mean(trace) > 0.):
             maskspec = get_specmask(amp, wave, trace, masterbias, masterdark,
                                     readnoise, masterflt, mastersci)       
         success = append_fibers_to_table(row, wave, trace, ifupos, ifuslot,
