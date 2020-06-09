@@ -73,7 +73,7 @@ for i, master in enumerate([masterflt, mastertwi, mastersci]):
     if i == 2:
         master[:] -= masterdark
     plaw = get_powerlaw(master, trace)
-    #master[:] -= plaw
+    master[:] -= plaw
     spectra = get_spectra(master, trace)
     scirect = np.zeros((spectra.shape[0], len(def_wave)))
     for j in np.arange(spectra.shape[0]):
