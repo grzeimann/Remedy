@@ -98,11 +98,17 @@ for i, master in enumerate([masterflt, mastertwi, mastersci]):
     if i == 0:
         Flat = flatimage * 1.
     if i == 2:
+
         skyimage = Flat * modelimage * modelimageF
         skysub = master - skyimage
-        error = np.sqrt(readnoise**2 + master + (specdiff*0.2)**2)
+        error = np.sqrt(readnoise**2 + master)
         spec = get_spectra(skysub, trace)
+        syserr = spec * 0.
+        for k in np.arange(spec.shape[0]):
+            syserr[k] = np.interp(wave[k], def_wave, specdiff, left=0.0,
+                  right=0.0)
         specerr = get_spectra_error(error, trace)
+        specerr = np.sqrt(specerr**2 + (syserr*0.2)**2)
         G = Gaussian2DKernel(7.)
         data = spec / specerr
         imask = np.abs(data)>0.5
