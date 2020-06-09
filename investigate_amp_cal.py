@@ -105,8 +105,12 @@ for i, master in enumerate([masterflt, mastertwi, mastersci]):
         spec = get_spectra(skysub, trace)
         syserr = spec * 0.
         for k in np.arange(spec.shape[0]):
-            syserr[k] = np.interp(wave[k], def_wave, specdiff, left=0.0,
-                  right=0.0)
+             dummy = np.interp(wave[k], def_wave, Avgspec, left=0.0,
+                               right=0.0)
+             d1 = np.abs(dummy[1:-1] - dummy[:-2])
+             d2 = np.abs(dummy[2:] - dummy[1:-1])
+             ad = (d1 + d2) / 2.
+             syserr[k] = np.hstack([ad[0], ad, ad[-1]])
         specerr = get_spectra_error(error, trace)
         specerr = np.sqrt(specerr**2 + (syserr*0.2)**2)
         G = Gaussian2DKernel(7.)
