@@ -2457,7 +2457,7 @@ for i in np.arange(namps):
     if skyfibers.sum():
         back_val, error_cor = biweight(x1[skyfibers] / x2[skyfibers], axis=0,
                                        calc_std=True)
-        errspectra[ll:hl] *= error_cor[np.newaxis, :]
+        # errspectra[ll:hl] *= error_cor[np.newaxis, :]
         log.info('Average Error Correction for %s%s: %0.2f' %
                  (ifuslot, amp, np.nanmedian(error_cor)))
         v = np.nanmedian(error_cor) - 1.
