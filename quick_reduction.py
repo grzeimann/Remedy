@@ -2604,7 +2604,7 @@ R = np.hstack(R)
 D = np.hstack(D)
 log.info('Extracting %i Bright Sources for PSF' % objsel.sum())
 
-mRA, mDec = A.tp.wcs_pix2world(f['fx'][objsel], f['fy'][objsel], 1)
+mRA, mDec = (f['RA'][objsel], f['Dec'][objsel])
 E.coords = SkyCoord(mRA*units.deg, mDec*units.deg, frame='fk5')
 GMag = np.ones((len(E.coords), 2)) * np.nan
 GMag[:, 0] = f['Cgmag'][objsel]
