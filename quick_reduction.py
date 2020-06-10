@@ -2581,7 +2581,7 @@ E = Extract()
 tophat = E.tophat_psf(3., 10.5, 0.1)
 moffat = E.moffat_psf(np.median(gseeing), 10.5, 0.1)
 newpsf = tophat[0] * moffat[0] / np.max(tophat[0])
-psf = [newpsf, moffat[1], moffat[2]]
+psf = [tophat[0], moffat[1], moffat[2]]
 E.psf = psf
 E.get_ADR_RAdec(A)
 # New extraction method using all ra, dec, culled to Rad within one ifu at least
