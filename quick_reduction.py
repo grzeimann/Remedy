@@ -2618,8 +2618,11 @@ spec_list = []
 for i in np.arange(len(E.coords)):
     specinfo = E.get_spectrum_by_coord_index(i)
     gmask = np.isfinite(specinfo[0]) * (specinfo[2] > (0.7*np.nanmedian(specinfo[2])))
+    nu = 2.99792e18 / def_wave
+    dnu = np.diff(nu)
+    dnu = np.hstack([dnu[0], dnu])
     if gmask.sum() > 50.:
-        gmag = np.dot(specinfo[0][gmask], filtg[gmask]) / np.sum(filtg[gmask])
+        gmag = np.dot((nu/dnu*specinfo[0])[gmask], filtg[gmask]) / np.sum((nu/dnu*filtg)[gmask])
         GMag[i, 1] = -2.5 * np.log10(gmag) + 23.9
     else:
         GMag[i, 1] = np.nan
