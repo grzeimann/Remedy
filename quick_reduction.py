@@ -794,21 +794,17 @@ def get_fiber_to_fiber(twispec, scispec, wave_all):
     T = interp1d(avgwav, avgtwi, bounds_error=False, fill_value=np.nan)
     ftftwi = twispec * 0.
     ftfsci = scispec * 0.
-    ftf = ftfsci * 0.
-    sky = ftf * 0.
-    G = Gaussian1DKernel(21.)
     for i in np.arange(scispec.shape[0]):
         w = wave_all[i]
         si = scispec[i]
         ti = twispec[i]
         ftftwi[i] = ti / T(w) 
         ftfsci[i] = si / S(w)
-        y = ftfsci[i] / ftftwi[i]
-        z = convolve(y, G, boundary='extend')
-        ftf[i] = ftftwi[i] * z
-        sky[i] = ftf[i] * S(w)
-    skysub_frac = (scispec - sky) / sky
-    return ftf, skysub_frac
+    z = get_continuum(ftfsci/ftftwi)
+    ftf = ftftwi * z
+    sky = S(wave_all) * ftf
+    error = np.sqrt(3.2**2 + scispec*5.) / 5.
+    return ftf, (scispec - sky) / error
     
 def background_pixels(trace, image):
     back = np.ones(image.shape, dtype=bool)
@@ -1081,7 +1077,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             chi21 = get_spectra_chi2(masterflt, sciimage, scierror, trace)
             mask1 = get_spectra(pixelmask, trace)
             mspec = get_spectra(mastersci, trace) / dw
-            mask1 = mask1 + maskspec
+            #mask1 = mask1 + maskspec
             for arr in [spec, espec, twi, mspec]:
                 arr[mask1>0.] = np.nan
             if j==0:
@@ -2125,6 +2121,7 @@ class Fibers(IsDescription):
      spectrum  = Float32Col((1036,))    # float  (single-precision)
      error  = Float32Col((1036,))    # float  (single-precision)
      fiber_to_fiber  = Float32Col((1036,))    # float  (single-precision)
+     residual = Float32Col((1032,))
      #chi2spec = Float32Col((1036,))
      
      #fiber_to_fiber_adj  = Float32Col((1036,))    # float  (single-precision)     
@@ -2775,6 +2772,7 @@ for i in np.arange(len(scispectra)):
     specrow['spectrum'] = scispectra[i]
     specrow['error'] = errspectra[i]
     specrow['fiber_to_fiber'] = ftfrect[i]
+    specrow['residual'] = res[i]
     specrow.append()
 table.flush()
 
