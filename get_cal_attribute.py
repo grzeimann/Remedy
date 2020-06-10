@@ -29,7 +29,7 @@ for s in us:
     n = len(sel)
     S[cnt:cnt+n] = spectra[sel]
     cnt += n
-nexp = int(n / 448)
+nexp = 1
 inds = np.arange(S.shape[0])
 for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
