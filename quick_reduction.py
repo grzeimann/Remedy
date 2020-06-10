@@ -800,7 +800,7 @@ def get_fiber_to_fiber(twispec, scispec, wave_all):
         ti = twispec[i]
         ftftwi[i] = ti / T(w) 
         ftfsci[i] = si / S(w)
-    z = get_continuum(ftfsci/ftftwi)
+    z = get_continuum(ftfsci/ftftwi, nbins=75)
     ftf = ftftwi * z
     sky = S(wave_all) * ftf
     error = np.sqrt(3.2**2 + scispec*5.) / 5.
