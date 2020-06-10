@@ -14,11 +14,13 @@ from astropy.io import fits
 import os.path as op
 
 filename = sys.argv[1]
-attr = sys.argv[2]
+tname1 = sys.argv[2]
+tname2 = sys.argv[3]
+attr = sys.argv[4]
 
 t = tables.open_file(filename)
-specid = t.root.Cals.cols.specid[:]
-spectra = getattr(t.root.Cals.cols, attr)[:]
+specid = getattr(t.root, tname1).cols.specid[:]
+spectra = getattr(getattr(t.root, tname2).cols, attr)[:]
 us = np.sort(np.unique(specid))
 S = spectra * 0.
 cnt = 0
