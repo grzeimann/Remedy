@@ -1085,12 +1085,9 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             for arr in [spec, espec, twi, mspec]:
                 arr[mask1>0.] = np.nan
             if j==0:
-                try:
-                    intpm, shifts = measure_fiber_profile(masterflt, twi, 
-                                                          trace, wave)
-                except:
-                    intpm = None
-                    log.warning('modeling images failed')
+                #intpm, shifts = measure_fiber_profile(masterflt, twi, 
+                #                                          trace, wave)
+                intpm = None
             
             ExP[cnt:cnt+112] = np.array([header['EXPTIME']]*112)
             if nexposures == 3:
