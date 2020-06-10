@@ -2633,6 +2633,8 @@ allspec_list = []
 log.info('Extracting %i Pan-STARRS Sources' % len(R))
 for i in np.arange(len(E.coords)):
     specinfo = E.get_spectrum_by_coord_index(i)
+    if len(specinfo[0]) == 0:
+        continue
     gmask = np.isfinite(specinfo[0]) * (specinfo[2] > (0.1)) 
     if gmask.sum() > 50.:
         allspec_list.append([R[i], D[i]] + list(specinfo))
