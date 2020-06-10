@@ -878,8 +878,8 @@ def get_mask(scispectra, C1, ftf, res, nexp):
         hl = int((k+1)*112*nexp)
         idx = int(k / 4)
         ampid = amps[k % 4]
-        bad_columns = np.sum(mask[ll:hl], axis=0) > (0.2 * nexp * 112)
-        mask[ll:hl, bad_columns] = True
+        #bad_columns = np.sum(mask[ll:hl], axis=0) > (0.2 * nexp * 112)
+        #mask[ll:hl, bad_columns] = True
         mfrac = ((mask[ll:hl].sum()*1.) / 
                  (mask[ll:hl].shape[0]*mask[ll:hl].shape[1])*1.)
         if mfrac > 0.2:
@@ -2245,7 +2245,7 @@ filtg /= filtg.sum()
 # Calibration factors to convert electrons to uJy
 # =============================================================================
 mult_fac = 6.626e-27 * (3e18 / def_wave) / 360. / 5e5 / 0.92 * 5
-mult_fac *= 1e29 * def_wave**2 / 3e18
+mult_fac *= 1e29 * def_wave**2 / 2.99792e18
 
 # =============================================================================
 # Read standard throughput
@@ -2402,6 +2402,8 @@ log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
 
 fac = 360. / ExP
 fac[ExP==0.] = 1.
+for fc in fac:
+    log.info('Exposure time factore: %0.2f' % fc)
 mult_fac2 = mult_fac[np.newaxis, :] * fac[:, np.newaxis]
 scispectra[:] = scispectra / throughput[np.newaxis, :] * mult_fac2
 errspectra[:] = errspectra / throughput[np.newaxis, :] * mult_fac2
