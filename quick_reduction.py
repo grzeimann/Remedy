@@ -1043,6 +1043,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         readnoise = h5table[ind]['readnoise']
         masterflt = h5table[ind]['mastertwi']
         mastersci = h5table[ind]['mastersci']
+        maskspec = h5table[ind]['maskspec']
         masterbias = h5table[ind]['masterbias']
         try:
             masterdark = h5table[ind]['masterdark']
@@ -1054,7 +1055,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         
         log.info('Getting powerlaw for mastertwi for %s%s' % (ifuslot, amp))
         masterdark[:] = masterdark - masterbias
-        masterflt[:] = masterflt - masterdark - masterbias
+        masterflt[:] = masterflt - masterbias
         plaw = get_powerlaw(masterflt, trace)
         masterflt[:] = masterflt - plaw
         
@@ -1080,6 +1081,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             chi21 = get_spectra_chi2(masterflt, sciimage, scierror, trace)
             mask1 = get_spectra(pixelmask, trace)
             mspec = get_spectra(mastersci, trace) / dw
+            mask1 = mask1 + maskspec
             for arr in [spec, espec, twi, mspec]:
                 arr[mask1>0.] = np.nan
             if j==0:
@@ -2186,8 +2188,15 @@ class Detections(IsDescription):
      error  = Float32Col((1036,))     # float  (single-precision)
      model  = Float32Col((1036,))     # float  (single-precision)
 
-
 class CatSpectra(IsDescription):
+     ra  = Float32Col()    # float  (single-precision)
+     dec  = Float32Col()    # float  (single-precision)
+     spectrum  = Float32Col((1036,))    # float  (single-precision)
+     error  = Float32Col((1036,))    # float  (single-precision)
+     weight  = Float32Col((1036,))    # float  (single-precision)
+
+
+class MatSpectra(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
      dec  = Float32Col()    # float  (single-precision)
      fx  = Float32Col()    # float  (single-precision)
@@ -2578,6 +2587,21 @@ newpsf = tophat[0] * moffat[0] / np.max(tophat[0])
 psf = [newpsf, moffat[1], moffat[2]]
 E.psf = psf
 E.get_ADR_RAdec(A)
+# New extraction method using all ra, dec, culled to Rad within one ifu at least
+R = []
+D = []
+pancat = SkyCoord(raC*units.deg, decC*units.deg, frame='fk5')
+for i in info:
+    image, fn, name, ui, tfile, sources = i
+    ifuslot = '%03d' % ui
+    raifu, decifu = A.get_ifuslot_ra_dec(ifuslot)
+    c = SkyCoord(raifu*units.deg, decifu*units.deg, frame='fk5')
+    sep = c.separation(pancat)
+    sel = sep.arcsec < 35.
+    R.append(raC[sel])
+    D.append(decC[sel])
+R = np.hstack(R)
+D = np.hstack(D)
 log.info('Extracting %i Bright Sources for PSF' % objsel.sum())
 
 mRA, mDec = A.tp.wcs_pix2world(f['fx'][objsel], f['fy'][objsel], 1)
@@ -2603,7 +2627,15 @@ for i in np.arange(len(E.coords)):
     
     spec_list.append([mRA[i], mDec[i], FX[i], FY[i], pFX[i], pFY[i], GMag[i, 0],
                       GMag[i, 1]] + list(specinfo))
-    
+
+E.coords = SkyCoord(R*units.deg, D*units.deg, frame='fk5')
+allspec_list = []
+log.info('Extracting %i Pan-STARRS Sources' % len(R))
+for i in np.arange(len(E.coords)):
+    specinfo = E.get_spectrum_by_coord_index(i)
+    gmask = np.isfinite(specinfo[0]) * (specinfo[2] > (0.1)) 
+    if gmask.sum() > 50.:
+        allspec_list.append([R[i], D[i]] + list(specinfo))
 X, Y, Z = [np.zeros((len(spec_list), 11)) for k in np.arange(3)]
 nwave = np.array([np.mean(xi) for xi in np.array_split(def_wave, 11)])
 seeing_array = np.linspace(np.median(gseeing)-0.8, np.median(gseeing)+0.8, 161)
@@ -2694,8 +2726,8 @@ if not args.no_detect:
                                 fy, sra, sdec, l[2], l[3], l[4], l[5], l[6],
                                 k[:, 0], k[:, 1], k[:, 2]])
 
-table = h5spec.create_table(h5spec.root, 'CatSpectra', CatSpectra, 
-                            "Spectral Extraction Information")
+table = h5spec.create_table(h5spec.root, 'MatSpectra', MatSpectra, 
+                            "Spectral Extraction Information for matches")
 
 specrow = table.row
 for specinfo in spec_list:
@@ -2714,6 +2746,20 @@ for specinfo in spec_list:
         specrow['image'] = specinfo[11]
         specrow['xgrid'] = specinfo[12]
         specrow['ygrid'] = specinfo[13]
+    specrow.append()
+table.flush()
+
+table = h5spec.create_table(h5spec.root, 'CatSpectra', CatSpectra, 
+                            "Spectral Extraction Information")
+
+specrow = table.row
+for specinfo in allspec_list:
+    specrow['ra'] = specinfo[0]
+    specrow['dec'] = specinfo[1]
+    if len(specinfo[2]) > 0:
+        specrow['spectrum'] = specinfo[2] * norm
+        specrow['error'] = specinfo[3] * norm
+        specrow['weight'] = specinfo[4]
     specrow.append()
 table.flush()
 
