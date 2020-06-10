@@ -11,6 +11,7 @@ import tables
 import sys
 import numpy as np
 from astropy.io import fits
+import os.path as op
 
 filename = sys.argv[1]
 attr = sys.argv[2]
@@ -31,4 +32,4 @@ inds = np.arange(S.shape[0])
 for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
     fits.PrimaryHDU(np.array(S[sel], dtype='float32')).writeto(
-            '%s_%s.fits' % (filename[:-3], attr), overwrite=True)
+            '%s_%s.fits' % (op.basename(filename)[:-3], attr), overwrite=True)
