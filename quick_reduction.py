@@ -1074,7 +1074,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
                 facexp = 1.
             sciimage[:] = sciimage - masterdark*facexp - masterbias
             sci_plaw = get_powerlaw(sciimage, trace)
-            sciimage[:] = sciimage# - sci_plaw
+            sciimage[:] = sciimage - sci_plaw
             twi = get_spectra(masterflt, trace) / dw
             spec = get_spectra(sciimage, trace) / dw
             espec = get_spectra_error(scierror, trace) / dw
@@ -2319,7 +2319,7 @@ inds = np.arange(scispectra.shape[0])
 mask = get_mask(scispectra, C1, ftf, res, nexp)
 mask[:, :-1] += mask[:, 1:]
 mask[:, 1:] += mask[:, :-1]
-if True: #not args.no_masking:
+if False: #not args.no_masking:
     scispectra[mask] = np.nan
     errspectra[mask] = np.nan
 scispectra = safe_division(scispectra, ftf)
