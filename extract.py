@@ -149,7 +149,7 @@ class Extract:
                        method='linear')
         psf[np.isnan(psf)]=0.
         zarray = np.array([psf, xgrid, ygrid])
-        #zarray[0] /= zarray[0].sum()
+        zarray[0] /= zarray[0].sum()
         return zarray
 
     def gaussian_psf(self, xstd, ystd, theta, boxsize, scale):
