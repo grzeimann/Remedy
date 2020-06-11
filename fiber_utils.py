@@ -204,7 +204,7 @@ def get_powerlaw_ydir(trace, spec, amp, col):
     return yz, np.array(plaw)   
 
 
-def get_powerlaw(image, trace, order=2):
+def get_powerlaw(image, trace, order=3):
     '''
     Solve for scatter light from powerlaw
     
