@@ -285,17 +285,17 @@ def get_powerlaw(image, trace, order=3):
         ZM.append(avgz)
     XM, YM, ZM = (np.hstack(XM), np.hstack(YM), np.hstack(ZM))
     zg = gauss_eval(XM, YM, ZM, xg, yg)
-    P = Polynomial2D(order)
-    fit = LevMarLSQFitter()(P, xg, yg, zg)
-    plaw = fit(xind, yind)
-#    Pos = np.zeros((len(xg), 2))
-#    sel = np.isfinite(zg)
-#    if sel.sum() > 5:
-#        Pos[:, 0] = xg[sel]
-#        Pos[:, 1] = yg[sel]
-#        plaw = griddata(Pos, zg[sel], (xind, yind), method='linear')
-#    else:
-#        plaw = 0. * image
+    #P = Polynomial2D(order)
+    #fit = LevMarLSQFitter()(P, xg, yg, zg)
+    #plaw = fit(xind, yind)
+    Pos = np.zeros((len(xg), 2))
+    sel = np.isfinite(zg)
+    if sel.sum() > 5:
+        Pos[:, 0] = xg[sel]
+        Pos[:, 1] = yg[sel]
+        plaw = griddata(Pos, zg[sel], (xind, yind), method='linear')
+    else:
+        plaw = 0. * image
     return plaw
 
 
