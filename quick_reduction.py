@@ -800,7 +800,7 @@ def get_fiber_to_fiber(twispec, scispec, wave_all):
         ti = twispec[i]
         ftftwi[i] = ti / T(w) 
         ftfsci[i] = si / S(w)
-    z = get_continuum(ftfsci/ftftwi, nbins=75)
+    z = get_continuum(ftfsci / ftftwi, nbins=75)
     ftf = ftftwi * z
     sky = S(wave_all) * ftf
     error = np.sqrt(3.2**2 + scispec*5.) / 5.
@@ -855,7 +855,7 @@ def get_mask(scispectra, C1, ftf, res, nexp):
         mask[y[n], x1[n]] = True
     
     # Fiber to fiber < 0.5 (dead fiber) and |res| > 0.25, meaning mastersky residuals > 25%
-    badftf = (ftf < 0.5) #+ (np.abs(res) > 0.25)
+    badftf = (ftf < 0.5) + (res < -0.5) + (res > 0.75)
     mask[badftf] = True
     
     # Error spectra with 0.0 are either outside the wavelength range or pixels masked by bad pixel mask
