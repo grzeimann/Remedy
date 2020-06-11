@@ -248,7 +248,7 @@ def get_powerlaw(image, trace, order=3):
         x, y = ([], [])
         dy = np.array(np.ceil(trace[0, xchunk])-7, dtype=int)
         for j, xc in enumerate(xchunk):
-            d = np.arange(3, dy[j])
+            d = np.arange(1, dy[j])
             if len(d):
                 y.append(d)
                 x.append([xc] * len(d))
@@ -272,7 +272,7 @@ def get_powerlaw(image, trace, order=3):
         x, y = ([], [])
         dy = np.array(np.ceil(trace[-1, xchunk])+7, dtype=int)
         for j, xc in enumerate(xchunk):
-            d = np.arange(dy[j], image.shape[1]-2)
+            d = np.arange(dy[j], image.shape[1]-1)
             if len(d):
                 y.append(d)
                 x.append([xc] * len(d))
