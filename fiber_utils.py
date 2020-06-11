@@ -296,7 +296,7 @@ def get_powerlaw(image, trace, order=2):
 #        plaw = griddata(Pos, zg[sel], (xind, yind), method='linear')
 #    else:
 #        plaw = 0. * image
-    return plaw*0.
+    return plaw
 
 
 def get_trace_reference(specid, ifuslot, ifuid, amp, obsdate,
