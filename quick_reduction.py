@@ -1038,7 +1038,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             trace = 0. * trace
         readnoise = h5table[ind]['readnoise']
         masterflt = h5table[ind]['masterflt']
-        mastersci = h5table[ind]['masterscii']
+        mastersci = h5table[ind]['mastersci']
         maskspec = h5table[ind]['maskspec']
         masterbias = h5table[ind]['masterbias']
         try:
