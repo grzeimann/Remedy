@@ -769,7 +769,7 @@ def get_continuum(spectra, nbins=25):
             cont[i] = 0.0
     return cont
 
-def get_fiber_to_fiber(twispec, scispec, wave_all):
+def get_fiber_to_fiber(fltspec, scispec, wave_all, twispec):
     '''
     Get Fiber to Fiber from twilight spectra
     
@@ -788,23 +788,37 @@ def get_fiber_to_fiber(twispec, scispec, wave_all):
     S = scispec.ravel()
     avgsci = [biweight(chunk) for chunk in np.array_split(S[inds], 3000)]
     avgwav = [np.mean(w) for w in np.array_split(wave_all.ravel()[inds], 3000)]
+    S = fltspec.ravel()
+    avgflt = [biweight(chunk) for chunk in np.array_split(S[inds], 3000)]
     S = twispec.ravel()
     avgtwi = [biweight(chunk) for chunk in np.array_split(S[inds], 3000)]
+
     S = interp1d(avgwav, avgsci, bounds_error=False, fill_value=np.nan)
+    F = interp1d(avgwav, avgflt, bounds_error=False, fill_value=np.nan)
     T = interp1d(avgwav, avgtwi, bounds_error=False, fill_value=np.nan)
-    ftftwi = twispec * 0.
+
+    ftfflt = fltspec * 0.
     ftfsci = scispec * 0.
+    ftftwi = twispec * 0.
+
     for i in np.arange(scispec.shape[0]):
         w = wave_all[i]
         si = scispec[i]
+        fi = fltspec[i]
         ti = twispec[i]
-        ftftwi[i] = ti / T(w) 
+        ftfflt[i] = fi / F(w) 
         ftfsci[i] = si / S(w)
-    z = get_continuum(ftfsci / ftftwi, nbins=5)
-    ftf = ftftwi * z
+        ftftwi[i] = ti / T(w)
+    z = get_continuum(ftftwi / ftfflt, nbins=5)
+    ftf = ftfflt * z
+    sky = T(wave_all) * ftf
+    ratio = (twispec - sky) / sky
+    zr = get_continuum(ratio, nbins=25)
+    z = get_continuum(ftfsci / ftfflt, nbins=5)
+    ftf = ftfflt * z * (1 + zr) 
     sky = S(wave_all) * ftf
     error = np.sqrt((5. * 3.2**2) + (scispec * 5.)) / 5.
-    return ftf, (scispec - sky) / sky
+    return ftf, scispec - sky
     
 def background_pixels(trace, image):
     back = np.ones(image.shape, dtype=bool)
@@ -1018,6 +1032,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
     ExP = np.zeros((N,))
     p = np.zeros((N, 2))
     t = np.zeros((N, 1032))
+    ft = np.zeros((N, 1032))
     s = np.zeros((N, 1032))
     ms = np.zeros((N, 1032))
     e = np.zeros((N, 1032))
@@ -1038,6 +1053,8 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             trace = 0. * trace
         readnoise = h5table[ind]['readnoise']
         masterflt = h5table[ind]['masterflt']
+        mastertwi = h5table[ind]['mastertwi']
+
         mastersci = h5table[ind]['mastersci']
         maskspec = h5table[ind]['maskspec']
         masterbias = h5table[ind]['masterbias']
@@ -1055,6 +1072,10 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         plaw = get_powerlaw(masterflt, trace)
         masterflt[:] = masterflt - plaw
         
+        mastertwi[:] = mastertwi - masterbias
+        plaw = get_powerlaw(mastertwi, trace)
+        mastertwi[:] = mastertwi - plaw
+        
         mastersci[:] = mastersci - masterdark - masterbias
         plaw2 = get_powerlaw(mastersci, trace)
         mastersci[:] = mastersci - plaw2
@@ -1071,14 +1092,16 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             sciimage[:] = sciimage - masterdark*facexp - masterbias
             sci_plaw = get_powerlaw(sciimage, trace)
             sciimage[:] = sciimage - sci_plaw
-            twi = get_spectra(masterflt, trace) / dw
+            flt = get_spectra(masterflt, trace) / dw
+            twi = get_spectra(mastertwi, trace) / dw
+
             spec = get_spectra(sciimage, trace) / dw
             espec = get_spectra_error(scierror, trace) / dw
             chi21 = get_spectra_chi2(masterflt, sciimage, scierror, trace)
             mask1 = get_spectra(pixelmask, trace)
             mspec = get_spectra(mastersci, trace) / dw
             #mask1 = mask1 + maskspec
-            for arr in [spec, espec, twi, mspec]:
+            for arr in [spec, espec, flt, twi, mspec]:
                 arr[mask1>0.] = np.nan
             if j==0:
                 #intpm, shifts = measure_fiber_profile(masterflt, twi, 
@@ -1090,7 +1113,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
                 pos = amppos + dither_pattern[j]
             else:
                 pos = amppos * 1.
-            N = twi.shape[0]
+            N = flt.shape[0]
             _I = np.char.array(['%s_%s_%s_%s' % (specid, ifuslot, ifuid, amp)] * N)
             _V = '%s_%s_%s_%s_exp%02d' % (specid, ifuslot, ifuid, amp, j+1)
             #specrow['image'] = sciimage
@@ -1107,6 +1130,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
 #                specrow.append()
             p[cnt:cnt+112, :] = pos
             t[cnt:cnt+112, :] = twi
+            ft[cnt:cnt+112, :] = flt
             s[cnt:cnt+112, :] = spec
             ms[cnt:cnt+112, :] = mspec
             e[cnt:cnt+112, :] = espec
@@ -1121,7 +1145,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
     _i = np.vstack(_i)
     tableh5.flush()
     tableh5 = None
-    return p, t, s, e, wa, filenames, scitarfile, _i, c1, intm, ExP, ms
+    return p, ft, s, e, wa, filenames, scitarfile, _i, c1, intm, ExP, ms, t
 
 
 def make_cube(xloc, yloc, data, error, Dx, Dy, scale, ran,
@@ -2276,8 +2300,8 @@ allifus = np.hstack(allifus)
 tableh5 = h5spec.create_table(h5spec.root, 'Images', Images, 
                             "Image Information")
 log.info('Reducing ifuslot: %03d' % args.ifuslot)
-(pos, twispectra, scispectra, errspectra, wave_all, 
- fns, tfile, _I, C1, intm, ExP, mscispectra) = reduce_ifuslot(ifuloop, h5table,
+(pos, fltspectra, scispectra, errspectra, wave_all, 
+ fns, tfile, _I, C1, intm, ExP, mscispectra, twispectra) = reduce_ifuslot(ifuloop, h5table,
                                                               tableh5)
 
 fn = fns[0]
@@ -2298,9 +2322,9 @@ log.info('Number of exposures: %i' % nexp)
 # Get fiber to fiber from twilight spectra
 # =============================================================================
 log.info('Getting Fiber to Fiber')
-ftf, res = get_fiber_to_fiber(twispectra, mscispectra, wave_all)
+ftf, res = get_fiber_to_fiber(fltspectra, mscispectra, wave_all, twispectra)
 
-del twispectra, mscispectra
+del twispectra, mscispectra, fltspectra
 gc.collect()
 process = psutil.Process(os.getpid())
 log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
