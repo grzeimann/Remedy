@@ -804,7 +804,7 @@ def get_fiber_to_fiber(twispec, scispec, wave_all):
     ftf = ftftwi * z
     sky = S(wave_all) * ftf
     error = np.sqrt((5. * 3.2**2) + (scispec * 5.)) / 5.
-    return ftf, (scispec - sky) / error
+    return ftf, (scispec - sky) / sky
     
 def background_pixels(trace, image):
     back = np.ones(image.shape, dtype=bool)
