@@ -792,7 +792,7 @@ def get_fiber_to_fiber(fltspec, scispec, wave_all, twispec):
     avgflt = [biweight(chunk) for chunk in np.array_split(S[inds], 3000)]
     S = twispec.ravel()
     avgtwi = [biweight(chunk) for chunk in np.array_split(S[inds], 3000)]
-    avgscicont = get_continuum(avgsci[np.newaxis, :])[0]
+    avgscicont = get_continuum(np.array(avgsci)[np.newaxis, :])[0]
     S = interp1d(avgwav, avgsci-avgscicont, bounds_error=False, fill_value=np.nan)
     F = interp1d(avgwav, avgflt, bounds_error=False, fill_value=np.nan)
     T = interp1d(avgwav, avgtwi, bounds_error=False, fill_value=np.nan)
