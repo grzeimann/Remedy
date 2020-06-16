@@ -792,18 +792,19 @@ def get_fiber_to_fiber(fltspec, scispec, wave_all, twispec):
     avgflt = [biweight(chunk) for chunk in np.array_split(S[inds], 3000)]
     S = twispec.ravel()
     avgtwi = [biweight(chunk) for chunk in np.array_split(S[inds], 3000)]
-
-    S = interp1d(avgwav, avgsci, bounds_error=False, fill_value=np.nan)
+    avgscicont = get_continuum(avgsci[np.newaxis, :])[0]
+    S = interp1d(avgwav, avgsci-avgscicont, bounds_error=False, fill_value=np.nan)
     F = interp1d(avgwav, avgflt, bounds_error=False, fill_value=np.nan)
     T = interp1d(avgwav, avgtwi, bounds_error=False, fill_value=np.nan)
 
     ftfflt = fltspec * 0.
     ftfsci = scispec * 0.
     ftftwi = twispec * 0.
-
+    cont = get_continuum(scispec)
+    
     for i in np.arange(scispec.shape[0]):
         w = wave_all[i]
-        si = scispec[i]
+        si = scispec[i] - cont[i]
         fi = fltspec[i]
         ti = twispec[i]
         ftfflt[i] = fi / F(w) 
@@ -818,7 +819,7 @@ def get_fiber_to_fiber(fltspec, scispec, wave_all, twispec):
     ftf = ftfflt * z * (1 + zr) 
     sky = S(wave_all) * ftf
     error = np.sqrt((5. * 3.2**2) + (scispec * 5.)) / 5.
-    return ftf, scispec - sky
+    return ftf, ftfsci
     
 def background_pixels(trace, image):
     back = np.ones(image.shape, dtype=bool)
