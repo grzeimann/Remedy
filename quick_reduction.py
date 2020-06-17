@@ -1067,7 +1067,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             pixelmask = np.zeros((1032, 1032), dtype=int)
         
         log.info('Getting powerlaw for mastertwi for %s%s' % (ifuslot, amp))
-        masterdark[:] = 0. * (masterdark - masterbias)
+        masterdark[:] = masterdark - masterbias
         masterflt[:] = masterflt - masterbias
         plaw = get_powerlaw(masterflt, trace)
         masterflt[:] = masterflt - plaw
