@@ -800,7 +800,6 @@ def get_fiber_to_fiber(fltspec, scispec, wave_all, twispec):
     ftfflt = fltspec * 0.
     ftfsci = scispec * 0.
     ftftwi = twispec * 0.
-    cont = get_continuum(scispec)
     
     for i in np.arange(scispec.shape[0]):
         w = wave_all[i]
@@ -816,10 +815,10 @@ def get_fiber_to_fiber(fltspec, scispec, wave_all, twispec):
     ratio = (twispec - sky) / sky
     zr = get_continuum(ratio, nbins=25)
     ftf = ftfflt * z * (1 + zr)
-    R = biweight(ftfsci / ftf, axis=1)
-    sky = S(wave_all) * ftf * R[:, np.newaxis]
+    sky = S(wave_all) * ftf 
     error = np.sqrt((5. * 3.2**2) + (scispec * 5.)) / 5.
-    return ftf, scispec - sky
+    cont = get_continuum(scispec-sky, nbins=50)
+    return ftf, (scispec - sky - cont) / error
     
 def background_pixels(trace, image):
     back = np.ones(image.shape, dtype=bool)
