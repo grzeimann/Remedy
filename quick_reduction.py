@@ -869,7 +869,7 @@ def get_mask(scispectra, C1, ftf, res, nexp):
         mask[y[n], x1[n]] = True
     
     # Fiber to fiber < 0.5 (dead fiber) and |res| > 0.25, meaning mastersky residuals > 25%
-    badftf = (ftf < 0.5)# + (res < -0.75) + (res > 1.0)
+    badftf = (ftf < 0.5) + (res < -0.5) + (res > 0.75)
     mask[badftf] = True
     
     # Error spectra with 0.0 are either outside the wavelength range or pixels masked by bad pixel mask
