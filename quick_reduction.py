@@ -792,7 +792,6 @@ def get_fiber_to_fiber(fltspec, scispec, wave_all, twispec):
     avgflt = [biweight(chunk) for chunk in np.array_split(S[inds], 3000)]
     S = twispec.ravel()
     avgtwi = [biweight(chunk) for chunk in np.array_split(S[inds], 3000)]
-    #avgscicont = get_continuum(np.array(avgsci)[np.newaxis, :])[0]
     S = interp1d(avgwav, avgsci, bounds_error=False, fill_value=np.nan)
     F = interp1d(avgwav, avgflt, bounds_error=False, fill_value=np.nan)
     T = interp1d(avgwav, avgtwi, bounds_error=False, fill_value=np.nan)
@@ -817,14 +816,6 @@ def get_fiber_to_fiber(fltspec, scispec, wave_all, twispec):
     ftf = ftfflt * z * (1 + zr)
     sky = S(wave_all) * ftf 
     error = np.sqrt((5. * 3.2**2) + (scispec * 5.)) / 5.
-    Namps = int(scispec.shape[0] / 112.)
-    for i in np.arange(Namps):
-        ll = int(i * 112)
-        hl = int((i+1) * 112)
-        norm = biweight(scispec[ll:hl] / sky[ll:hl])
-        ftf[ll:hl] = ftf[ll:hl] * norm
-        log.info('Norm for amp %i: %0.2f' % (i+1, norm))
-    sky = ftf * S(wave_all)
     cont = get_continuum(scispec-sky, nbins=50)
     
     return ftf, (scispec - sky - cont) / error
