@@ -820,7 +820,7 @@ def get_fiber_to_fiber(fltspec, scispec, wave_all, twispec):
     Namps = int(scispec.shape[0] / 112.)
     for i in np.arange(Namps):
         ll = int(i * 112)
-        hl = int(i * 112)
+        hl = int((i+1) * 112)
         norm = biweight(scispec[ll:hl] / sky[ll:hl])
         ftf[ll:hl] = ftf[ll:hl] * norm
         log.info('Norm for amp %i: %0.2f' % (i+1, norm))
