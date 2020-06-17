@@ -817,7 +817,7 @@ def get_fiber_to_fiber(fltspec, scispec, wave_all, twispec):
     zr = get_continuum(ratio, nbins=25)
     ftf = ftfflt * z * (1 + zr)
     R = biweight(ftfsci / ftf, axis=1)
-    sky = S(wave_all) * ftf# * R[:, np.newaxis]
+    sky = S(wave_all) * ftf * R[:, np.newaxis]
     error = np.sqrt((5. * 3.2**2) + (scispec * 5.)) / 5.
     return ftf, scispec - sky
     
