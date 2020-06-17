@@ -817,7 +817,16 @@ def get_fiber_to_fiber(fltspec, scispec, wave_all, twispec):
     ftf = ftfflt * z * (1 + zr)
     sky = S(wave_all) * ftf 
     error = np.sqrt((5. * 3.2**2) + (scispec * 5.)) / 5.
+    Namps = int(scispec.shape[0] / 112.)
+    for i in np.arange(Namps):
+        ll = int(i * 112)
+        hl = int(i * 112)
+        norm = biweight(scispec[ll:hl] / sky[ll:hl])
+        ftf[ll:hl] = ftf[ll:hl] * norm
+        log.info('Norm for amp %i: %0.2f' % (i+1, norm))
+    sky = ftf * S(wave_all)
     cont = get_continuum(scispec-sky, nbins=50)
+    
     return ftf, (scispec - sky - cont) / error
     
 def background_pixels(trace, image):
