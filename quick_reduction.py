@@ -1069,15 +1069,24 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         log.info('Getting powerlaw for mastertwi for %s%s' % (ifuslot, amp))
         masterdark[:] = masterdark - masterbias
         masterflt[:] = masterflt - masterbias
-        plaw = get_powerlaw(masterflt, trace)
+        try:
+            plaw = get_powerlaw(masterflt, trace)
+        except:
+            plaw = 0.
         masterflt[:] = masterflt - plaw
         
         mastertwi[:] = mastertwi - masterbias
-        plaw = get_powerlaw(mastertwi, trace)
+        try:
+            plaw = get_powerlaw(mastertwi, trace)
+        except:
+            plaw = 0.
         mastertwi[:] = mastertwi - plaw
         
         mastersci[:] = mastersci - masterdark - masterbias
-        plaw2 = get_powerlaw(mastersci, trace)
+        try:
+            plaw2 = get_powerlaw(mastersci, trace)
+        except:
+            plaw = 0.
         mastersci[:] = mastersci - plaw2
         
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
@@ -1090,7 +1099,10 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             if facexp < 0.:
                 facexp = 1.
             sciimage[:] = sciimage - masterdark*facexp - masterbias
-            sci_plaw = get_powerlaw(sciimage, trace)
+            try:
+                sci_plaw = get_powerlaw(sciimage, trace)
+            except:
+                plaw = 0.
             sciimage[:] = sciimage - sci_plaw
             flt = get_spectra(masterflt, trace) / dw
             twi = get_spectra(mastertwi, trace) / dw
