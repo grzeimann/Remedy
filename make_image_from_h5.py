@@ -63,6 +63,7 @@ parser.add_argument("-ics", "--image_center_size",
 
 def make_image(Pos, y, xg, yg, xgrid, ygrid, sigma):
     image = xgrid * 0.
+    weight = xgrid * 0.
     N = int(sigma*5)
     for p, yi in zip(Pos, y):
         if np.isnan(yi):
@@ -80,6 +81,8 @@ def make_image(Pos, y, xg, yg, xgrid, ygrid, sigma):
         G = np.exp(-0.5 * d**2 / sigma**2)
         G[:] /= G.sum()
         image[ly:hy,lx:hx] += yi*G
+        weight[ly:hy,lx:hx] += G
+    image[weight < 0.8 * np.max(weight)] = 0.
     return image
 
 args = parser.parse_args(args=None)
