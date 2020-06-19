@@ -40,6 +40,10 @@ parser.add_argument("h5file",
                     help='''e.g., 20200430_0000020.h5''',
                     type=str)
 
+parser.add_argument("surname",
+                    help='''file name modification''',
+                    type=str)
+
 parser.add_argument("-we", "--wave_extract",
                     help='''Central Wavelength and Sigma"''',
                     default="5010.0, 2.6", type=str)
@@ -98,6 +102,8 @@ Dec = t.root.Survey.cols.dec[0]
 pa = t.root.Survey.cols.pa[0]
 offset = t.root.Survey.cols.offset[0]
 spectra = t.root.Fibers.cols.spectrum[:] / offset
+error = t.root.Fibers.cols.error[:] / offset
+
 
 if args.image_center_size is not None:
     bounding_box = [float(corner.replace(' ', ''))
@@ -132,15 +138,21 @@ data = (spectra[:, wsel] - back[:, np.newaxis]) * 2.
 mask = np.array(np.isfinite(data), dtype=float)
 weight = Gmodel[np.newaxis, wsel]
 z = np.nansum(mask * data * weight, axis=1) / np.nansum(mask * weight**2, axis=1)
+ze = np.sqrt(np.nansum(mask * error**2 * weight, axis=1) / np.nansum(mask * weight**2, axis=1))
+
 good = np.isfinite(z) 
 image = make_image(Pos[good], z[good], xg, yg, xgrid, ygrid, 1.5 / 2.35)
+errorimage = make_image(Pos[good], ze[good], xg, yg, xgrid, ygrid, 1.5 / 2.35)
 good = np.isfinite(back)
 backimage = make_image(Pos[good], back[good], xg, yg, xgrid, ygrid, 1.5 / 2.35)
 
-name = op.basename(args.h5file[:-3]) + '_collapse.fits'
+name = op.basename(args.h5file[:-3]) + ('_%s.fits' % args.surname)
 header['CRPIX1'] = (N+1) / 2
 header['CRPIX2'] = (N+1) / 2
 F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
+F.writeto(name, overwrite=True)
+name = op.basename(args.h5file[:-3]) + ('_%s_error.fits' % args.surname)
+F = fits.PrimaryHDU(np.array(errorimage, 'float32'), header=header)
 F.writeto(name, overwrite=True)
 name = op.basename(args.h5file[:-3]) + '_back.fits'
 F = fits.PrimaryHDU(np.array(backimage, 'float32'), header=header)
