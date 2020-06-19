@@ -46,7 +46,7 @@ parser.add_argument("-we", "--wave_extract",
 
 parser.add_argument("-bw", "--back_wave",
                     help='''Background Wavelength Range"''',
-                    default="5150,5350", type=str)
+                    default="4970,5030", type=str)
 
 parser.add_argument("-ps", "--pixel_scale",
                     help='''Pixel scale for output image in arcsec''',
@@ -85,7 +85,8 @@ def_wave = np.linspace(3470., 5540., 1036)
 wave_extract = [float(i.replace(' ', '')) for i in args.wave_extract.split(',')]
 back_wave = [float(i.replace(' ', '')) for i in args.back_wave.split(',')]
 bsel = (def_wave >= back_wave[0]) * (def_wave <= back_wave[1])
-wsel = np.abs(def_wave - wave_extract[0]) < (2. * wave_extract[1])
+wsel = np.abs(def_wave - wave_extract[0]) < (2.5 * wave_extract[1])
+bsel = bsel * (~wsel)
 Gmodel = np.exp(-0.5 * (def_wave - wave_extract[0])**2 / wave_extract[1]**2)
 Gmodel[:] = Gmodel / Gmodel[wsel].sum()
 
@@ -116,6 +117,9 @@ Aother = Astrometry(bounding_box[0], bounding_box[1], pa, 0., 0.)
 E.get_ADR_RAdec(Aother)
 dra = np.interp(wave_extract[0], def_wave, E.ADRra)
 ddec = np.interp(wave_extract[0], def_wave, E.ADRdec)
+print(dra, ddec)
+ra -= dra / 3600. / np.cos(np.deg2rad(A.dec0))
+dec -= ddec / 3600.
 header = tp.to_header()
 x, y = tp.wcs_world2pix(ra, dec, 1)
 xg = np.linspace(-bb, bb, N)
