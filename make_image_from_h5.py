@@ -137,8 +137,9 @@ back = biweight(spectra[:, bsel], axis=1)
 data = (spectra[:, wsel] - back[:, np.newaxis]) * 2.
 mask = np.array(np.isfinite(data), dtype=float)
 weight = Gmodel[np.newaxis, wsel]
+edata = error[:, wsel] * 2.
 z = np.nansum(mask * data * weight, axis=1) / np.nansum(mask * weight**2, axis=1)
-ze = np.sqrt(np.nansum(mask * error**2 * weight, axis=1) / np.nansum(mask * weight**2, axis=1))
+ze = np.sqrt(np.nansum(mask * edata**2 * weight, axis=1) / np.nansum(mask * weight**2, axis=1))
 
 good = np.isfinite(z) 
 image = make_image(Pos[good], z[good], xg, yg, xgrid, ygrid, 1.5 / 2.35)
