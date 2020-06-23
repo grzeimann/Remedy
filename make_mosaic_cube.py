@@ -110,6 +110,7 @@ for h5file in h5files:
     ra = t.root.Info.cols.ra[:]
     cnt += len(ra)
     t.close()
+args.log.info(cnt)
 raarray = np.zeros((cnt, len(def_wave)))
 decarray = np.zeros((cnt, len(def_wave)))
 specarray = np.zeros((cnt, len(def_wave)))
