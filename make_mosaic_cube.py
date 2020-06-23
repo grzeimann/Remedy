@@ -71,8 +71,8 @@ def make_image(Pos, y, xg, yg, xgrid, ygrid, sigma):
     for i in np.arange(2*N):
         for j in np.arange(2*N):
             c = i * 2 * N + j
-            indx_array[:, c] = indx[good] + i - N
-            indy_array[:, c] = indy[good] + j - N
+            indx_array[:, c] = indx + i - N
+            indy_array[:, c] = indy + j - N
     d = np.sqrt((xgrid[indy_array, indx_array] - Pos[:, 0][:, np.newaxis])**2 + 
                 (ygrid[indy_array, indx_array] - Pos[:, 1][:, np.newaxis])**2)
     G = np.exp(-0.5 * d**2 / sigma**2)
@@ -137,7 +137,6 @@ for h5file in h5files:
     Aother = Astrometry(bounding_box[0], bounding_box[1], pa, 0., 0.)
     header = tp.to_header()
     E.get_ADR_RAdec(Aother)
-    print(cnt, cnt1, len(ra), len(E.ADRra))
     raarray[cnt:cnt1, :] = ra[:, np.newaxis] - E.ADRra[np.newaxis, :] / 3600. / np.cos(np.deg2rad(A.dec0))
     decarray[cnt:cnt1, :] = dec[:, np.newaxis] - E.ADRdec[np.newaxis, :] / 3600.
     specarray[cnt:cnt1, :] = spectra
