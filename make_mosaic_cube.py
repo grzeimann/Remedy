@@ -135,7 +135,7 @@ for h5file in h5files:
     t.close()
 
 cube = np.where(weightcube > 0.4, cube / weightcube, 0.0)
-name = op.basename(args.h5file[:-3]) + ('_%s_cube.fits' % args.surname)
+name = op.basename('_%s_cube.fits' % args.surname)
 header['CRPIX1'] = (N+1) / 2
 header['CRPIX2'] = (N+1) / 2
 header['CDELT3'] = 2.
