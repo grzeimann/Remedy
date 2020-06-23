@@ -107,7 +107,7 @@ speclist = []
 errorlist = []
 
 for h5file in h5files:
-    t = tables.open_file(args.h5file)
+    t = tables.open_file(h5file)
     ra = t.root.Info.cols.ra[:]
     dec = t.root.Info.cols.dec[:]
     RA = t.root.Survey.cols.ra[0]
