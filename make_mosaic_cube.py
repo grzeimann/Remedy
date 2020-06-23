@@ -86,7 +86,7 @@ args.log = setup_logging('make_image_from_h5')
 
 def_wave = np.linspace(3470., 5540., 1036)
 
-h5files = glob.glob(args.h5files)
+h5files = sorted(glob.glob(args.h5files))
 
 bounding_box = [float(corner.replace(' ', ''))
                         for corner in args.image_center_size.split(',')]
@@ -109,7 +109,7 @@ for h5file in h5files:
     ra = t.root.Info.cols.ra[:]
     cnt += len(ra)
     t.close()
-args.log.info(cnt)
+args.log.info('Number of total fibers: %i' % cnt)
 raarray = np.zeros((cnt, len(def_wave)), dtype='float32')
 decarray = np.zeros((cnt, len(def_wave)), dtype='float32')
 specarray = np.zeros((cnt, len(def_wave)), dtype='float32')
