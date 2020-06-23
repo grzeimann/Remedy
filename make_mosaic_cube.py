@@ -63,21 +63,25 @@ def make_image(Pos, y, xg, yg, xgrid, ygrid, sigma):
     nogood = ((indx < N) + (indx >= (len(xg) - N)) +
               (indy < N) + (indy >= (len(yg) - N)))
     nogood = nogood + np.isnan(y)
-    good = np.where(~nogood)[0]
-    indx_array = np.zeros((len(good), 4*N**2), dtype=int)
-    indy_array = np.zeros((len(good), 4*N**2), dtype=int)
+    y[nogood] = 0.0
+    indx[nogood] = N+1
+    indy[nogood] = N+1
+    indx_array = np.zeros((len(y), 4*N**2), dtype=int)
+    indy_array = np.zeros((len(y), 4*N**2), dtype=int)
     for i in np.arange(2*N):
         for j in np.arange(2*N):
             c = i * 2 * N + j
             indx_array[:, c] = indx[good] + i - N
             indy_array[:, c] = indy[good] + j - N
-    d = np.sqrt((xgrid[indy_array, indx_array] - Pos[good, 0][:, np.newaxis])**2 + 
-                (ygrid[indy_array, indx_array] - Pos[good, 1][:, np.newaxis])**2)
+    d = np.sqrt((xgrid[indy_array, indx_array] - Pos[:, 0][:, np.newaxis])**2 + 
+                (ygrid[indy_array, indx_array] - Pos[:, 1][:, np.newaxis])**2)
     G = np.exp(-0.5 * d**2 / sigma**2)
     G[:] /= G.sum(axis=1)[:, np.newaxis]
-    for j, i in enumerate(good):
-        image[indy_array[j], indx_array[j]] += y[i] * G[j]
-        weight[indy_array[j], indx_array[j]] += G[j]
+    G[nogood] = 0.
+    indj = 336
+    for i in np.arange(indj):
+        image[indy_array[i::indj].ravel(), indx_array[i::indj].ravel()] += (y[i::indj][:, np.newaxis] * G[i::indj]).ravel()
+        weight[indy_array[i::indj].ravel(), indx_array[i::indj].ravel()] += G[i::indj].ravel()
     weight[:] *= np.pi * 0.75**2
     return image, weight
 
