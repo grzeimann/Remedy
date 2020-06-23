@@ -81,7 +81,7 @@ def make_image(Pos, y, xg, yg, xgrid, ygrid, sigma):
     weight[:] *= np.pi * 0.75**2
     image[weight < 0.4] = 0.
     image[:] = image / weight
-    image[~np.isifinite(image)] = 0.0
+    image[~np.isfinite(image)] = 0.0
     return image
 
 args = parser.parse_args(args=None)
