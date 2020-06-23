@@ -104,6 +104,7 @@ cube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 weightcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 
 for h5file in h5files:
+    args.log.info('Working on %s' % h5file)
     t = tables.open_file(h5file)
     ra = t.root.Info.cols.ra[:]
     dec = t.root.Info.cols.dec[:]
@@ -128,7 +129,6 @@ for h5file in h5files:
         Pos[:, 0], Pos[:, 1] = (x, y)
         data = spectra[:, i]
         good = np.isfinite(data)
-        args.log.info('Started wavelength %0.1f' % def_wave[i])
         image, weight = make_image(Pos[good], data[good], xg, yg, xgrid, ygrid, 1.5 / 2.35)
         cube[i, :, :] += image
         weightcube[i, :, :] += weight
