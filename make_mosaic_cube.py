@@ -133,6 +133,7 @@ for h5file in h5files:
     Aother = Astrometry(bounding_box[0], bounding_box[1], pa, 0., 0.)
     header = tp.to_header()
     E.get_ADR_RAdec(Aother)
+    print(cnt, cnt1, len(ra), len(E.ADRra))
     raarray[cnt:cnt1, :] = ra[:, np.newaxis] - E.ADRra[np.newaxis, :] / 3600. / np.cos(np.deg2rad(A.dec0))
     decarray[cnt:cnt1, :] = dec[:, np.newaxis] - E.ADRdec[np.newaxis, :] / 3600.
     specarray[cnt:cnt1, :] = spectra
