@@ -115,7 +115,7 @@ cube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 weightcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 
 cnt = 0
-cnt_array = np.zeros((len(h5files), 2))
+cnt_array = np.zeros((len(h5files), 2), dtype=int)
 for i, h5file in enumerate(h5files):
     t = tables.open_file(h5file)
     ra = t.root.Info.cols.ra[:]
