@@ -85,7 +85,7 @@ def make_image(Pos, y, xg, yg, xgrid, ygrid, sigma, cnt_array):
         idx = indy_array[l1:l2]
         g = G[l1:l2]
         yi = y[l1:l2]
-        indj = 84
+        indj = 336
         for i in np.arange(indj):
             image[idy[i::indj].ravel(), idx[i::indj].ravel()] += (yi[i::indj][:, np.newaxis] * g[i::indj]).ravel()
             weight[idy[i::indj].ravel(), idx[i::indj].ravel()] += g[i::indj].ravel()
