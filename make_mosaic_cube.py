@@ -54,7 +54,7 @@ parser.add_argument("-ps", "--pixel_scale",
                     default=1.0, type=float)
 
 
-def make_image(Pos, y, xg, yg, xgrid, ygrid, sigma):
+def make_image(Pos, y, xg, yg, xgrid, ygrid, sigma, cnt_array):
     image = xgrid * 0.
     weight = xgrid * 0.
     N = int(sigma*5)
@@ -78,10 +78,17 @@ def make_image(Pos, y, xg, yg, xgrid, ygrid, sigma):
     G = np.exp(-0.5 * d**2 / sigma**2)
     G[:] /= G.sum(axis=1)[:, np.newaxis]
     G[nogood] = 0.
-    indj = 112*4*3
-    for i in np.arange(indj):
-        image[indy_array[i::indj].ravel(), indx_array[i::indj].ravel()] += (y[i::indj][:, np.newaxis] * G[i::indj]).ravel()
-        weight[indy_array[i::indj].ravel(), indx_array[i::indj].ravel()] += G[i::indj].ravel()
+    for j in np.arange(len(cnt_array)):
+        l1 = cnt_array[j, 0]
+        l2 = cnt_array[j, 1]
+        idy = indy_array[l1:l2]
+        idx = indy_array[l1:l2]
+        g = G[l1:l2]
+        yi = y[l1:l2]
+        indj = 84
+        for i in np.arange(indj):
+            image[idy[i::indj].ravel(), idx[i::indj].ravel()] += (yi[i::indj][:, np.newaxis] * g[i::indj]).ravel()
+            weight[idy[i::indj].ravel(), idx[i::indj].ravel()] += g[i::indj].ravel()
     weight[:] *= np.pi * 0.75**2
     return image, weight
 
@@ -108,10 +115,13 @@ cube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 weightcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 
 cnt = 0
-for h5file in h5files:
+cnt_array = np.zeros((len(h5files), 2))
+for i, h5file in enumerate(h5files):
     t = tables.open_file(h5file)
     ra = t.root.Info.cols.ra[:]
     cnt += len(ra)
+    cnt_array[i, 0] = cnt - len(ra)
+    cnt_array[i, 1] = cnt
     t.close()
 args.log.info('Number of total fibers: %i' % cnt)
 raarray = np.zeros((cnt, len(def_wave)), dtype='float32')
@@ -149,8 +159,8 @@ for i in np.arange(len(def_wave)):
     args.log.info('Working on wavelength %0.0f' % def_wave[i])
     Pos[:, 0], Pos[:, 1] = (x, y)
     data = specarray[:, i]
-    good = np.isfinite(data)
-    image, weight = make_image(Pos[good], data[good], xg, yg, xgrid, ygrid, 1.5 / 2.35)
+    image, weight = make_image(Pos, data, xg, yg, xgrid, ygrid, 1.5 / 2.35,
+                               cnt_array)
     cube[i, :, :] += image
     weightcube[i, :, :] += weight
 
