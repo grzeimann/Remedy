@@ -79,10 +79,7 @@ def make_image(Pos, y, xg, yg, xgrid, ygrid, sigma):
         image[indy_array[j], indx_array[j]] += y[i] * G[j]
         weight[indy_array[j], indx_array[j]] += G[j]
     weight[:] *= np.pi * 0.75**2
-    image[weight < 0.4] = 0.
-    image[:] = image / weight
-    image[~np.isfinite(image)] = 0.0
-    return image
+    return image, weight
 
 args = parser.parse_args(args=None)
 args.log = setup_logging('make_image_from_h5')
@@ -103,10 +100,8 @@ xg = np.linspace(-bb, bb, N)
 yg = np.linspace(-bb, bb, N)
 xgrid, ygrid = np.meshgrid(xg, yg)
 
-ralist = []
-declist = []
-speclist = []
-errorlist = []
+cube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
+weightcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 
 for h5file in h5files:
     t = tables.open_file(h5file)
@@ -125,26 +120,21 @@ for h5file in h5files:
     Aother = Astrometry(bounding_box[0], bounding_box[1], pa, 0., 0.)
     header = tp.to_header()
     E.get_ADR_RAdec(Aother)
-    ralist.append(ra[:, np.newaxis] -
-                  E.ADRra[np.newaxis, :] / 3600. / np.cos(np.deg2rad(A.dec0)))
-    declist.append(dec[:, np.newaxis] - E.ADRdec[np.newaxis, :] / 3600.)
-    speclist.append(spectra)
+    ra1 = ra[:, np.newaxis] - E.ADRra[np.newaxis, :] / 3600. / np.cos(np.deg2rad(A.dec0))
+    dec1 = dec[:, np.newaxis] - E.ADRdec[np.newaxis, :] / 3600.
+    Pos = np.zeros((len(ra1), 2))
+    for i in np.arange(len(def_wave)):
+        x, y = tp.wcs_world2pix(ra1[:, i], dec1[:, i], 1)
+        Pos[:, 0], Pos[:, 1] = (x, y)
+        data = spectra[:, i]
+        good = np.isfinite(data)
+        args.log.info('Started wavelength %0.1f' % def_wave[i])
+        image, weight = make_image(Pos[good], data[good], xg, yg, xgrid, ygrid, 1.5 / 2.35)
+        cube[i, :, :] += image
+        weightcube[i, :, :] += weight
     t.close()
 
-raarray = np.vstack(ralist)
-decarray = np.vstack(declist)
-specarray = np.vstack(speclist)
-cube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
-Pos = np.zeros((len(raarray), 2))
-for i in np.arange(len(def_wave)):
-    x, y = tp.wcs_world2pix(raarray[:, i], decarray[:, i], 1)
-    Pos[:, 0], Pos[:, 1] = (x, y)
-    data = specarray[:, i]
-    good = np.isfinite(data)
-    args.log.info('Started wavelength %0.1f' % def_wave[i])
-    cube[i, :, :] = make_image(Pos[good], data[good], xg, yg, xgrid, ygrid, 1.5 / 2.35)
-
-
+cube = np.where(weightcube > 0.4, cube / weightcube, 0.0)
 name = op.basename(args.h5file[:-3]) + ('_%s_cube.fits' % args.surname)
 header['CRPIX1'] = (N+1) / 2
 header['CRPIX2'] = (N+1) / 2
