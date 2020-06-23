@@ -110,9 +110,9 @@ for h5file in h5files:
     cnt += len(ra)
     t.close()
 args.log.info(cnt)
-raarray = np.zeros((cnt, len(def_wave)))
-decarray = np.zeros((cnt, len(def_wave)))
-specarray = np.zeros((cnt, len(def_wave)))
+raarray = np.zeros((cnt, len(def_wave)), dtype='float32')
+decarray = np.zeros((cnt, len(def_wave)), dtype='float32')
+specarray = np.zeros((cnt, len(def_wave)), dtype='float32')
 
 cnt = 0
 for h5file in h5files:
