@@ -78,7 +78,7 @@ def make_image(Pos, y, xg, yg, xgrid, ygrid, sigma):
     G = np.exp(-0.5 * d**2 / sigma**2)
     G[:] /= G.sum(axis=1)[:, np.newaxis]
     G[nogood] = 0.
-    indj = 84
+    indj = 112*4*3
     for i in np.arange(indj):
         image[indy_array[i::indj].ravel(), indx_array[i::indj].ravel()] += (y[i::indj][:, np.newaxis] * G[i::indj]).ravel()
         weight[indy_array[i::indj].ravel(), indx_array[i::indj].ravel()] += G[i::indj].ravel()
