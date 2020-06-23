@@ -105,7 +105,6 @@ weightcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 
 cnt = 0
 for h5file in h5files:
-    args.log.info('Working on %s' % h5file)
     t = tables.open_file(h5file)
     ra = t.root.Info.cols.ra[:]
     cnt += len(ra)
