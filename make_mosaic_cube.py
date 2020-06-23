@@ -137,7 +137,7 @@ for h5file in h5files:
     raarray[cnt:cnt1, :] = ra[:, np.newaxis] - E.ADRra[np.newaxis, :] / 3600. / np.cos(np.deg2rad(A.dec0))
     decarray[cnt:cnt1, :] = dec[:, np.newaxis] - E.ADRdec[np.newaxis, :] / 3600.
     specarray[cnt:cnt1, :] = spectra
-    cnt = cnt + cnt1
+    cnt = cnt + len(ra)
     t.close()
 
 Pos = np.zeros((len(raarray), 2))
