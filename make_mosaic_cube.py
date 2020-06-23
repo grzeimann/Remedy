@@ -103,6 +103,18 @@ xgrid, ygrid = np.meshgrid(xg, yg)
 cube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 weightcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 
+cnt = 0
+for h5file in h5files:
+    args.log.info('Working on %s' % h5file)
+    t = tables.open_file(h5file)
+    ra = t.root.Info.cols.ra[:]
+    cnt += len(ra)
+    t.close()
+raarray = np.zeros((cnt, len(def_wave)))
+decarray = np.zeros((cnt, len(def_wave)))
+specarray = np.zeros((cnt, len(def_wave)))
+
+cnt = 0
 for h5file in h5files:
     args.log.info('Working on %s' % h5file)
     t = tables.open_file(h5file)
@@ -114,25 +126,28 @@ for h5file in h5files:
     offset = t.root.Survey.cols.offset[0]
     spectra = t.root.Fibers.cols.spectrum[:] / offset
     error = t.root.Fibers.cols.error[:] / offset
-
+    cnt1 = cnt + len(ra)
     A = Astrometry(bounding_box[0], bounding_box[1], 0., 0., 0.)
     tp = A.setup_TP(A.ra0, A.dec0, 0.)
     E = Extract()
     Aother = Astrometry(bounding_box[0], bounding_box[1], pa, 0., 0.)
     header = tp.to_header()
     E.get_ADR_RAdec(Aother)
-    ra1 = ra[:, np.newaxis] - E.ADRra[np.newaxis, :] / 3600. / np.cos(np.deg2rad(A.dec0))
-    dec1 = dec[:, np.newaxis] - E.ADRdec[np.newaxis, :] / 3600.
-    Pos = np.zeros((len(ra1), 2))
-    for i in np.arange(len(def_wave)):
-        x, y = tp.wcs_world2pix(ra1[:, i], dec1[:, i], 1)
-        Pos[:, 0], Pos[:, 1] = (x, y)
-        data = spectra[:, i]
-        good = np.isfinite(data)
-        image, weight = make_image(Pos[good], data[good], xg, yg, xgrid, ygrid, 1.5 / 2.35)
-        cube[i, :, :] += image
-        weightcube[i, :, :] += weight
+    raarray[cnt:cnt1, :] = ra[:, np.newaxis] - E.ADRra[np.newaxis, :] / 3600. / np.cos(np.deg2rad(A.dec0))
+    decarray[cnt:cnt1, :] = dec[:, np.newaxis] - E.ADRdec[np.newaxis, :] / 3600.
+    specarray[cnt:cnt1, :] = spectra
+    cnt = cnt + cnt1
     t.close()
+
+Pos = np.zeros((len(raarray), 2))
+for i in np.arange(len(def_wave)):
+    x, y = tp.wcs_world2pix(raarray[:, i], decarray[:, i], 1)
+    Pos[:, 0], Pos[:, 1] = (x, y)
+    data = specarray[:, i]
+    good = np.isfinite(data)
+    image, weight = make_image(Pos[good], data[good], xg, yg, xgrid, ygrid, 1.5 / 2.35)
+    cube[i, :, :] += image
+    weightcube[i, :, :] += weight
 
 cube = np.where(weightcube > 0.4, cube / weightcube, 0.0)
 name = op.basename('_%s_cube.fits' % args.surname)
