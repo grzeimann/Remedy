@@ -80,7 +80,9 @@ def make_image(Pos, y, xg, yg, xgrid, ygrid, sigma):
         weight[indy_array[j], indx_array[j]] += G[j]
     weight[:] *= np.pi * 0.75**2
     image[weight < 0.4] = 0.
-    return image / weight
+    image[:] = image / weight
+    image[~np.isifinite(image)] = 0.0
+    return image
 
 args = parser.parse_args(args=None)
 args.log = setup_logging('make_image_from_h5')
