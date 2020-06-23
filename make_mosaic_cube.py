@@ -129,8 +129,8 @@ for h5file in h5files:
     speclist.append(spectra)
     t.close()
 
-raarray = np.hstack(ralist)
-decarray = np.hstack(declist)
+raarray = np.vstack(ralist)
+decarray = np.vstack(declist)
 specarray = np.vstack(speclist)
 cube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 Pos = np.zeros((len(raarray), 2))
