@@ -82,7 +82,7 @@ def make_image(Pos, y, xg, yg, xgrid, ygrid, sigma, cnt_array):
         l1 = cnt_array[j, 0]
         l2 = cnt_array[j, 1]
         idy = indy_array[l1:l2]
-        idx = indy_array[l1:l2]
+        idx = indx_array[l1:l2]
         g = G[l1:l2]
         yi = y[l1:l2]
         indj = 336
