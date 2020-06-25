@@ -2132,17 +2132,17 @@ def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
     
     return Adj
 
-def catch_ifuslot_swap(allifus, date):
+def catch_ifuslot_swap(ifuslot, date):
     date = int(date)
     if (date > 20191201) * (date < 20200624):
-        ind24 = np.where(allifus == 24)[0]
-        ind15 = np.where(allifus == 15)[0]
-        allifus[ind15] = 24
-        allifus[ind24] = 15
+        if ifuslot == 24:
+            return 15
+        if ifuslot == 15:
+            return 24
     if (date > 20200114) * (date < 20200128):
-        ind78 = np.where(allifus == 78)[0]
-        allifus[ind78] = 79
-    return allifus
+        if ifuslot == 78:
+            return 79
+    return ifuslot
 
 # =============================================================================
 # MAIN SCRIPT
@@ -2328,7 +2328,8 @@ tableh5 = h5spec.create_table(h5spec.root, 'Images', Images,
  fns, tfile, _I, C1, intm, ExP, mscispectra, twispectra) = reduce_ifuslot(ifuloop, h5table,
                                                               tableh5)
 
-allifus = catch_ifuslot_swap(allifus, args.date)
+for i in np.arange(len(allifus)):
+    allifus[i] = catch_ifuslot_swap(allifus[i], args.date)
 fn = fns[0]
 _I = np.hstack(_I)
 h5file.close()
@@ -2482,6 +2483,8 @@ errspectra[:] = errspectra / throughput[np.newaxis, :] * mult_fac2
 ui_dict = {}
 for k, _V in enumerate(intm):
     specid, ifuslot, ifuid, amp, expn = _V[2].split('_')
+    ifusl = catch_ifuslot_swap(int(ifuslot), args.date)
+    ifuslot = '%03d' % ifusl
     if ifuslot not in ui_dict:
         ui_dict[ifuslot] = [specid, ifuid]
 
@@ -2492,6 +2495,8 @@ namps = int(len(scispectra) / 112. / nexp)
 for i in np.arange(namps):
     _V = intm[int(i*nexp)]
     specid, ifuslot, ifuid, amp, expn = _V[2].split('_')
+    ifusl = catch_ifuslot_swap(int(ifuslot), args.date)
+    ifuslot = '%03d' % ifusl
     ll = int(i * (112*nexp))
     hl = int((i+1) * (112*nexp))
     y = biweight(scispectra[ll:hl, 800:900], axis=1)
