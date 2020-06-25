@@ -1095,6 +1095,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         for j, fn in enumerate(filenames):
             sciimage, scierror, header = base_reduction(fn, tfile=scitarfile,
                                                 rdnoise=readnoise, get_header=True)
+            # Check here that it is the same unit
             facexp = header['EXPTIME'] / 360.
             if facexp < 0.:
                 facexp = 1.
@@ -1102,7 +1103,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             try:
                 sci_plaw = get_powerlaw(sciimage, trace)
             except:
-                plaw = 0.
+                sci_plaw = 0.
             sciimage[:] = sciimage - sci_plaw
             flt = get_spectra(masterflt, trace) / dw
             twi = get_spectra(mastertwi, trace) / dw
@@ -2158,7 +2159,7 @@ class Fibers(IsDescription):
      error  = Float32Col((1036,))    # float  (single-precision)
      fiber_to_fiber  = Float32Col((1036,))    # float  (single-precision)
      residual = Float32Col((1032,))
-     #chi2spec = Float32Col((1036,))
+     skyspectrum = Float32Col((1036,))
      
      #fiber_to_fiber_adj  = Float32Col((1036,))    # float  (single-precision)     
 
@@ -2311,7 +2312,6 @@ allifus = np.hstack(allifus)
 # =============================================================================
 tableh5 = h5spec.create_table(h5spec.root, 'Images', Images, 
                             "Image Information")
-log.info('Reducing ifuslot: %03d' % args.ifuslot)
 (pos, fltspectra, scispectra, errspectra, wave_all, 
  fns, tfile, _I, C1, intm, ExP, mscispectra, twispectra) = reduce_ifuslot(ifuloop, h5table,
                                                               tableh5)
@@ -2806,6 +2806,7 @@ table = h5spec.create_table(h5spec.root, 'Fibers', Fibers,
 specrow = table.row
 for i in np.arange(len(scispectra)):
     specrow['spectrum'] = scispectra[i]
+    specrow['skyspectrum'] = skyrect[i]
     specrow['error'] = errspectra[i]
     specrow['fiber_to_fiber'] = ftfrect[i]
     specrow['residual'] = res[i]
