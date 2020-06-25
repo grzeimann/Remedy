@@ -2132,6 +2132,18 @@ def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
     
     return Adj
 
+def catch_ifuslot_swap(allifus, date):
+    date = int(date)
+    if (date > 20191201) * (date < 20200624):
+        ind24 = np.where(allifus == 24)[0]
+        ind15 = np.where(allifus == 15)[0]
+        allifus[ind15] = 24
+        allifus[ind24] = 15
+    if (date > 20200114) * (date < 20200128):
+        ind78 = np.where(allifus == 78)[0]
+        allifus[ind78] = 79
+    return allifus
+
 # =============================================================================
 # MAIN SCRIPT
 # =============================================================================
@@ -2316,6 +2328,7 @@ tableh5 = h5spec.create_table(h5spec.root, 'Images', Images,
  fns, tfile, _I, C1, intm, ExP, mscispectra, twispectra) = reduce_ifuslot(ifuloop, h5table,
                                                               tableh5)
 
+allifus = catch_ifuslot_swap(allifus, args.date)
 fn = fns[0]
 _I = np.hstack(_I)
 h5file.close()
