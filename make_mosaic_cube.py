@@ -19,6 +19,16 @@ from math_utils import biweight
 from extract import Extract
 import glob
 
+mask_dict = {'20200430-20200501': ['057RL', '057RU', '057LL', '057LU', '058RU', 
+                                   '058RL', '021RL', '021RU', '021LL', '021LU'],
+             '20200430-20200701': ['092LU', '094RU', '046RU', '104LL', '104LU',
+                                   '028RU', '028RL', '027LL', '027LU', '067LL',
+                                   '067LU', '025LU', '106RU', '106RL', '026LL',
+                                   '026LU', '026RL', '026RU', '103LL', '103LU'],
+             '20200525-20200526': ['057RL', '057LL', '089RU', '089RL'],
+             '20200517-20200522': ['030RL', '030RU', '030LL', '030LU'],
+             '20200523-20200526': ['039RL', '039RU', '039LL', '039LU'],
+             '20200622-20200701': ['089RL', '089RU', '096RL', '096RU']}
 def get_script_path():
     return op.dirname(op.realpath(sys.argv[0]))
 
@@ -132,6 +142,11 @@ cnt = 0
 for h5file in h5files:
     args.log.info('Working on %s' % h5file)
     t = tables.open_file(h5file)
+    date = int(op.basename(h5file).split('_')[0])
+    ifuslots = t.root.Info.cols.ifuslot[:]
+    amps = np.array([i.decode("utf-8") for i in t.root.Info.cols.amp[:]])
+                
+            
     ra = t.root.Info.cols.ra[:]
     dec = t.root.Info.cols.dec[:]
     RA = t.root.Survey.cols.ra[0]
@@ -140,6 +155,16 @@ for h5file in h5files:
     offset = t.root.Survey.cols.offset[0]
     spectra = t.root.Fibers.cols.spectrum[:] / offset
     error = t.root.Fibers.cols.error[:] / offset
+    for key in mask_dict.keys():
+        date1 = int(key.split('-')[0])
+        date2 = int(key.split('-')[1])
+        if (date >= date1) and (date < date2):
+            ifulist = mask_dict[key]
+            for ifuamp in ifulist:
+                ifu = int(ifuamp[:3])
+                amp = ifuamp[3:]
+                sel = np.where((ifu == ifuslots) * (amp == amps))[0]
+                spectra[sel] = np.nan
     cnt1 = cnt + len(ra)
     A = Astrometry(bounding_box[0], bounding_box[1], 0., 0., 0.)
     tp = A.setup_TP(A.ra0, A.dec0, 0.)
