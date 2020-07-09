@@ -64,8 +64,9 @@ parser.add_argument("-ps", "--pixel_scale",
                     default=1.0, type=float)
 
 
-def make_image(Pos, y, xg, yg, xgrid, ygrid, sigma, cnt_array):
+def make_image(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
     image = xgrid * 0.
+    error = xgrid * 0.
     weight = xgrid * 0.
     N = int(sigma*5)
     indx = np.searchsorted(xg, Pos[:, 0])
@@ -74,6 +75,7 @@ def make_image(Pos, y, xg, yg, xgrid, ygrid, sigma, cnt_array):
               (indy < N) + (indy >= (len(yg) - N)))
     nogood = nogood + np.isnan(y)
     y[nogood] = 0.0
+    ye[nogood] = 0.0
     indx[nogood] = N+1
     indy[nogood] = N+1
     indx_array = np.zeros((len(y), 4*N**2), dtype=int)
@@ -95,12 +97,14 @@ def make_image(Pos, y, xg, yg, xgrid, ygrid, sigma, cnt_array):
         idx = indx_array[l1:l2]
         g = G[l1:l2]
         yi = y[l1:l2]
+        yie = ye[l1:l2]
         indj = 336
         for i in np.arange(indj):
             image[idy[i::indj].ravel(), idx[i::indj].ravel()] += (yi[i::indj][:, np.newaxis] * g[i::indj]).ravel()
+            error[idy[i::indj].ravel(), idx[i::indj].ravel()] += (yie[i::indj][:, np.newaxis]**2 * g[i::indj]).ravel()
             weight[idy[i::indj].ravel(), idx[i::indj].ravel()] += g[i::indj].ravel()
     weight[:] *= np.pi * 0.75**2
-    return image, weight
+    return image, np.sqrt(error), weight
 
 args = parser.parse_args(args=None)
 args.log = setup_logging('make_image_from_h5')
@@ -122,6 +126,7 @@ yg = np.linspace(-bb, bb, N)
 xgrid, ygrid = np.meshgrid(xg, yg)
 
 cube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
+ecube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 weightcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 
 cnt = 0
@@ -137,6 +142,10 @@ args.log.info('Number of total fibers: %i' % cnt)
 raarray = np.zeros((cnt, len(def_wave)), dtype='float32')
 decarray = np.zeros((cnt, len(def_wave)), dtype='float32')
 specarray = np.zeros((cnt, len(def_wave)), dtype='float32')
+errarray = np.zeros((cnt, len(def_wave)), dtype='float32')
+
+A = Astrometry(bounding_box[0], bounding_box[1], 0., 0., 0.)
+tp = A.setup_TP(A.ra0, A.dec0, 0.)
 
 cnt = 0
 for h5file in h5files:
@@ -166,8 +175,6 @@ for h5file in h5files:
                 sel = np.where((ifu == ifuslots) * (amp == amps))[0]
                 spectra[sel] = np.nan
     cnt1 = cnt + len(ra)
-    A = Astrometry(bounding_box[0], bounding_box[1], 0., 0., 0.)
-    tp = A.setup_TP(A.ra0, A.dec0, 0.)
     E = Extract()
     Aother = Astrometry(bounding_box[0], bounding_box[1], pa, 0., 0.)
     header = tp.to_header()
@@ -175,6 +182,8 @@ for h5file in h5files:
     raarray[cnt:cnt1, :] = ra[:, np.newaxis] - E.ADRra[np.newaxis, :] / 3600. / np.cos(np.deg2rad(A.dec0))
     decarray[cnt:cnt1, :] = dec[:, np.newaxis] - E.ADRdec[np.newaxis, :] / 3600.
     specarray[cnt:cnt1, :] = spectra
+    errarray[cnt:cnt1, :] = error
+
     cnt = cnt + len(ra)
     t.close()
 
@@ -184,12 +193,15 @@ for i in np.arange(len(def_wave)):
     args.log.info('Working on wavelength %0.0f' % def_wave[i])
     Pos[:, 0], Pos[:, 1] = (x, y)
     data = specarray[:, i]
-    image, weight = make_image(Pos, data, xg, yg, xgrid, ygrid, 1.5 / 2.35,
+    edata = errarray[:, i]
+    image, errorimage, weight = make_image(Pos, data, edata, xg, yg, xgrid, ygrid, 1.5 / 2.35,
                                cnt_array)
     cube[i, :, :] += image
+    ecube[i, :, :] += errorimage
     weightcube[i, :, :] += weight
 
 cube = np.where(weightcube > 0.4, cube / weightcube, 0.0)
+ecube = np.where(weightcube > 0.4, ecube / weightcube, 0.0)
 name = op.basename('%s_cube.fits' % args.surname)
 header['CRPIX1'] = (N+1) / 2
 header['CRPIX2'] = (N+1) / 2
@@ -197,4 +209,12 @@ header['CDELT3'] = 2.
 header['CRPIX3'] = 1.
 header['CRVAL3'] = 3470.
 F = fits.PrimaryHDU(np.array(cube, 'float32'), header=header)
+F.writeto(name, overwrite=True)
+name = op.basename('%s_errorcube.fits' % args.surname)
+header['CRPIX1'] = (N+1) / 2
+header['CRPIX2'] = (N+1) / 2
+header['CDELT3'] = 2.
+header['CRPIX3'] = 1.
+header['CRVAL3'] = 3470.
+F = fits.PrimaryHDU(np.array(ecube, 'float32'), header=header)
 F.writeto(name, overwrite=True)
