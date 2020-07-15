@@ -251,6 +251,7 @@ if args.image_file is not None:
         fits.PrimaryHDU(np.array(binimage, dtype='float32'), header=h).writeto(name, overwrite=True)
 
 cnt = 0
+norm_array = np.ones((len(h5files),))
 for jk, h5file in enumerate(h5files):
     args.log.info('Working on %s' % h5file)
     t = tables.open_file(h5file)
@@ -332,6 +333,7 @@ for jk, h5file in enumerate(h5files):
         y = (cimage - back) / nimage
         y[~sel] = 0.0
         norm, std = biweight(y[sel][nimage[sel] > thresh], calc_std=True)
+        norm_array[jk] = norm
         args.log.info('Normalization/STD for %s: %0.2f, %0.2f' % (h5file, norm, std/norm))
         
         plt.figure(figsize=(10, 8))
@@ -351,41 +353,44 @@ for jk, h5file in enumerate(h5files):
         h['CRPIX1'] = np.interp(0., xg, np.arange(len(xg)))+1.0
         h['CRPIX2'] = np.interp(0., xg, np.arange(len(xg)))+1.0
         fits.PrimaryHDU(np.array(image/norm, dtype='float32'), header=h).writeto(name, overwrite=True)
-        fits.PrimaryHDU(np.array(y, dtype='float32'), header=h).writeto(name.replace('rect','div'), overwrite=True)
 
-    specarray[cnt:cnt1, :] = spectra
-    errarray[cnt:cnt1, :] = error
+    specarray[cnt:cnt1, :] = spectra / norm_array[jk]
+    errarray[cnt:cnt1, :] = error / norm_array[jk]
     cnt = cnt + len(ra)
     t.close()
 
-#Pos = np.zeros((len(raarray), 2))
-#for i in np.arange(len(def_wave)):
-#    x, y = tp.wcs_world2pix(raarray[:, i], decarray[:, i], 1)
-#    args.log.info('Working on wavelength %0.0f' % def_wave[i])
-#    Pos[:, 0], Pos[:, 1] = (x, y)
-#    data = specarray[:, i]
-#    edata = errarray[:, i]
-#    image, errorimage, weight = make_image(Pos, data, edata, xg, yg, xgrid, ygrid, 1.5 / 2.35,
-#                               cnt_array)
-#    cube[i, :, :] += image
-#    ecube[i, :, :] += errorimage
-#    weightcube[i, :, :] += weight
-#
-#cube = np.where(weightcube > 0.4, cube / weightcube, 0.0)
-#ecube = np.where(weightcube > 0.4, ecube / weightcube, 0.0)
-#name = op.basename('%s_cube.fits' % args.surname)
-#header['CRPIX1'] = (N+1) / 2
-#header['CRPIX2'] = (N+1) / 2
-#header['CDELT3'] = 2.
-#header['CRPIX3'] = 1.
-#header['CRVAL3'] = 3470.
-#F = fits.PrimaryHDU(np.array(cube, 'float32'), header=header)
-#F.writeto(name, overwrite=True)
-#name = op.basename('%s_errorcube.fits' % args.surname)
-#header['CRPIX1'] = (N+1) / 2
-#header['CRPIX2'] = (N+1) / 2
-#header['CDELT3'] = 2.
-#header['CRPIX3'] = 1.
-#header['CRVAL3'] = 3470.
-#F = fits.PrimaryHDU(np.array(ecube, 'float32'), header=header)
-#F.writeto(name, overwrite=True)
+specarray[:] *= biweight(norm_array)
+errarray[:] *= biweight(norm_array)
+
+Pos = np.zeros((len(raarray), 2))
+for i in np.arange(len(def_wave)):
+    x, y = tp.wcs_world2pix(raarray[:, i], decarray[:, i], 1)
+    args.log.info('Working on wavelength %0.0f' % def_wave[i])
+    Pos[:, 0], Pos[:, 1] = (x, y)
+    data = specarray[:, i]
+    edata = errarray[:, i]
+    image, errorimage, weight = make_image_interp(Pos, data, edata, xg, yg, 
+                                                  xgrid, ygrid, 1.8 / 2.35,
+                                                  cnt_array)
+    cube[i, :, :] += image
+    ecube[i, :, :] += errorimage
+    weightcube[i, :, :] += weight
+
+cube = np.where(weightcube > 0.4, cube / weightcube, 0.0)
+ecube = np.where(weightcube > 0.4, ecube / weightcube, 0.0)
+name = op.basename('%s_cube.fits' % args.surname)
+header['CRPIX1'] = (N+1) / 2
+header['CRPIX2'] = (N+1) / 2
+header['CDELT3'] = 2.
+header['CRPIX3'] = 1.
+header['CRVAL3'] = 3470.
+F = fits.PrimaryHDU(np.array(cube, 'float32'), header=header)
+F.writeto(name, overwrite=True)
+name = op.basename('%s_errorcube.fits' % args.surname)
+header['CRPIX1'] = (N+1) / 2
+header['CRPIX2'] = (N+1) / 2
+header['CDELT3'] = 2.
+header['CRPIX3'] = 1.
+header['CRVAL3'] = 3470.
+F = fits.PrimaryHDU(np.array(ecube, 'float32'), header=header)
+F.writeto(name, overwrite=True)
