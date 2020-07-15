@@ -306,7 +306,7 @@ for jk, h5file in enumerate(h5files):
         image[np.isnan(image)] = 0.0
         bimage = binimage * 1.
         bimage[image==0.] = 0.
-        xmax = np.linspace(-0.25, 0.15, 11)
+        xmax = np.linspace(-0.25, -0.15, 11)
         bmax = xmax*0.
         for i, v in enumerate(xmax):
             bmax[i] = np.sum(np.abs(cimage[np.isfinite(cimage) * (d>300.)]-v)<0.05)
