@@ -105,8 +105,7 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
                                                ygrid[yl:yh,xl:xh]),
                                                method='linear', fill_value=0.0)
                 imagetemp[j, yl:yh,xl:xh] = convolve(imagetemp[j, yl:yh,xl:xh], G,
-                                                     preserve_nan=True, 
-                                                     boundary='extend')
+                                                     preserve_nan=True)
             except:
                 args.log.error('Failed on %i:%i' % (i1, i2))
     image = np.nanmedian(imagetemp, axis=0) / (np.pi * 0.75**2)
