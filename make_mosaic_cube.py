@@ -97,7 +97,7 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
             xh = np.searchsorted(xg, p[:, 0].max()) + 1
             yl = np.searchsorted(yg, p[:, 1].min()) - 1
             yh = np.searchsorted(yg, p[:, 1].max()) + 1
-            if gsel.sum() > 100:
+            if gsel.sum() > 200:
                 imagetemp[j, yl:yh,xl:xh] = griddata(p[gsel], yi[gsel], (xgrid[yl:yh,xl:xh], 
                                                ygrid[yl:yh,xl:xh]),
                                                method='linear', fill_value=np.nan)
