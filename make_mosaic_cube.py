@@ -80,9 +80,6 @@ parser.add_argument("-ff", "--filter_file",
                     help='''Filter filename''',
                     default=None, type=str)
 def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
-    image = xgrid * 0.
-    error = xgrid * 0.
-    weight = xgrid * 0.
     imagetemp = np.zeros((len(cnt_array),) + xgrid.shape)
     errortemp = np.zeros((len(cnt_array),) + xgrid.shape)
     G = Gaussian2DKernel(sigma)
@@ -108,8 +105,11 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
             imagetemp[j, yl:yh,xl:xh] = convolve(imagetemp[j, yl:yh,xl:xh], G,
                                                  preserve_nan=True, 
                                                  boundary='extend')
-    image = np.nanmedian(imagetemp, axis=0)
-    error = np.nanmedian(errortemp, )
+    image = np.nanmedian(imagetemp, axis=0) / (np.pi * 0.75**2)
+    error = np.nanmedian(errortemp, axis=0) / (np.pi * 0.75**2)
+    image[np.isnan(image)] = 0.0
+    error[np.isnan(error)] = 0.0
+    return image, error, np.ones(image.shape)
 
 def make_image(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
     image = xgrid * 0.
@@ -287,9 +287,9 @@ for jk, h5file in enumerate(h5files):
         x, y = tp.wcs_world2pix(np.nanmean(raarray[cnt:cnt1, wsel], axis=1),
                                 np.nanmean(decarray[cnt:cnt1, wsel], axis=1), 1)
         Pos[:, 0], Pos[:, 1] = (x+0.0, y+0.0)
-        image, errorimage, weight = make_image(Pos, collapse_image, collapse_eimage,
-                                               xg, yg, xgrid, ygrid, 2.0 / 2.35,
-                                               cnt_array[jk:jk+1, :])
+        image, errorimage, weight = make_image_interp(Pos, collapse_image, collapse_eimage,
+                                                      xg, yg, xgrid, ygrid, 1.8 / 2.35,
+                                                      cnt_array[jk:jk+1, :])
         
         image = np.where(weight > 0.2, image / weight, 0.0)
         image[image==0.] = np.nan
