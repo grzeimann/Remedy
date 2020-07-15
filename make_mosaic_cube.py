@@ -321,16 +321,17 @@ for jk, h5file in enumerate(h5files):
         bimage[image==0.] = 0.
         xmax = np.linspace(-0.25, 0.00, 26)
         bmax = xmax*0.
+        thresh = 0.05
         for i, v in enumerate(xmax):
             y = (cimage - v) / nimage
             y[~sel] = 0.0
-            norm, std = biweight(y[sel][nimage[sel]>0.08], calc_std=True)
+            norm, std = biweight(y[sel][nimage[sel] > thresh], calc_std=True)
             bmax[i] = std / norm
         back = xmax[np.argmin(bmax)]
         args.log.info('Background for %s: %0.2f' % (h5file, back))
         y = (cimage - back) / nimage
         y[~sel] = 0.0
-        norm, std = biweight(y[sel][nimage[sel]>0.08], calc_std=True)
+        norm, std = biweight(y[sel][nimage[sel] > thresh], calc_std=True)
         args.log.info('Normalization/STD for %s: %0.2f, %0.2f' % (h5file, norm, std/norm))
         
         plt.figure(figsize=(10, 8))
