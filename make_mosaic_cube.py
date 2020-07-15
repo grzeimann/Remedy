@@ -210,36 +210,40 @@ def rebin(arr, new_shape):
     return arr.reshape(shape).mean(axis=(-1,1))
     
 if args.image_file is not None:
-    image_file = fits.open(args.image_file)
-    wc = WCS(image_file[0].header)
-    ny, nx = image_file[0].data.shape
-    yind, xind = np.indices((ny, nx))
-    xn, yn = wc.wcs_world2pix(A.ra0, A.dec0, 1)
-    tpn = A.setup_TP(A.ra0, A.dec0, 0., xn, yn, x_scale=-0.25, y_scale=0.25)
-    r, d = wc.wcs_pix2world(xind.ravel()+1.0, yind.ravel()+1.0, 1)
-    P = np.zeros((len(r), 2))
-    x, y = tp.wcs_world2pix(r, d, 1)
-    P[:, 0], P[:, 1] = (x, y)
-    d = np.sqrt((P[:, 0]-xg[0])**2 + (P[:, 1]-yg[0])**2)
-    I = np.argmin(d)
-    yi, xi = np.unravel_index(I, yind.shape)
-    N = 4 * len(xg)
-    x = np.reshape(x, image_file[0].data.shape)
-    y = np.reshape(y, image_file[0].data.shape)
-    newimage = image_file[0].data[yi:yi+N, xi:xi+N]
-    binimage = rebin(newimage, (newimage.shape[0]//4, newimage.shape[1]//4))
-    ximage = rebin(x[yi:yi+N, xi:xi+N], (newimage.shape[0]//4, newimage.shape[1]//4))
-    yimage = rebin(y[yi:yi+N, xi:xi+N], (newimage.shape[0]//4, newimage.shape[1]//4))
-    P = np.zeros((len(ximage.ravel()), 2))
-    P[:, 0], P[:, 1] = (ximage.ravel(), yimage.ravel())
-    binimage = griddata(P, binimage.ravel(), (xgrid, ygrid), method='cubic')
-    h = tp.to_header()
-    N = len(xg)
-    h['CRPIX1'] = np.interp(0., xg, np.arange(len(xg)))+1.0
-    h['CRPIX2'] = np.interp(0., xg, np.arange(len(xg)))+1.0
     name = op.basename(args.image_file)[:-5] + '_rect.fits'
-    args.log.info('Writing %s' % name)
-    fits.PrimaryHDU(np.array(binimage, dtype='float32'), header=h).writeto(name, overwrite=True)
+    if op.exists(name):
+        f = fits.open(name)
+        binimage = f[0].data
+    else:
+        image_file = fits.open(args.image_file)
+        wc = WCS(image_file[0].header)
+        ny, nx = image_file[0].data.shape
+        yind, xind = np.indices((ny, nx))
+        xn, yn = wc.wcs_world2pix(A.ra0, A.dec0, 1)
+        tpn = A.setup_TP(A.ra0, A.dec0, 0., xn, yn, x_scale=-0.25, y_scale=0.25)
+        r, d = wc.wcs_pix2world(xind.ravel()+1.0, yind.ravel()+1.0, 1)
+        P = np.zeros((len(r), 2))
+        x, y = tp.wcs_world2pix(r, d, 1)
+        P[:, 0], P[:, 1] = (x, y)
+        d = np.sqrt((P[:, 0]-xg[0])**2 + (P[:, 1]-yg[0])**2)
+        I = np.argmin(d)
+        yi, xi = np.unravel_index(I, yind.shape)
+        N = 4 * len(xg)
+        x = np.reshape(x, image_file[0].data.shape)
+        y = np.reshape(y, image_file[0].data.shape)
+        newimage = image_file[0].data[yi:yi+N, xi:xi+N]
+        binimage = rebin(newimage, (newimage.shape[0]//4, newimage.shape[1]//4))
+        ximage = rebin(x[yi:yi+N, xi:xi+N], (newimage.shape[0]//4, newimage.shape[1]//4))
+        yimage = rebin(y[yi:yi+N, xi:xi+N], (newimage.shape[0]//4, newimage.shape[1]//4))
+        P = np.zeros((len(ximage.ravel()), 2))
+        P[:, 0], P[:, 1] = (ximage.ravel(), yimage.ravel())
+        binimage = griddata(P, binimage.ravel(), (xgrid, ygrid), method='cubic')
+        h = tp.to_header()
+        N = len(xg)
+        h['CRPIX1'] = np.interp(0., xg, np.arange(len(xg)))+1.0
+        h['CRPIX2'] = np.interp(0., xg, np.arange(len(xg)))+1.0
+        args.log.info('Writing %s' % name)
+        fits.PrimaryHDU(np.array(binimage, dtype='float32'), header=h).writeto(name, overwrite=True)
 
 cnt = 0
 for jk, h5file in enumerate(h5files):
