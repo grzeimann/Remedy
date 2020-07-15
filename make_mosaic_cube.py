@@ -300,7 +300,7 @@ for jk, h5file in enumerate(h5files):
         nimage = convolve(nimage, G, preserve_nan=True, boundary='extend')
         sel = np.isfinite(cimage) * (nimage > 0.05)
         yim = cimage / nimage
-        d = np.sqrt(x**2 + y**2)
+        d = np.sqrt(xgrid**2 + ygrid**2)
         yim[~sel] = 0.0
         nimage[np.isnan(nimage)] = 0.0
         image[np.isnan(image)] = 0.0
@@ -309,7 +309,7 @@ for jk, h5file in enumerate(h5files):
         xmax = np.linspace(-0.3, 0.05, 61)
         bmax = xmax*0.
         for i, v in enumerate(xmax):
-            bmax[i] = np.sum(np.abs(cimage[np.isfinite(cimage) * d>300.]-v)<0.03)
+            bmax[i] = np.sum(np.abs(cimage[np.isfinite(cimage) * (d>300.)]-v)<0.03)
         back = xmax[np.argmax(bmax)]
         args.log.info('Background for %s: %0.2f' % (h5file, back))
         y = (cimage - back) / nimage
