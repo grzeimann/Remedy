@@ -282,18 +282,15 @@ for jk, h5file in enumerate(h5files):
         biny = np.array([biweight(nx) for nx in np.array_split(yim[sel][a], 50)])
         bsel = binx > 0.1
 
-        A = np.ones((len(biny[bsel]), 2))
-        A[:, 1] = 1. / binx[bsel]
-        sol = np.linalg.lstsq(A, biny[bsel])[0]
+        Ab = np.ones((len(biny[bsel]), 2))
+        Ab[:, 1] = 1. / binx[bsel]
+        sol = np.linalg.lstsq(Ab, biny[bsel])[0]
         y = (cimage - sol[1]) / nimage
         y[~sel] = 0.0
         bsel = binx > 0.3
         norm, std = biweight(y[sel][nimage[sel]>0.08], calc_std=True)
         args.log.info('Normalization for %s: %0.2f, %0.2f' % (h5file, norm, std/norm))
         
-        
-        A = np.ones((len(biny), 2))
-        A[:, 1] = 1. / binx
         plt.figure(figsize=(10, 8))
         plt.scatter(nimage[sel], y[sel] / norm, s=5, alpha=0.05)
         plt.plot([0.03, 0.6], [1., 1.], 'r-', lw=2)
@@ -305,7 +302,6 @@ for jk, h5file in enumerate(h5files):
         plt.axis([0.03, 0.6, mn-0.2*ran, mx+0.2*ran])
         name = op.basename(h5file)[:-3] + '_norm.png'
         plt.savefig(name, dpi=300)
-        
         name = op.basename(h5file)[:-3] + '_rect.fits'
         h = tp.to_header()
         N = len(xg)
