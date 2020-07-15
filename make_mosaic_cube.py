@@ -23,7 +23,6 @@ from math_utils import biweight
 from extract import Extract
 from scipy.interpolate import griddata
 import matplotlib.pyplot as plt
-from skimage.registration import phase_cross_correlation
 
 
 
