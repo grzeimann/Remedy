@@ -331,7 +331,6 @@ for jk, h5file in enumerate(h5files):
         args.log.info('Background for %s: %0.2f' % (h5file, back))
         y = (cimage - back) / nimage
         y[~sel] = 0.0
-        args.log.info('Max pixel: %0.2f' % np.max(nimage[sel]))
         norm, std = biweight(y[sel][nimage[sel] > thresh], calc_std=True)
         args.log.info('Normalization/STD for %s: %0.2f, %0.2f' % (h5file, norm, std/norm))
         
