@@ -306,10 +306,10 @@ for jk, h5file in enumerate(h5files):
         image[np.isnan(image)] = 0.0
         bimage = binimage * 1.
         bimage[image==0.] = 0.
-        xmax = np.linspace(-0.3, 0.05, 61)
+        xmax = np.linspace(-0.25, 0.15, 11)
         bmax = xmax*0.
         for i, v in enumerate(xmax):
-            bmax[i] = np.sum(np.abs(cimage[np.isfinite(cimage) * (d>300.)]-v)<0.03)
+            bmax[i] = np.sum(np.abs(cimage[np.isfinite(cimage) * (d>300.)]-v)<0.05)
         back = xmax[np.argmax(bmax)]
         args.log.info('Background for %s: %0.2f' % (h5file, back))
         y = (cimage - back) / nimage
@@ -325,7 +325,7 @@ for jk, h5file in enumerate(h5files):
         mn = np.nanpercentile(y[sel], 5)/norm
         mx = np.nanpercentile(y[sel], 95)/norm
         ran = mx - mn
-        plt.axis([0.03, 0.6, mn-0.2*ran, mx+0.2*ran])
+        plt.axis([0.03, 0.6, 0.6, 1.4])
         name = op.basename(h5file)[:-3] + '_norm.png'
         plt.savefig(name, dpi=300)
         name = op.basename(h5file)[:-3] + '_rect.fits'
