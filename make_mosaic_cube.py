@@ -306,7 +306,7 @@ for jk, h5file in enumerate(h5files):
         image[np.isnan(image)] = 0.0
         bimage = binimage * 1.
         bimage[image==0.] = 0.
-        xmax = np.linspace(-0.25, -0.00, 26)
+        xmax = np.linspace(-0.25, 0.00, 26)
         bmax = xmax*0.
         for i, v in enumerate(xmax):
             y = (cimage - v) / nimage
@@ -317,6 +317,7 @@ for jk, h5file in enumerate(h5files):
         args.log.info('Background for %s: %0.2f' % (h5file, back))
         y = (cimage - back) / nimage
         y[~sel] = 0.0
+        norm, std = biweight(y[sel][nimage[sel]>0.08], calc_std=True)
         args.log.info('Normalization/STD for %s: %0.2f, %0.2f' % (h5file, norm, std/norm))
         
         plt.figure(figsize=(10, 8))
