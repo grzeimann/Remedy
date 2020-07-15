@@ -288,9 +288,12 @@ for jk, h5file in enumerate(h5files):
         x, y = tp.wcs_world2pix(np.nanmean(raarray[cnt:cnt1, wsel], axis=1),
                                 np.nanmean(decarray[cnt:cnt1, wsel], axis=1), 1)
         Pos[:, 0], Pos[:, 1] = (x+0.0, y+0.0)
+        cn = np.ones((1, 2))
+        cn[0, 0] = 0
+        cn[0, 1] = len(collapse_image)
         image, errorimage, weight = make_image_interp(Pos, collapse_image, collapse_eimage,
                                                       xg, yg, xgrid, ygrid, 1.8 / 2.35,
-                                                      cnt_array[jk:jk+1, :])
+                                                      cn)
         
         image = np.where(weight > 0.2, image / weight, 0.0)
         image[image==0.] = np.nan
