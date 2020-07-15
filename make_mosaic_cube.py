@@ -276,18 +276,14 @@ for jk, h5file in enumerate(h5files):
         image[np.isnan(image)] = 0.0
         bimage = binimage * 1.
         bimage[image==0.] = 0.
-        
-        a = np.argsort(nimage[sel])
-        binx = np.array([np.mean(nx) for nx in np.array_split(nimage[sel][a], 50)])
-        biny = np.array([biweight(nx) for nx in np.array_split(yim[sel][a], 50)])
-        bsel = binx > 0.1
-
-        Ab = np.ones((len(biny[bsel]), 2))
-        Ab[:, 1] = 1. / binx[bsel]
-        sol = np.linalg.lstsq(Ab, biny[bsel])[0]
-        y = (cimage - sol[1]) / nimage
+        xmax = np.linspace(-0.5, 0.5, 101)
+        bmax = xmax*0.
+        for i, v in xmax:
+            bmax[i] = np.sum(np.abs(image[sel]-v)<0.05)
+        back = xmax[np.argmax(bmax)]
+        args.log.info('Background for %s: %0.2f' % (h5file, back))
+        y = (cimage - back) / nimage
         y[~sel] = 0.0
-        bsel = binx > 0.3
         norm, std = biweight(y[sel][nimage[sel]>0.08], calc_std=True)
         args.log.info('Normalization for %s: %0.2f, %0.2f' % (h5file, norm, std/norm))
         
