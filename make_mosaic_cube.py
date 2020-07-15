@@ -83,7 +83,6 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
     imagetemp = np.zeros((len(cnt_array),) + xgrid.shape)
     errortemp = np.zeros((len(cnt_array),) + xgrid.shape)
     G = Gaussian2DKernel(sigma)
-    print(cnt_array, len(Pos), len(y))
     for j in np.arange(len(cnt_array)):
         l1 = cnt_array[j, 0]
         l2 = cnt_array[j, 1]
@@ -94,13 +93,15 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
             yie = ye[i1:i2]
             p = Pos[i1:i2]
             gsel = np.isfinite(yi) * (yi != 0.)
-            xl = np.searchsorted(xg, p[:, 0].min()) - 1
-            xh = np.searchsorted(xg, p[:, 0].max()) + 1
-            yl = np.searchsorted(yg, p[:, 1].min()) - 1
-            yh = np.searchsorted(yg, p[:, 1].max()) + 1
-            try:
-                args.log.warning('Trying on %i:%i' % (i1, i2))
-
+            xl = np.searchsorted(xg, p[:, 0].min())
+            xh = np.searchsorted(xg, p[:, 0].max())
+            yl = np.searchsorted(yg, p[:, 1].min())
+            yh = np.searchsorted(yg, p[:, 1].max())
+            xl = int(np.max([0., xl]))
+            yl = int(np.max([0., yl]))
+            xh = int(np.min([len(xg), xh]))
+            yh = int(np.min([len(xg), yh]))
+            if (gsel.sum()>100) and (xl<xh) and (yl<yh):
                 imagetemp[j, yl:yh,xl:xh] = griddata(p[gsel], yi[gsel], (xgrid[yl:yh,xl:xh], 
                                                ygrid[yl:yh,xl:xh]),
                                                method='linear', fill_value=np.nan)
@@ -110,8 +111,6 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
                 imagetemp[j, yl:yh,xl:xh] = convolve(imagetemp[j, yl:yh,xl:xh], G,
                                                      preserve_nan=True, 
                                                      boundary='extend')
-            except:
-                args.log.error('Failed on %i:%i' % (i1, i2))
     image = np.nanmedian(imagetemp, axis=0) / (np.pi * 0.75**2)
     error = np.nanmedian(errortemp, axis=0) / (np.pi * 0.75**2)
     image[np.isnan(image)] = 0.0
