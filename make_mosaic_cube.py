@@ -83,6 +83,7 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
     imagetemp = np.zeros((len(cnt_array),) + xgrid.shape)
     errortemp = np.zeros((len(cnt_array),) + xgrid.shape)
     G = Gaussian2DKernel(sigma)
+    print(cnt_array, len(Pos), len(y))
     for j in np.arange(len(cnt_array)):
         l1 = cnt_array[j, 0]
         l2 = cnt_array[j, 1]
