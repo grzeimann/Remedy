@@ -87,8 +87,8 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
         l1 = cnt_array[j, 0]
         l2 = cnt_array[j, 1]
         for k in np.arange(int((l2-l1)/(448*3))):
-            i1 = l1 + k * 448 * 3
-            i2 = l1 + (k+1) * 448 * 3
+            i1 = int(l1 + k * 448 * 3)
+            i2 = int(l1 + (k+1) * 448 * 3)
             yi = y[i1:i2]
             yie = ye[i1:i2]
             p = Pos[i1:i2]
