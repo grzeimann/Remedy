@@ -91,15 +91,16 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
             i2 = l1 + (k+1) * 448 * 3
             yi = y[i1:i2]
             yie = ye[i1:i2]
-            p = P[i1:i2]
+            p = Pos[i1:i2]
+            gsel = np.isfinite(yi) * (yi != 0.)
             xl = np.searchsorted(xg, p[:, 0].min()) - 1
             xh = np.searchsorted(xg, p[:, 0].max()) + 1
             yl = np.searchsorted(yg, p[:, 1].min()) - 1
             yh = np.searchsorted(yg, p[:, 1].max()) + 1
-            imagetemp[j, yl:yh,xl:xh] = griddata(p, yi, (xgrid[yl:yh,xl:xh], 
+            imagetemp[j, yl:yh,xl:xh] = griddata(p[gsel], yi[gsel], (xgrid[yl:yh,xl:xh], 
                                            ygrid[yl:yh,xl:xh]),
                                            method='linear', fill_value=np.nan)
-            errortemp[j, yl:yh,xl:xh] = griddata(p, yie, (xgrid[yl:yh,xl:xh], 
+            errortemp[j, yl:yh,xl:xh] = griddata(p[gsel], yie[gsel], (xgrid[yl:yh,xl:xh], 
                                            ygrid[yl:yh,xl:xh]),
                                            method='linear', fill_value=0.0)
             imagetemp[j, yl:yh,xl:xh] = convolve(imagetemp[j, yl:yh,xl:xh], G,
