@@ -5,9 +5,13 @@ Created on Thu Jun 18 13:10:11 2020
 
 @author: gregz
 """
-
+import matplotlib
+matplotlib.use('agg')
 import argparse as ap
+from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.io import fits
+from astropy.wcs import WCS
+from astropy.table import Table
 import tables
 import numpy as np
 import os.path as op
@@ -17,6 +21,12 @@ from input_utils import setup_logging
 from astrometry import Astrometry
 from math_utils import biweight
 from extract import Extract
+from scipy.interpolate import griddata
+import matplotlib.pyplot as plt
+from skimage.registration import phase_cross_correlation
+
+
+
 import glob
 
 mask_dict = {'20200430-20200501': ['057RL', '057RU', '057LL', '057LU', '058RU', 
@@ -63,6 +73,14 @@ parser.add_argument("-ps", "--pixel_scale",
                     help='''Pixel scale for output image in arcsec''',
                     default=1.0, type=float)
 
+parser.add_argument("-if", "--image_file",
+                    help='''Image filename''',
+                    default=None, type=str)
+
+parser.add_argument("-ff", "--filter_file",
+                    help='''Filter filename''',
+                    default=None, type=str)
+
 
 def make_image(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
     image = xgrid * 0.
@@ -90,19 +108,23 @@ def make_image(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
     G = np.exp(-0.5 * d**2 / sigma**2)
     G[:] /= G.sum(axis=1)[:, np.newaxis]
     G[nogood] = 0.
-    for j in np.arange(len(cnt_array)):
-        l1 = cnt_array[j, 0]
-        l2 = cnt_array[j, 1]
-        idy = indy_array[l1:l2]
-        idx = indx_array[l1:l2]
-        g = G[l1:l2]
-        yi = y[l1:l2]
-        yie = ye[l1:l2]
-        indj = 336
-        for i in np.arange(indj):
-            image[idy[i::indj].ravel(), idx[i::indj].ravel()] += (yi[i::indj][:, np.newaxis] * g[i::indj]).ravel()
-            error[idy[i::indj].ravel(), idx[i::indj].ravel()] += (yie[i::indj][:, np.newaxis]**2 * g[i::indj]).ravel()
-            weight[idy[i::indj].ravel(), idx[i::indj].ravel()] += g[i::indj].ravel()
+    for j in np.arange(len(y)):
+        image[indy_array[j], indx_array[j]] += y[j] * G[j]
+        error[indy_array[j], indx_array[j]] += ye[j]**2 * G[j]
+        weight[indy_array[j], indx_array[j]] += G[j]
+#    for j in np.arange(len(cnt_array)):
+#        l1 = cnt_array[j, 0]
+#        l2 = cnt_array[j, 1]
+#        idy = indy_array[l1:l2]
+#        idx = indx_array[l1:l2]
+#        g = G[l1:l2]
+#        yi = y[l1:l2]
+#        yie = ye[l1:l2]
+#        indj = 336
+#        for i in np.arange(indj):
+#            image[idy[i::indj].ravel(), idx[i::indj].ravel()] += (yi[i::indj][:, np.newaxis] * g[i::indj]).ravel()
+#            error[idy[i::indj].ravel(), idx[i::indj].ravel()] += (yie[i::indj][:, np.newaxis]**2 * g[i::indj]).ravel()
+#            weight[idy[i::indj].ravel(), idx[i::indj].ravel()] += g[i::indj].ravel()
     weight[:] *= np.pi * 0.75**2
     return image, np.sqrt(error), weight
 
@@ -147,8 +169,50 @@ errarray = np.zeros((cnt, len(def_wave)), dtype='float32')
 A = Astrometry(bounding_box[0], bounding_box[1], 0., 0., 0.)
 tp = A.setup_TP(A.ra0, A.dec0, 0.)
 
+if args.filter_file is not None:
+    R = Table.read(args.filter_file, format='ascii')
+    response = np.interp(def_wave, R['Wavelength'], R['R'], left=0.0, right=0.0)
+    
+def rebin(arr, new_shape):
+    """Rebin 2D array arr to shape new_shape by averaging."""
+    shape = (new_shape[0], arr.shape[0] // new_shape[0],
+             new_shape[1], arr.shape[1] // new_shape[1])
+    return arr.reshape(shape).mean(axis=(-1,1))
+    
+if args.image_file is not None:
+    image_file = fits.open(args.image_file)
+    wc = WCS(image_file[0].header)
+    ny, nx = image_file[0].data.shape
+    yind, xind = np.indices((ny, nx))
+    xn, yn = wc.wcs_world2pix(A.ra0, A.dec0, 1)
+    tpn = A.setup_TP(A.ra0, A.dec0, 0., xn, yn, x_scale=-0.25, y_scale=0.25)
+    r, d = wc.wcs_pix2world(xind.ravel()+1.0, yind.ravel()+1.0, 1)
+    P = np.zeros((len(r), 2))
+    x, y = tp.wcs_world2pix(r, d, 1)
+    P[:, 0], P[:, 1] = (x, y)
+    d = np.sqrt((P[:, 0]-xg[0])**2 + (P[:, 1]-yg[0])**2)
+    I = np.argmin(d)
+    yi, xi = np.unravel_index(I, yind.shape)
+    N = 4 * len(xg)
+    x = np.reshape(x, image_file[0].data.shape)
+    y = np.reshape(y, image_file[0].data.shape)
+    newimage = image_file[0].data[yi:yi+N, xi:xi+N]
+    binimage = rebin(newimage, (newimage.shape[0]//4, newimage.shape[1]//4))
+    ximage = rebin(x[yi:yi+N, xi:xi+N], (newimage.shape[0]//4, newimage.shape[1]//4))
+    yimage = rebin(y[yi:yi+N, xi:xi+N], (newimage.shape[0]//4, newimage.shape[1]//4))
+    P = np.zeros((len(ximage.ravel()), 2))
+    P[:, 0], P[:, 1] = (ximage.ravel(), yimage.ravel())
+    binimage = griddata(P, binimage.ravel(), (xgrid, ygrid), method='cubic')
+    h = tp.to_header()
+    N = len(xg)
+    h['CRPIX1'] = np.interp(0., xg, np.arange(len(xg)))+1.0
+    h['CRPIX2'] = np.interp(0., xg, np.arange(len(xg)))+1.0
+    name = op.basename(args.image_file)[:-5] + '_rect.fits'
+    args.log.info('Writing %s' % name)
+    fits.PrimaryHDU(np.array(binimage, dtype='float32'), header=h).writeto(name, overwrite=True)
+
 cnt = 0
-for h5file in h5files:
+for jk, h5file in enumerate(h5files):
     args.log.info('Working on %s' % h5file)
     t = tables.open_file(h5file)
     date = int(op.basename(h5file).split('_')[0])
@@ -181,40 +245,109 @@ for h5file in h5files:
     E.get_ADR_RAdec(Aother)
     raarray[cnt:cnt1, :] = ra[:, np.newaxis] - E.ADRra[np.newaxis, :] / 3600. / np.cos(np.deg2rad(A.dec0))
     decarray[cnt:cnt1, :] = dec[:, np.newaxis] - E.ADRdec[np.newaxis, :] / 3600.
+    if args.filter_file is not None:
+        wsel = response>0.0
+        mask = np.isfinite(spectra[:, wsel]) * (spectra[:, wsel] != 0.0)
+        collapse_image = (np.nansum(spectra[:, wsel] * response[np.newaxis, wsel], axis=1) /
+                          np.nansum(mask * response[np.newaxis, wsel], axis=1))
+        collapse_eimage = np.sqrt((np.nansum(error[:, wsel]**2 * response[np.newaxis, wsel], axis=1) /
+                                   np.nansum(mask * response[np.newaxis, wsel], axis=1)))
+
+
+        Pos = np.zeros((cnt1-cnt, 2))
+        x, y = tp.wcs_world2pix(np.nanmean(raarray[cnt:cnt1, wsel], axis=1),
+                                np.nanmean(decarray[cnt:cnt1, wsel], axis=1), 1)
+        Pos[:, 0], Pos[:, 1] = (x+0.0, y+0.0)
+        image, errorimage, weight = make_image(Pos, collapse_image, collapse_eimage,
+                                               xg, yg, xgrid, ygrid, 2.0 / 2.35,
+                                               cnt_array[jk:jk+1, :])
+        
+        image = np.where(weight > 0.2, image / weight, 0.0)
+        image[image==0.] = np.nan
+        G = Gaussian2DKernel(2.5)
+        cimage = convolve(image, G, preserve_nan=True, boundary='extend')
+        nimage = binimage * 1.
+        nimage[np.isnan(cimage)] = np.nan
+        nimage = convolve(nimage, G, preserve_nan=True, boundary='extend')
+        sel = np.isfinite(cimage) * (nimage > 0.05)
+        yim = cimage / nimage
+        
+        yim[~sel] = 0.0
+        nimage[np.isnan(nimage)] = 0.0
+        image[np.isnan(image)] = 0.0
+        bimage = binimage * 1.
+        bimage[image==0.] = 0.
+        
+        a = np.argsort(nimage[sel])
+        binx = np.array([np.mean(nx) for nx in np.array_split(nimage[sel][a], 50)])
+        biny = np.array([biweight(nx) for nx in np.array_split(yim[sel][a], 50)])
+        bsel = binx > 0.1
+
+        A = np.ones((len(biny[bsel]), 2))
+        A[:, 1] = 1. / binx[bsel]
+        sol = np.linalg.lstsq(A, biny[bsel])[0]
+        y = (cimage - sol[1]) / nimage
+        y[~sel] = 0.0
+        bsel = binx > 0.3
+        norm, std = biweight(y[sel][nimage[sel]>0.08], calc_std=True)
+        args.log.info('Normalization for %s: %0.2f, %0.2f' % (h5file, norm, std/norm))
+        
+        
+        A = np.ones((len(biny), 2))
+        A[:, 1] = 1. / binx
+        plt.figure(figsize=(10, 8))
+        plt.scatter(nimage[sel], y[sel] / norm, s=5, alpha=0.05)
+        plt.plot([0.03, 0.6], [1., 1.], 'r-', lw=2)
+        plt.plot([0.03, 0.6], [1.-std/norm, 1.-std/norm], 'r--', lw=1)
+        plt.plot([0.03, 0.6], [1.+std/norm, 1.+std/norm], 'r--', lw=1)
+        mn = np.nanpercentile(y[sel], 5)/norm
+        mx = np.nanpercentile(y[sel], 95)/norm
+        ran = mx - mn
+        plt.axis([0.03, 0.6, mn-0.2*ran, mx+0.2*ran])
+        name = op.basename(h5file)[:-3] + '_norm.png'
+        plt.savefig(name, dpi=300)
+        
+        name = op.basename(h5file)[:-3] + '_rect.fits'
+        h = tp.to_header()
+        N = len(xg)
+        h['CRPIX1'] = np.interp(0., xg, np.arange(len(xg)))+1.0
+        h['CRPIX2'] = np.interp(0., xg, np.arange(len(xg)))+1.0
+        fits.PrimaryHDU(np.array(image/norm, dtype='float32'), header=h).writeto(name, overwrite=True)
+        fits.PrimaryHDU(np.array(y, dtype='float32'), header=h).writeto(name.replace('rect','div'), overwrite=True)
+
     specarray[cnt:cnt1, :] = spectra
     errarray[cnt:cnt1, :] = error
-
     cnt = cnt + len(ra)
     t.close()
 
-Pos = np.zeros((len(raarray), 2))
-for i in np.arange(len(def_wave)):
-    x, y = tp.wcs_world2pix(raarray[:, i], decarray[:, i], 1)
-    args.log.info('Working on wavelength %0.0f' % def_wave[i])
-    Pos[:, 0], Pos[:, 1] = (x, y)
-    data = specarray[:, i]
-    edata = errarray[:, i]
-    image, errorimage, weight = make_image(Pos, data, edata, xg, yg, xgrid, ygrid, 1.5 / 2.35,
-                               cnt_array)
-    cube[i, :, :] += image
-    ecube[i, :, :] += errorimage
-    weightcube[i, :, :] += weight
-
-cube = np.where(weightcube > 0.4, cube / weightcube, 0.0)
-ecube = np.where(weightcube > 0.4, ecube / weightcube, 0.0)
-name = op.basename('%s_cube.fits' % args.surname)
-header['CRPIX1'] = (N+1) / 2
-header['CRPIX2'] = (N+1) / 2
-header['CDELT3'] = 2.
-header['CRPIX3'] = 1.
-header['CRVAL3'] = 3470.
-F = fits.PrimaryHDU(np.array(cube, 'float32'), header=header)
-F.writeto(name, overwrite=True)
-name = op.basename('%s_errorcube.fits' % args.surname)
-header['CRPIX1'] = (N+1) / 2
-header['CRPIX2'] = (N+1) / 2
-header['CDELT3'] = 2.
-header['CRPIX3'] = 1.
-header['CRVAL3'] = 3470.
-F = fits.PrimaryHDU(np.array(ecube, 'float32'), header=header)
-F.writeto(name, overwrite=True)
+#Pos = np.zeros((len(raarray), 2))
+#for i in np.arange(len(def_wave)):
+#    x, y = tp.wcs_world2pix(raarray[:, i], decarray[:, i], 1)
+#    args.log.info('Working on wavelength %0.0f' % def_wave[i])
+#    Pos[:, 0], Pos[:, 1] = (x, y)
+#    data = specarray[:, i]
+#    edata = errarray[:, i]
+#    image, errorimage, weight = make_image(Pos, data, edata, xg, yg, xgrid, ygrid, 1.5 / 2.35,
+#                               cnt_array)
+#    cube[i, :, :] += image
+#    ecube[i, :, :] += errorimage
+#    weightcube[i, :, :] += weight
+#
+#cube = np.where(weightcube > 0.4, cube / weightcube, 0.0)
+#ecube = np.where(weightcube > 0.4, ecube / weightcube, 0.0)
+#name = op.basename('%s_cube.fits' % args.surname)
+#header['CRPIX1'] = (N+1) / 2
+#header['CRPIX2'] = (N+1) / 2
+#header['CDELT3'] = 2.
+#header['CRPIX3'] = 1.
+#header['CRVAL3'] = 3470.
+#F = fits.PrimaryHDU(np.array(cube, 'float32'), header=header)
+#F.writeto(name, overwrite=True)
+#name = op.basename('%s_errorcube.fits' % args.surname)
+#header['CRPIX1'] = (N+1) / 2
+#header['CRPIX2'] = (N+1) / 2
+#header['CDELT3'] = 2.
+#header['CRPIX3'] = 1.
+#header['CRVAL3'] = 3470.
+#F = fits.PrimaryHDU(np.array(ecube, 'float32'), header=header)
+#F.writeto(name, overwrite=True)
