@@ -79,7 +79,37 @@ parser.add_argument("-if", "--image_file",
 parser.add_argument("-ff", "--filter_file",
                     help='''Filter filename''',
                     default=None, type=str)
-
+def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
+    image = xgrid * 0.
+    error = xgrid * 0.
+    weight = xgrid * 0.
+    imagetemp = np.zeros((len(cnt_array),) + xgrid.shape)
+    errortemp = np.zeros((len(cnt_array),) + xgrid.shape)
+    G = Gaussian2DKernel(sigma)
+    for j in np.arange(len(cnt_array)):
+        l1 = cnt_array[j, 0]
+        l2 = cnt_array[j, 1]
+        for k in np.arange(int((l2-l1)/(448*3))):
+            i1 = l1 + k * 448 * 3
+            i2 = l1 + (k+1) * 448 * 3
+            yi = y[i1:i2]
+            yie = ye[i1:i2]
+            p = P[i1:i2]
+            xl = np.searchsorted(xg, p[:, 0].min()) - 1
+            xh = np.searchsorted(xg, p[:, 0].max()) + 1
+            yl = np.searchsorted(yg, p[:, 1].min()) - 1
+            yh = np.searchsorted(yg, p[:, 1].max()) + 1
+            imagetemp[j, yl:yh,xl:xh] = griddata(p, yi, (xgrid[yl:yh,xl:xh], 
+                                           ygrid[yl:yh,xl:xh]),
+                                           method='linear', fill_value=np.nan)
+            errortemp[j, yl:yh,xl:xh] = griddata(p, yie, (xgrid[yl:yh,xl:xh], 
+                                           ygrid[yl:yh,xl:xh]),
+                                           method='linear', fill_value=0.0)
+            imagetemp[j, yl:yh,xl:xh] = convolve(imagetemp[j, yl:yh,xl:xh], G,
+                                                 preserve_nan=True, 
+                                                 boundary='extend')
+    image = np.nanmedian(imagetemp, axis=0)
+    error = np.nanmedian(errortemp, )
 
 def make_image(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
     image = xgrid * 0.
@@ -270,7 +300,7 @@ for jk, h5file in enumerate(h5files):
         nimage = convolve(nimage, G, preserve_nan=True, boundary='extend')
         sel = np.isfinite(cimage) * (nimage > 0.05)
         yim = cimage / nimage
-        
+        d = np.sqrt(x**2 + y**2)
         yim[~sel] = 0.0
         nimage[np.isnan(nimage)] = 0.0
         image[np.isnan(image)] = 0.0
@@ -279,7 +309,7 @@ for jk, h5file in enumerate(h5files):
         xmax = np.linspace(-0.3, 0.05, 61)
         bmax = xmax*0.
         for i, v in enumerate(xmax):
-            bmax[i] = np.sum(np.abs(image[image!=0.0]-v)<0.03)
+            bmax[i] = np.sum(np.abs(cimage[np.isfinite(cimage) * d>300.]-v)<0.03)
         back = xmax[np.argmax(bmax)]
         args.log.info('Background for %s: %0.2f' % (h5file, back))
         y = (cimage - back) / nimage
