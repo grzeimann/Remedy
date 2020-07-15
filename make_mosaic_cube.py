@@ -278,7 +278,7 @@ for jk, h5file in enumerate(h5files):
         bimage[image==0.] = 0.
         xmax = np.linspace(-0.5, 0.5, 101)
         bmax = xmax*0.
-        for i, v in xmax:
+        for i, v in enumerate(xmax):
             bmax[i] = np.sum(np.abs(image[sel]-v)<0.05)
         back = xmax[np.argmax(bmax)]
         args.log.info('Background for %s: %0.2f' % (h5file, back))
