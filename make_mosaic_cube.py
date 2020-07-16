@@ -184,7 +184,7 @@ xgrid, ygrid = np.meshgrid(xg, yg)
 
 cube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 ecube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
-weightcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
+#weightcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 
 cnt = 0
 cnt_array = np.zeros((len(h5files), 2), dtype=int)
@@ -374,10 +374,10 @@ for i in np.arange(len(def_wave)):
                                                   cnt_array)
     cube[i, :, :] += image
     ecube[i, :, :] += errorimage
-    weightcube[i, :, :] += weight
+    #weightcube[i, :, :] += weight
 
-cube = np.where(weightcube > 0.4, cube / weightcube, 0.0)
-ecube = np.where(weightcube > 0.4, ecube / weightcube, 0.0)
+#cube = np.where(weightcube > 0.4, cube / weightcube, 0.0)
+#ecube = np.where(weightcube > 0.4, ecube / weightcube, 0.0)
 name = op.basename('%s_cube.fits' % args.surname)
 header['CRPIX1'] = (N+1) / 2
 header['CRPIX2'] = (N+1) / 2
