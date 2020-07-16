@@ -80,8 +80,8 @@ parser.add_argument("-ff", "--filter_file",
                     help='''Filter filename''',
                     default=None, type=str)
 def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
-    imagetemp = np.zeros((len(cnt_array),) + xgrid.shape)
-    errortemp = np.zeros((len(cnt_array),) + xgrid.shape)
+    imagetemp = np.ones((len(cnt_array),) + xgrid.shape)*np.nan
+    errortemp = np.ones((len(cnt_array),) + xgrid.shape)*np.nan
     G = Gaussian2DKernel(sigma)
     for j in np.arange(len(cnt_array)):
         l1 = cnt_array[j, 0]
@@ -363,7 +363,7 @@ specarray[:] *= biweight(norm_array)
 errarray[:] *= biweight(norm_array)
 
 Pos = np.zeros((len(raarray), 2))
-for i in np.arange(len(def_wave)):
+for i in np.arange(100, 120): #len(def_wave)):
     x, y = tp.wcs_world2pix(raarray[:, i], decarray[:, i], 1)
     args.log.info('Working on wavelength %0.0f' % def_wave[i])
     Pos[:, 0], Pos[:, 1] = (x, y)
