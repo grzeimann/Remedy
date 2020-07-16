@@ -363,7 +363,7 @@ specarray[:] *= biweight(norm_array)
 errarray[:] *= biweight(norm_array)
 
 Pos = np.zeros((len(raarray), 2))
-for i in np.arange(len(def_wave)):
+for i in np.arange(100, 150):#len(def_wave)):
     x, y = tp.wcs_world2pix(raarray[:, i], decarray[:, i], 1)
     args.log.info('Working on wavelength %0.0f' % def_wave[i])
     Pos[:, 0], Pos[:, 1] = (x, y)
