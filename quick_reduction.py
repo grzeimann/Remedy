@@ -379,14 +379,20 @@ def get_ifuslots():
         if op.exists(tfile):
             print("This observation is tarred. Trying workaround...")
             fnames_glob = op.join(*path[-4:])
+            mzip = []
             with tarfile.open(tfile) as tf:
                 filenames = fnmatch.filter(tf.getnames(), fnames_glob)
+                for filename in filenames:
+                    f = fits.open(tf.extractfile(filename))
+                    specid = '%03d' % f[0].header['SPECID']
+                    ifuid = '%03d' % f[0].header['IFUID']
+                    ifuslot = '%03d' % f[0].header['IFUSLOT']
+                    mzip.append('%s_%s_%s' % (specid, ifuslot, ifuid))
         else:
             print("Could not find %s" % tfile)
             print("Crap! How did I get here?")
             sys.exit(1)
-    ifuslots = [int(op.basename(fn).split('_')[1][:3]) for fn in filenames]
-    return np.unique(ifuslots)
+    return np.unique(mzip)
 
 def orient_image(image, amp, ampname):
     '''
@@ -1994,7 +2000,12 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
     plt.savefig('mag_offset_%s_%07d.png'  % (args.date, args.observation), dpi=300)
     return sel, GMag[:, 0] - GMag[:, 1] - median, 10**(-0.4*median), fwhm_virus
 
-def get_sky_fibers(norm_array):
+def get_sky_fibers(norm_array, pos=None):
+    if pos is not None:
+        dra = np.cos(np.deg2rad(53.34)) * (pos[:, 0] - 210.8) * 60.
+        ddec = (pos[:, 1] - 53.34) * 60.
+        d = np.sqrt(dra**2 + ddec**2) > 6.
+        norm_array = norm_array[d]
     bl, bm = biweight(norm_array, calc_std=True)
     low = np.nanpercentile(norm_array, 5)
     high = np.nanpercentile(norm_array, 60)
@@ -2271,7 +2282,10 @@ instrument = 'virus'
 h5file = open_file(args.hdf5file, mode='r')
 h5table = h5file.root.Cals
 ifuslots = h5table.cols.ifuslot[:]
-
+specids = [x.decode("utf-8") for x in h5table.cols.specid[:]]
+ifuids = [x.decode("utf-8") for x in h5table.cols.ifuid[:]]
+zips = ['%s_%03d_%s' % (s,i1,i2) for s, i1, i2 in zip(ifuslots, specids, ifuids)]
+uzips = np.unique(zips)
 # =============================================================================
 # Get unique IFU slot names
 # =============================================================================
@@ -2301,21 +2315,20 @@ throughput = np.array(T['throughput'])
 # Collect indices for ifuslots (target and neighbors)
 # =============================================================================
 sel1 = list(np.where(args.ifuslot == ifuslots)[0])
+# Get rid of neighbor idea and load the 3 zip code
 ifuslotn = get_slot_neighbors(args.ifuslot, u_ifuslots,
                               dist=args.neighbor_dist)
 ifuslotn = np.setdiff1d(ifuslotn, badifuslots)
-IFUs = get_ifuslots()
-allifus = [args.ifuslot]
-for ifuslot in ifuslotn:
-    if ifuslot not in IFUs:
+ZIPs = get_ifuslots()
+allzips = []
+selzips = []
+for z in uzips:
+    if z not in ZIPs:
         continue
-    silly = np.where(ifuslot == ifuslots)[0]
-    if len(silly) != 4:
-        continue
-    sel1.append(silly)
-    allifus.append(ifuslot)
-ifuloop = np.array(np.hstack(sel1), dtype=int)
-nslots = len(ifuloop) / 4
+    sel1.append(np.where(z == zips))[0]
+    allzips.append(z)
+ziploop = np.array(np.hstack(sel1), dtype=int)
+nslots = len(ziploop) / 4
 allifus = np.hstack(allifus)
 
 
@@ -2325,7 +2338,7 @@ allifus = np.hstack(allifus)
 tableh5 = h5spec.create_table(h5spec.root, 'Images', Images, 
                             "Image Information")
 (pos, fltspectra, scispectra, errspectra, wave_all, 
- fns, tfile, _I, C1, intm, ExP, mscispectra, twispectra) = reduce_ifuslot(ifuloop, h5table,
+ fns, tfile, _I, C1, intm, ExP, mscispectra, twispectra) = reduce_ifuslot(ziploop, h5table,
                                                               tableh5)
 
 for i in np.arange(len(allifus)):
@@ -2419,7 +2432,7 @@ for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
     nifus = int(len(sel) / 448.)
     y = biweight(scirect[sel, 800:900], axis=1)
-    skyfibers = get_sky_fibers(y)
+    skyfibers = get_sky_fibers(y, pos)
     sky = biweight(scirect[sel][skyfibers], axis=0)
     skies.append(sky)
     for j in np.arange(nifus):
