@@ -79,18 +79,30 @@ parser.add_argument("-if", "--image_file",
 parser.add_argument("-ff", "--filter_file",
                     help='''Filter filename''',
                     default=None, type=str)
-def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
+
+def rebin(arr, new_shape):
+    """Rebin 2D array arr to shape new_shape by averaging."""
+    shape = (new_shape[0], arr.shape[0] // new_shape[0],
+             new_shape[1], arr.shape[1] // new_shape[1])
+    return arr.reshape(shape).mean(axis=(-1,1))
+
+def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
+                      binsize=2):
     G = Gaussian2DKernel(sigma)
     xc = np.interp(Pos[:, 0], xg, np.arange(len(xg)), left=0., right=len(xg))
     yc = np.interp(Pos[:, 1], yg, np.arange(len(yg)), left=0., right=len(yg))
     xc = np.array(np.round(xc), dtype=int)
     yc = np.array(np.round(yc), dtype=int)
     image, error = (xgrid*np.nan, xgrid*np.nan)
-    gsel = (xc>0) * (xc<len(xg)) * (yc>0) * (yc<len(yg))
-
+    gsel = (xc>1) * (xc<len(xg)-1) * (yc>1) * (yc<len(yg)-1)
     image[yc[gsel], xc[gsel]] = y[gsel] / (np.pi * 0.75**2)
     error[yc[gsel], xc[gsel]] = ye[gsel] / (np.pi * 0.75**2)
+    bsel = np.isnan(y[gsel])
+
     image = convolve(image, G, preserve_nan=False, boundary='extend')
+    for i in np.arange(-1, 2):
+        for j in np.arange(-1, 2):
+            image[yc[gsel][bsel]+i, xc[gsel][bsel]+j] = np.nan
     image[np.isnan(image)] = 0.0
     error[np.isnan(error)] = 0.0
     return image, error, np.ones(image.shape)
@@ -186,11 +198,7 @@ if args.filter_file is not None:
     R = Table.read(args.filter_file, format='ascii')
     response = np.interp(def_wave, R['Wavelength'], R['R'], left=0.0, right=0.0)
     
-def rebin(arr, new_shape):
-    """Rebin 2D array arr to shape new_shape by averaging."""
-    shape = (new_shape[0], arr.shape[0] // new_shape[0],
-             new_shape[1], arr.shape[1] // new_shape[1])
-    return arr.reshape(shape).mean(axis=(-1,1))
+
     
 if args.image_file is not None:
     name = op.basename(args.image_file)[:-5] + '_rect.fits'
@@ -277,7 +285,7 @@ for jk, h5file in enumerate(h5files):
         gsel = (xc>0) * (xc<len(xg)) * (yc>0) * (yc<len(yg))
         skyvalues = binimage[yc[gsel], xc[gsel]] < 0.01
         backspectra = biweight(spectra[gsel][skyvalues], axis=0)
-        args.log.info('Average backspectrum value: %0.3f' % np.nanmedian(backspectra))
+        args.log.info('Average spectrum residual value: %0.3f' % np.nanmedian(backspectra))
         spectra[:] -= backspectra[np.newaxis, :]
         collapse_image = (np.nansum(spectra[:, wsel] * response[np.newaxis, wsel], axis=1) /
                           np.nansum(mask * response[np.newaxis, wsel], axis=1))
