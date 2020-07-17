@@ -94,27 +94,25 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
     image_all = np.zeros((len(cnt_array),) + xgrid.shape)
     error_all = np.zeros((len(cnt_array),) + xgrid.shape)
     weight_all = np.zeros((len(cnt_array),) + xgrid.shape)
+    xc = np.interp(Pos[:, 0], xg, np.arange(len(xg)), left=0., right=len(xg))
+    yc = np.interp(Pos[:, 1], yg, np.arange(len(yg)), left=0., right=len(yg))
+    xc = np.array(np.round(xc), dtype=int)
+    yc = np.array(np.round(yc), dtype=int)
+    gsel = np.where((xc>1) * (xc<len(xg)-1) * (yc>1) * (yc<len(yg)-1))[0]
 
     for k, cnt in enumerate(cnt_array):
         l1 = int(cnt[0])
         l2 = int(cnt[1])
-        P = Pos[l1:l2]
-        yi = y[l1:l2]
-        yei = ye[l1:l2]
-        xc = np.interp(P[:, 0], xg, np.arange(len(xg)), left=0., right=len(xg))
-        yc = np.interp(P[:, 1], yg, np.arange(len(yg)), left=0., right=len(yg))
-        xc = np.array(np.round(xc), dtype=int)
-        yc = np.array(np.round(yc), dtype=int)
+        gi = gsel[(gsel>=l1) * (gsel<=l2)]
         image, error, weight = (xgrid*np.nan, xgrid*np.nan, xgrid*np.nan)
-        gsel = (xc>1) * (xc<len(xg)-1) * (yc>1) * (yc<len(yg)-1)
-        image[yc[gsel], xc[gsel]] = yi[gsel] / (np.pi * 0.75**2)
-        error[yc[gsel], xc[gsel]] = yei[gsel] / (np.pi * 0.75**2)
+        image[yc[gi], xc[gi]] = y[gi] / (np.pi * 0.75**2)
+        error[yc[gi], xc[gi]] = ye[gi] / (np.pi * 0.75**2)
         image_all[k] = image
         error_all[k] = error
-        bsel = np.isfinite(yi[gsel])
+        bsel = np.isfinite(y[gi])
         for i in np.arange(-1, 2):
             for j in np.arange(-1, 2):
-                weight[yc[gsel][bsel]+i, xc[gsel][bsel]+j] = 1.
+                weight[yc[gi][bsel]+i, xc[gi][bsel]+j] = 1.
         weight_all[k] = weight
     image = np.nanmedian(image_all, axis=0)
     error = np.nanmedian(error_all, axis=0)
