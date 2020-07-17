@@ -384,9 +384,9 @@ def get_ifuslots():
                 filenames = fnmatch.filter(tf.getnames(), fnames_glob)
                 for filename in filenames:
                     f = fits.open(tf.extractfile(filename))
-                    specid = '%03d' % f[0].header['SPECID']
-                    ifuid = '%03d' % f[0].header['IFUID']
-                    ifuslot = '%03d' % f[0].header['IFUSLOT']
+                    specid = '%03d' % int(f[0].header['SPECID'])
+                    ifuid = '%03d' % int(f[0].header['IFUID'])
+                    ifuslot = '%03d' % int(f[0].header['IFUSLOT'])
                     mzip.append('%s_%s_%s' % (specid, ifuslot, ifuid))
         else:
             print("Could not find %s" % tfile)
