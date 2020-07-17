@@ -97,20 +97,27 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
             xh = np.searchsorted(xg, p[:, 0].max())
             yl = np.searchsorted(yg, p[:, 1].min())
             yh = np.searchsorted(yg, p[:, 1].max())
+            xc = np.searchsorted(xg, p[:, 0])
+            yc = np.searchsorted(yg, p[:, 1])
             xl = int(np.max([0., xl]))
             yl = int(np.max([0., yl]))
             xh = int(np.min([len(xg), xh]))
             yh = int(np.min([len(xg), yh]))
-            if (gsel.sum()>100) and (xl<xh) and (yl<yh):
-                imagetemp[j, yl:yh,xl:xh] = griddata(p[gsel], yi[gsel], (xgrid[yl:yh,xl:xh], 
-                                               ygrid[yl:yh,xl:xh]),
-                                               method='linear', fill_value=np.nan)
-                errortemp[j, yl:yh,xl:xh] = griddata(p[gsel], yie[gsel], (xgrid[yl:yh,xl:xh], 
-                                               ygrid[yl:yh,xl:xh]),
-                                               method='linear', fill_value=0.0)
-                imagetemp[j, yl:yh,xl:xh] = convolve(imagetemp[j, yl:yh,xl:xh], G,
-                                                     preserve_nan=True, 
-                                                     boundary='extend')
+            gsel = (xc>0) * (xc<len(xg)) * (yc>0) * (yc<len(yg))
+            imagetemp[j, yc[gsel], xc[gsel]] = yi[gsel]
+            errortemp[j, yc[gsel], xc[gsel]] = yie[gsel]
+
+#            if (gsel.sum()>100) and (xl<xh) and (yl<yh):
+#                imagetemp[j, yl:yh,xl:xh] = griddata(p[gsel], yi[gsel], (xgrid[yl:yh,xl:xh], 
+#                                               ygrid[yl:yh,xl:xh]),
+#                                               method='linear', fill_value=np.nan)
+#                errortemp[j, yl:yh,xl:xh] = griddata(p[gsel], yie[gsel], (xgrid[yl:yh,xl:xh], 
+#                                               ygrid[yl:yh,xl:xh]),
+#                                               method='linear', fill_value=0.0)
+#                    
+            imagetemp[j, yl:yh,xl:xh] = convolve(imagetemp[j, yl:yh,xl:xh], G,
+                                                 preserve_nan=False, 
+                                                 boundary='extend')
     image = np.nanmedian(imagetemp, axis=0) / (np.pi * 0.75**2)
     error = np.nanmedian(errortemp, axis=0) / (np.pi * 0.75**2)
     image[np.isnan(image)] = 0.0
@@ -363,7 +370,7 @@ specarray[:] *= biweight(norm_array)
 errarray[:] *= biweight(norm_array)
 
 Pos = np.zeros((len(raarray), 2))
-for i in np.arange(len(def_wave)):
+for i in np.arange(100,120):#len(def_wave)):
     x, y = tp.wcs_world2pix(raarray[:, i], decarray[:, i], 1)
     args.log.info('Working on wavelength %0.0f' % def_wave[i])
     Pos[:, 0], Pos[:, 1] = (x, y)
