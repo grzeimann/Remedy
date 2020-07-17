@@ -114,9 +114,9 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
 #                errortemp[j, yl:yh,xl:xh] = griddata(p[gsel], yie[gsel], (xgrid[yl:yh,xl:xh], 
 #                                               ygrid[yl:yh,xl:xh]),
 #                                               method='linear', fill_value=0.0)
-            imagetemp[j] = convolve(imagetemp[j], G,
-                                                 preserve_nan=False, 
-                                                 boundary='extend')
+        imagetemp[j] = convolve(imagetemp[j], G,
+                                             preserve_nan=False, 
+                                             boundary='extend')
     image = np.nanmedian(imagetemp, axis=0) / (np.pi * 0.75**2)
     error = np.nanmedian(errortemp, axis=0) / (np.pi * 0.75**2)
     image[np.isnan(image)] = 0.0
