@@ -97,8 +97,10 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
             xh = np.searchsorted(xg, p[:, 0].max())
             yl = np.searchsorted(yg, p[:, 1].min())
             yh = np.searchsorted(yg, p[:, 1].max())
-            xc = np.searchsorted(xg, p[:, 0])
-            yc = np.searchsorted(yg, p[:, 1])
+            xc = np.interp(p[:, 0], xg, np.arange(len(xg)), left=0., right=len(xg))
+            yc = np.interp(p[:, 1], yg, np.arange(len(yg)), left=0., right=len(yg))
+            xc = np.array(np.round(xc), dtype=int)
+            yc = np.array(np.round(yc), dtype=int)
             xl = int(np.max([0., xl]))
             yl = int(np.max([0., yl]))
             xh = int(np.min([len(xg), xh]))
@@ -114,9 +116,9 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
 #                errortemp[j, yl:yh,xl:xh] = griddata(p[gsel], yie[gsel], (xgrid[yl:yh,xl:xh], 
 #                                               ygrid[yl:yh,xl:xh]),
 #                                               method='linear', fill_value=0.0)
-        imagetemp[j] = convolve(imagetemp[j], G,
-                                             preserve_nan=False, 
-                                             boundary='extend')
+            imagetemp[j, yl:yh,xl:xh] = convolve(imagetemp[j, yl:yh,xl:xh], G,
+                                                 preserve_nan=False, 
+                                                 boundary='extend')
     image = np.nanmedian(imagetemp, axis=0) / (np.pi * 0.75**2)
     error = np.nanmedian(errortemp, axis=0) / (np.pi * 0.75**2)
     image[np.isnan(image)] = 0.0
