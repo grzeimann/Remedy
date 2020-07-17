@@ -339,7 +339,7 @@ for jk, h5file in enumerate(h5files):
 
         threshold = np.sqrt((nimage * 0.25)**2 + (3.*bottom_var)**2)
         flagged = np.abs(diff_image[yc[gsel], xc[gsel]]) > threshold[yc[gsel], xc[gsel]]
-        spectra[np.where(gsel)[0][flagged]] = np.nan
+        #spectra[np.where(gsel)[0][flagged]] = np.nan
         args.log.info('%i fibers flagged for too large of a difference' % flagged.sum())
         plt.figure(figsize=(10, 8))
         plt.scatter(nimage[sel], y[sel] / norm, s=5, alpha=0.05)
