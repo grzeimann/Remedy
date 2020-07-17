@@ -2315,11 +2315,12 @@ throughput = np.array(T['throughput'])
 # Collect indices for ifuslots (target and neighbors)
 # =============================================================================
 sel1 = list(np.where(args.ifuslot == ifuslots)[0])
-# Get rid of neighbor idea and load the 3 zip code
-ifuslotn = get_slot_neighbors(args.ifuslot, u_ifuslots,
-                              dist=args.neighbor_dist)
-ifuslotn = np.setdiff1d(ifuslotn, badifuslots)
+## Get rid of neighbor idea and load the 3 zip code
+#ifuslotn = get_slot_neighbors(args.ifuslot, u_ifuslots,
+#                              dist=args.neighbor_dist)
+#ifuslotn = np.setdiff1d(ifuslotn, badifuslots)
 ZIPs = get_ifuslots()
+print(ZIPs, zips)
 allzips = []
 selzips = []
 for z in uzips:
@@ -2432,7 +2433,7 @@ for k in np.arange(nexp):
     sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
     nifus = int(len(sel) / 448.)
     y = biweight(scirect[sel, 800:900], axis=1)
-    skyfibers = get_sky_fibers(y, pos)
+    skyfibers = get_sky_fibers(y, pos[sel])
     sky = biweight(scirect[sel][skyfibers], axis=0)
     skies.append(sky)
     for j in np.arange(nifus):
