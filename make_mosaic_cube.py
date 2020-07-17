@@ -337,7 +337,7 @@ for jk, h5file in enumerate(h5files):
         limage = (cimage-v)/norm_array[jk]
         bl, bottom_var = biweight(limage[(binimage<0.01) * np.isfinite(cimage)], calc_std=True)
 
-        threshold = np.sqrt((nimage * 0.15)**2 + bottom_var**2)
+        threshold = np.sqrt((nimage * 0.25)**2 + (3.*bottom_var)**2)
         flagged = np.abs(diff_image[yc[gsel], xc[gsel]]) > threshold[yc[gsel], xc[gsel]]
         spectra[np.where(gsel)[0][flagged]] = np.nan
         args.log.info('%i fibers flagged for too large of a difference' % flagged.sum())
