@@ -91,9 +91,9 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
     # Loop through shots, average images before convolution
     # Make a +/- 1 pixel mask for places to keep
     G = Gaussian2DKernel(sigma)
-    image_all = np.zeros((len(cnt_array,), + xgrid.shape))
-    error_all = np.zeros((len(cnt_array,), + xgrid.shape))
-    weight_all = np.zeros((len(cnt_array,), + xgrid.shape))
+    image_all = np.zeros((len(cnt_array,) + xgrid.shape))
+    error_all = np.zeros((len(cnt_array,) + xgrid.shape))
+    weight_all = np.zeros((len(cnt_array,) + xgrid.shape))
 
     for k, cnt in enumerate(cnt_array):
         l1 = cnt[0]
