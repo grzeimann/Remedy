@@ -303,7 +303,7 @@ for jk, h5file in enumerate(h5files):
                                                       cn)
         
         image[image==0.] = np.nan
-        G = Gaussian2DKernel(2.5)
+        G = Gaussian2DKernel(4.5)
         cimage = convolve(image, G, preserve_nan=True, boundary='extend')
         nimage = binimage * 1.
         nimage[np.isnan(cimage)] = np.nan
@@ -333,10 +333,10 @@ for jk, h5file in enumerate(h5files):
         if norm_array[jk] < 0.:
             norm_array[jk] = np.nan
         args.log.info('Normalization/STD for %s: %0.2f, %0.2f' % (h5file, norm, std/norm))
-        diff_image = (cimage-v)/norm - nimage
-        limage = (cimage-v)/norm
+        diff_image = (cimage-v)/norm_array[jk] - nimage
+        limage = (cimage-v)/norm_array[jk]
         bl, bottom_var = biweight(limage[(binimage<0.1) * np.isfinite(cimage)], calc_std=True)
-        threshold = np.sqrt((nimage * 0.15)** + bottom_var**2)
+        threshold = np.sqrt((nimage * 0.15)**2 + bottom_var**2)
         flagged = np.abs(diff_image[yc[gsel], xc[gsel]]) > threshold[yc[gsel], xc[gsel]]
         spectra[np.where(gsel)[0][flagged]] = np.nan
         args.log.info('%i fibers flagged for too large of a difference' % flagged.sum())
@@ -356,7 +356,7 @@ for jk, h5file in enumerate(h5files):
         N = len(xg)
         h['CRPIX1'] = np.interp(0., xg, np.arange(len(xg)))+1.0
         h['CRPIX2'] = np.interp(0., xg, np.arange(len(xg)))+1.0
-        fits.PrimaryHDU(np.array(image/norm, dtype='float32'), header=h).writeto(name, overwrite=True)
+        fits.PrimaryHDU(np.array(image/norm_array[jk], dtype='float32'), header=h).writeto(name, overwrite=True)
     
     specarray[cnt:cnt1, :] = spectra / norm_array[jk]
     errarray[cnt:cnt1, :] = error / norm_array[jk]
