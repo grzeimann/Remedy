@@ -283,7 +283,8 @@ for jk, h5file in enumerate(h5files):
         xc = np.array(np.round(xc), dtype=int)
         yc = np.array(np.round(yc), dtype=int)
         gsel = (xc>0) * (xc<len(xg)) * (yc>0) * (yc<len(yg))
-        skyvalues = binimage[yc[gsel], xc[gsel]] < 0.01
+        d = np.sqrt(xgrid**2 + ygrid**2)
+        skyvalues = (binimage[yc[gsel], xc[gsel]] < 0.01) * (d[yc[gsel], xc[gsel]] > 420.)
         backspectra = biweight(spectra[gsel][skyvalues], axis=0)
         args.log.info('Average spectrum residual value: %0.3f' % np.nanmedian(backspectra))
         spectra[:] -= backspectra[np.newaxis, :]
@@ -315,9 +316,9 @@ for jk, h5file in enumerate(h5files):
         image[np.isnan(image)] = 0.0
         bimage = binimage * 1.
         bimage[image==0.] = 0.
-        xmax = np.linspace(-0.02, 0.02, 26)
+        xmax = np.linspace(-0.1, 0.02, 26)
         bmax = xmax*0.
-        thresh = 0.08
+        thresh = 0.05
         for i, v in enumerate(xmax):
             y = (cimage - v) / nimage
             y[~sel] = 0.0
