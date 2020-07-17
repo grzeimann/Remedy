@@ -2329,7 +2329,7 @@ for z in uzips:
     allzips.append(z)
 ziploop = np.array(np.hstack(sel1), dtype=int)
 nslots = len(ziploop) / 4
-allifus = np.hstack(allifus)
+allifus = ifuslots[ziploop]
 
 
 # =============================================================================
