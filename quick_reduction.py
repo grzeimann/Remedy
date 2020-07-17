@@ -2284,7 +2284,7 @@ h5table = h5file.root.Cals
 ifuslots = h5table.cols.ifuslot[:]
 specids = [x.decode("utf-8") for x in h5table.cols.specid[:]]
 ifuids = [x.decode("utf-8") for x in h5table.cols.ifuid[:]]
-zips = ['%s_%03d_%s' % (s,i1,i2) for s, i1, i2 in zip(specids, ifuslots, ifuids)]
+zips = np.array(['%s_%03d_%s' % (s,i1,i2) for s, i1, i2 in zip(specids, ifuslots, ifuids)])
 uzips = np.unique(zips)
 # =============================================================================
 # Get unique IFU slot names
