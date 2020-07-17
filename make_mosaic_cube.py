@@ -88,24 +88,43 @@ def rebin(arr, new_shape):
 
 def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
                       binsize=2):
+    # Loop through shots, average images before convolution
+    # Make a +/- 1 pixel mask for places to keep
     G = Gaussian2DKernel(sigma)
-    xc = np.interp(Pos[:, 0], xg, np.arange(len(xg)), left=0., right=len(xg))
-    yc = np.interp(Pos[:, 1], yg, np.arange(len(yg)), left=0., right=len(yg))
-    xc = np.array(np.round(xc), dtype=int)
-    yc = np.array(np.round(yc), dtype=int)
-    image, error = (xgrid*np.nan, xgrid*np.nan)
-    gsel = (xc>1) * (xc<len(xg)-1) * (yc>1) * (yc<len(yg)-1)
-    image[yc[gsel], xc[gsel]] = y[gsel] / (np.pi * 0.75**2)
-    error[yc[gsel], xc[gsel]] = ye[gsel] / (np.pi * 0.75**2)
-    bsel = np.isnan(y[gsel])
+    image_all = np.zeros((len(cnt_array,), + xgrid.shape))
+    error_all = np.zeros((len(cnt_array,), + xgrid.shape))
+    weight_all = np.zeros((len(cnt_array,), + xgrid.shape))
 
+    for k, cnt in enumerate(cnt_array):
+        l1 = cnt[0]
+        l2 = cnt[1]
+        P = Pos[l1:l2]
+        yi = y[l1:l2]
+        yei = ye[l1:l2]
+        xc = np.interp(P[:, 0], xg, np.arange(len(xg)), left=0., right=len(xg))
+        yc = np.interp(P[:, 1], yg, np.arange(len(yg)), left=0., right=len(yg))
+        xc = np.array(np.round(xc), dtype=int)
+        yc = np.array(np.round(yc), dtype=int)
+        image, error, weight = (xgrid*np.nan, xgrid*np.nan, xgrid*np.nan)
+        gsel = (xc>1) * (xc<len(xg)-1) * (yc>1) * (yc<len(yg)-1)
+        image[yc[gsel], xc[gsel]] = yi[gsel] / (np.pi * 0.75**2)
+        error[yc[gsel], xc[gsel]] = yei[gsel] / (np.pi * 0.75**2)
+        image_all[k] = image
+        error_all[k] = error
+        bsel = np.isfinite(y[gsel])
+        for i in np.arange(-1, 2):
+            for j in np.arange(-1, 2):
+                weight[yc[gsel][bsel]+i, xc[gsel][bsel]+j] = 1.
+        weight_all[k] = weight
+    image = np.nanmedian(image_all, axis=0)
+    error = np.nanmedian(error_all, axis=0)
+    weight = np.nanmedian(weight_all, axis=0)
     image = convolve(image, G, preserve_nan=False, boundary='extend')
-    for i in np.arange(-1, 2):
-        for j in np.arange(-1, 2):
-            image[yc[gsel][bsel]+i, xc[gsel][bsel]+j] = np.nan
+    image[np.isnan(weight)] = np.nan
+    error[np.isnan(weight)] = np.nan
     image[np.isnan(image)] = 0.0
     error[np.isnan(error)] = 0.0
-    return image, error, np.ones(image.shape)
+    return image, error, weight
 
 def make_image(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
     image = xgrid * 0.
