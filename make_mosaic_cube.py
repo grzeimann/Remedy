@@ -315,7 +315,7 @@ for jk, h5file in enumerate(h5files):
         image[np.isnan(image)] = 0.0
         bimage = binimage * 1.
         bimage[image==0.] = 0.
-        xmax = np.linspace(-0.25, 0.00, 26)
+        xmax = np.linspace(-0.02, 0.02, 26)
         bmax = xmax*0.
         thresh = 0.08
         for i, v in enumerate(xmax):
