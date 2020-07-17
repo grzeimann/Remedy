@@ -120,10 +120,13 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
     error = np.nanmedian(error_all, axis=0)
     weight = np.nanmedian(weight_all, axis=0)
     image = convolve(image, G, preserve_nan=False, boundary='extend')
+    args.log.info('T4')
     image[np.isnan(weight)] = np.nan
     error[np.isnan(weight)] = np.nan
     image[np.isnan(image)] = 0.0
     error[np.isnan(error)] = 0.0
+    args.log.info('T5')
+
     return image, error, weight
 
 def make_image(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
