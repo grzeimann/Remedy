@@ -80,8 +80,6 @@ parser.add_argument("-ff", "--filter_file",
                     help='''Filter filename''',
                     default=None, type=str)
 def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
-    imagetemp = np.ones((len(cnt_array),) + xgrid.shape)*np.nan
-    errortemp = np.ones((len(cnt_array),) + xgrid.shape)*np.nan
     G = Gaussian2DKernel(sigma)
     xc = np.interp(Pos[:, 0], xg, np.arange(len(xg)), left=0., right=len(xg))
     yc = np.interp(Pos[:, 1], yg, np.arange(len(yg)), left=0., right=len(yg))
@@ -93,47 +91,6 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
     image[yc[gsel], xc[gsel]] = y[gsel] / (np.pi * 0.75**2)
     error[yc[gsel], xc[gsel]] = ye[gsel] / (np.pi * 0.75**2)
     image = convolve(image, G, preserve_nan=False, boundary='extend')
-    image[np.isnan(image)] = 0.0
-    error[np.isnan(error)] = 0.0
-    return image, error, np.ones(image.shape)
-    for j in np.arange(len(cnt_array)):
-        l1 = cnt_array[j, 0]
-        l2 = cnt_array[j, 1]
-        for k in np.arange(int((l2-l1)/(448*3))):
-            i1 = int(l1 + k * 448 * 3)
-            i2 = int(l1 + (k+1) * 448 * 3)
-            yi = y[i1:i2]
-            yie = ye[i1:i2]
-            p = Pos[i1:i2]
-            gsel = np.isfinite(yi) * (yi != 0.)
-            xl = np.searchsorted(xg, p[:, 0].min())
-            xh = np.searchsorted(xg, p[:, 0].max())
-            yl = np.searchsorted(yg, p[:, 1].min())
-            yh = np.searchsorted(yg, p[:, 1].max())
-            xc = np.interp(p[:, 0], xg, np.arange(len(xg)), left=0., right=len(xg))
-            yc = np.interp(p[:, 1], yg, np.arange(len(yg)), left=0., right=len(yg))
-            xc = np.array(np.round(xc), dtype=int)
-            yc = np.array(np.round(yc), dtype=int)
-            xl = int(np.max([0., xl]))
-            yl = int(np.max([0., yl]))
-            xh = int(np.min([len(xg), xh]))
-            yh = int(np.min([len(xg), yh]))
-            gsel = (xc>0) * (xc<len(xg)) * (yc>0) * (yc<len(yg))
-            imagetemp[j, yc[gsel], xc[gsel]] = yi[gsel]
-            errortemp[j, yc[gsel], xc[gsel]] = yie[gsel]
-
-#            if (gsel.sum()>100) and (xl<xh) and (yl<yh):
-#                imagetemp[j, yl:yh,xl:xh] = griddata(p[gsel], yi[gsel], (xgrid[yl:yh,xl:xh], 
-#                                               ygrid[yl:yh,xl:xh]),
-#                                               method='linear', fill_value=np.nan)
-#                errortemp[j, yl:yh,xl:xh] = griddata(p[gsel], yie[gsel], (xgrid[yl:yh,xl:xh], 
-#                                               ygrid[yl:yh,xl:xh]),
-#                                               method='linear', fill_value=0.0)
-            imagetemp[j, yl:yh,xl:xh] = convolve(imagetemp[j, yl:yh,xl:xh], G,
-                                                 preserve_nan=False, 
-                                                 boundary='extend')
-    image = np.nanmedian(imagetemp, axis=0) / (np.pi * 0.75**2)
-    error = np.nanmedian(errortemp, axis=0) / (np.pi * 0.75**2)
     image[np.isnan(image)] = 0.0
     error[np.isnan(error)] = 0.0
     return image, error, np.ones(image.shape)
@@ -309,16 +266,26 @@ for jk, h5file in enumerate(h5files):
     if args.filter_file is not None:
         wsel = response>0.0
         mask = np.isfinite(spectra[:, wsel]) * (spectra[:, wsel] != 0.0)
+        Pos = np.zeros((cnt1-cnt, 2))
+        x, y = tp.wcs_world2pix(np.nanmean(raarray[cnt:cnt1, wsel], axis=1),
+                                np.nanmean(decarray[cnt:cnt1, wsel], axis=1), 1)
+        Pos[:, 0], Pos[:, 1] = (x, y)
+        xc = np.interp(Pos[:, 0], xg, np.arange(len(xg)), left=0., right=len(xg))
+        yc = np.interp(Pos[:, 1], yg, np.arange(len(yg)), left=0., right=len(yg))
+        xc = np.array(np.round(xc), dtype=int)
+        yc = np.array(np.round(yc), dtype=int)
+        gsel = (xc>0) * (xc<len(xg)) * (yc>0) * (yc<len(yg))
+        skyvalues = binimage[yc[gsel], xc[gsel]] < 0.01
+        backspectra = biweight(spectra[gsel][skyvalues], axis=0)
+        args.log.info('Average backspectrum value: %0.3f' % np.nanmedian(backspectra))
+        spectra[:] -= backspectra[np.newaxis, :]
         collapse_image = (np.nansum(spectra[:, wsel] * response[np.newaxis, wsel], axis=1) /
                           np.nansum(mask * response[np.newaxis, wsel], axis=1))
         collapse_eimage = np.sqrt((np.nansum(error[:, wsel]**2 * response[np.newaxis, wsel], axis=1) /
                                    np.nansum(mask * response[np.newaxis, wsel], axis=1)))
 
 
-        Pos = np.zeros((cnt1-cnt, 2))
-        x, y = tp.wcs_world2pix(np.nanmean(raarray[cnt:cnt1, wsel], axis=1),
-                                np.nanmean(decarray[cnt:cnt1, wsel], axis=1), 1)
-        Pos[:, 0], Pos[:, 1] = (x+0.0, y+0.0)
+        
         cn = np.ones((1, 2))
         cn[0, 0] = 0
         cn[0, 1] = len(collapse_image)
@@ -326,7 +293,6 @@ for jk, h5file in enumerate(h5files):
                                                       xg, yg, xgrid, ygrid, 1.8 / 2.35,
                                                       cn)
         
-        image = np.where(weight > 0.2, image / weight, 0.0)
         image[image==0.] = np.nan
         G = Gaussian2DKernel(2.5)
         cimage = convolve(image, G, preserve_nan=True, boundary='extend')
