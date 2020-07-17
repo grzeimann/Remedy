@@ -2314,7 +2314,7 @@ throughput = np.array(T['throughput'])
 # =============================================================================
 # Collect indices for ifuslots (target and neighbors)
 # =============================================================================
-sel1 = list(np.where(args.ifuslot == ifuslots)[0])
+
 ## Get rid of neighbor idea and load the 3 zip code
 #ifuslotn = get_slot_neighbors(args.ifuslot, u_ifuslots,
 #                              dist=args.neighbor_dist)
@@ -2322,12 +2322,13 @@ sel1 = list(np.where(args.ifuslot == ifuslots)[0])
 ZIPs = get_ifuslots()
 print(ZIPs, zips)
 allzips = []
-selzips = []
+sel1 = []
 for z in uzips:
     if z not in ZIPs:
         continue
     sel1.append(np.where(z == zips)[0])
     allzips.append(z)
+print(allzips)
 ziploop = np.array(np.hstack(sel1), dtype=int)
 nslots = len(ziploop) / 4
 allifus = ifuslots[ziploop]
