@@ -87,7 +87,7 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
     yc = np.interp(Pos[:, 1], yg, np.arange(len(yg)), left=0., right=len(yg))
     xc = np.array(np.round(xc), dtype=int)
     yc = np.array(np.round(yc), dtype=int)
-    image, error = (xgrid*0., xgrid*0.)
+    image, error = (xgrid*np.nan, xgrid*np.nan)
     gsel = (xc>0) * (xc<len(xg)) * (yc>0) * (yc<len(yg))
 
     image[xc[gsel], yc[gsel]] = y[gsel] / (np.pi * 0.75**2)
@@ -323,7 +323,7 @@ for jk, h5file in enumerate(h5files):
         cn[0, 0] = 0
         cn[0, 1] = len(collapse_image)
         image, errorimage, weight = make_image_interp(Pos, collapse_image, collapse_eimage,
-                                                      xg, yg, xgrid, ygrid, 2.5 / 2.35,
+                                                      xg, yg, xgrid, ygrid, 1.8 / 2.35,
                                                       cn)
         
         image = np.where(weight > 0.2, image / weight, 0.0)
