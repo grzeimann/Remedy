@@ -91,6 +91,7 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
     # Loop through shots, average images before convolution
     # Make a +/- 1 pixel mask for places to keep
     G = Gaussian2DKernel(sigma)
+    args.log.info('T1')
     image_all = np.zeros((len(cnt_array),) + xgrid.shape)
     error_all = np.zeros((len(cnt_array),) + xgrid.shape)
     weight_all = np.zeros((len(cnt_array),) + xgrid.shape)
@@ -99,7 +100,7 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
     xc = np.array(np.round(xc), dtype=int)
     yc = np.array(np.round(yc), dtype=int)
     gsel = np.where((xc>1) * (xc<len(xg)-1) * (yc>1) * (yc<len(yg)-1))[0]
-
+    args.log.info('T2')
     for k, cnt in enumerate(cnt_array):
         l1 = int(cnt[0])
         l2 = int(cnt[1])
@@ -109,11 +110,12 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
         error[yc[gi], xc[gi]] = ye[gi] / (np.pi * 0.75**2)
         image_all[k] = image
         error_all[k] = error
-        bsel = np.isfinite(y[gi])
+        bsel = np.where(np.isfinite(y[gi]))[0]
         for i in np.arange(-1, 2):
             for j in np.arange(-1, 2):
                 weight[yc[gi][bsel]+i, xc[gi][bsel]+j] = 1.
         weight_all[k] = weight
+    args.log.info('T3')
     image = np.nanmedian(image_all, axis=0)
     error = np.nanmedian(error_all, axis=0)
     weight = np.nanmedian(weight_all, axis=0)
