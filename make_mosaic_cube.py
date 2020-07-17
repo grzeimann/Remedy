@@ -349,7 +349,8 @@ for jk, h5file in enumerate(h5files):
         h['CRPIX1'] = np.interp(0., xg, np.arange(len(xg)))+1.0
         h['CRPIX2'] = np.interp(0., xg, np.arange(len(xg)))+1.0
         fits.PrimaryHDU(np.array(image/norm, dtype='float32'), header=h).writeto(name, overwrite=True)
-
+    if norm_array[jk] < 0.
+        norm_array[jk] = np.nan
     specarray[cnt:cnt1, :] = spectra / norm_array[jk]
     errarray[cnt:cnt1, :] = error / norm_array[jk]
     cnt = cnt + len(ra)
