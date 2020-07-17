@@ -88,8 +88,10 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
     xc = np.array(np.round(xc), dtype=int)
     yc = np.array(np.round(yc), dtype=int)
     image, error = (xgrid*0., xgrid*0.)
-    image[xc, yc] = y / (np.pi * 0.75**2)
-    error[xc, yc] = ye / (np.pi * 0.75**2)
+    gsel = (xc>0) * (xc<len(xg)) * (yc>0) * (yc<len(yg))
+
+    image[xc[gsel], yc[gsel]] = y[gsel] / (np.pi * 0.75**2)
+    error[xc[gsel], yc[gsel]] = ye[gsel] / (np.pi * 0.75**2)
     image = convolve(image, G, preserve_nan=False, boundary='extend')
     image[np.isnan(image)] = 0.0
     error[np.isnan(error)] = 0.0
