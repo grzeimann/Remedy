@@ -2325,14 +2325,12 @@ sel1 = []
 for z in uzips:
     if z not in ZIPs:
         continue
-    print(np.where(z == zips)[0])
     sel1.append(np.where(z == zips)[0])
     allzips.append(z)
 
-ziploop = np.array(np.hstack(sel1), dtype=int)
-print(ziploop)
+ziploop = np.sort(np.array(np.hstack(sel1), dtype=int))
 nslots = len(ziploop) / 4
-allifus = ifuslots[ziploop]
+allifus = ifuslots[ziploop[::4]]
 
 
 # =============================================================================
