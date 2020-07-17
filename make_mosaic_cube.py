@@ -83,6 +83,17 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
     imagetemp = np.ones((len(cnt_array),) + xgrid.shape)*np.nan
     errortemp = np.ones((len(cnt_array),) + xgrid.shape)*np.nan
     G = Gaussian2DKernel(sigma)
+    xc = np.interp(Pos[:, 0], xg, np.arange(len(xg)), left=0., right=len(xg))
+    yc = np.interp(Pos[:, 1], yg, np.arange(len(yg)), left=0., right=len(yg))
+    xc = np.array(np.round(xc), dtype=int)
+    yc = np.array(np.round(yc), dtype=int)
+    image, error = (xgrid*0., xgrid*0.)
+    image[xc, yc] = y / (np.pi * 0.75**2)
+    error[xc, yc] = ye / (np.pi * 0.75**2)
+    image = convolve(image, G, preserve_nan=False, boundary='extend')
+    image[np.isnan(image)] = 0.0
+    error[np.isnan(error)] = 0.0
+    return image, error, np.ones(image.shape)
     for j in np.arange(len(cnt_array)):
         l1 = cnt_array[j, 0]
         l2 = cnt_array[j, 1]
