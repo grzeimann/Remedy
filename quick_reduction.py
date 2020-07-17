@@ -2320,7 +2320,6 @@ throughput = np.array(T['throughput'])
 #                              dist=args.neighbor_dist)
 #ifuslotn = np.setdiff1d(ifuslotn, badifuslots)
 ZIPs = get_ifuslots()
-print(ZIPs, zips)
 allzips = []
 sel1 = []
 for z in uzips:
@@ -2328,8 +2327,8 @@ for z in uzips:
         continue
     sel1.append(np.where(z == zips)[0])
     allzips.append(z)
-print(allzips)
 ziploop = np.array(np.hstack(sel1), dtype=int)
+print(ziploop)
 nslots = len(ziploop) / 4
 allifus = ifuslots[ziploop]
 
