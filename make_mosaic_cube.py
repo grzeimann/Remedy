@@ -323,7 +323,7 @@ for jk, h5file in enumerate(h5files):
         cn[0, 0] = 0
         cn[0, 1] = len(collapse_image)
         image, errorimage, weight = make_image_interp(Pos, collapse_image, collapse_eimage,
-                                                      xg, yg, xgrid, ygrid, 1.8 / 2.35,
+                                                      xg, yg, xgrid, ygrid, 2.5 / 2.35,
                                                       cn)
         
         image = np.where(weight > 0.2, image / weight, 0.0)
