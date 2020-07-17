@@ -2325,7 +2325,7 @@ selzips = []
 for z in uzips:
     if z not in ZIPs:
         continue
-    sel1.append(np.where(z == zips))[0]
+    sel1.append(np.where(z == zips)[0])
     allzips.append(z)
 ziploop = np.array(np.hstack(sel1), dtype=int)
 nslots = len(ziploop) / 4
