@@ -111,7 +111,7 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
         error[yc[gsel], xc[gsel]] = yei[gsel] / (np.pi * 0.75**2)
         image_all[k] = image
         error_all[k] = error
-        bsel = np.isfinite(y[gsel])
+        bsel = np.isfinite(yi[gsel])
         for i in np.arange(-1, 2):
             for j in np.arange(-1, 2):
                 weight[yc[gsel][bsel]+i, xc[gsel][bsel]+j] = 1.
