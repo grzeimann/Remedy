@@ -96,8 +96,8 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
     weight_all = np.zeros((len(cnt_array),) + xgrid.shape)
 
     for k, cnt in enumerate(cnt_array):
-        l1 = cnt[0]
-        l2 = cnt[1]
+        l1 = int(cnt[0])
+        l2 = int(cnt[1])
         P = Pos[l1:l2]
         yi = y[l1:l2]
         yei = ye[l1:l2]
