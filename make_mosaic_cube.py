@@ -94,10 +94,7 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
     args.log.info('T1')
     image_all = np.ma.zeros((len(cnt_array),) + xgrid.shape)
     image_all.mask=True
-    error_all = np.ma.zeros((len(cnt_array),) + xgrid.shape)
-    error_all.mask=True
-    weight_all = np.ma.zeros((len(cnt_array),) + xgrid.shape)
-    weight_all.mask=True
+    weight = np.nan * xgrid
 
     xc = np.interp(Pos[:, 0], xg, np.arange(len(xg)), left=0., right=len(xg))
     yc = np.interp(Pos[:, 1], yg, np.arange(len(yg)), left=0., right=len(yg))
@@ -109,34 +106,23 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
         l1 = int(cnt[0])
         l2 = int(cnt[1])
         gi = gsel[(gsel>=l1) * (gsel<=l2)]
-        #image, error, weight = (xgrid*np.nan, xgrid*np.nan, xgrid*np.nan)
-        #image[yc[gi], xc[gi]] = y[gi] / (np.pi * 0.75**2)
-        #error[yc[gi], xc[gi]] = ye[gi] / (np.pi * 0.75**2)
         image_all.data[k, yc[gi], xc[gi]] = y[gi] / (np.pi * 0.75**2)
         image_all.mask[k, yc[gi], xc[gi]] = False
-        error_all.data[k, yc[gi], xc[gi]] = ye[gi] / (np.pi * 0.75**2)
-        error_all.mask[k, yc[gi], xc[gi]] = False
         bsel = np.where(np.isfinite(y[gi]))[0]
         for i in np.arange(-1, 2):
             for j in np.arange(-1, 2):
-                weight_all.data[k, yc[gi][bsel]+i, xc[gi][bsel]+j] = 1.
-                weight_all.mask[k, yc[gi][bsel]+i, xc[gi][bsel]+j] = False
+                weight[yc[gi][bsel]+i, xc[gi][bsel]+j] = 1.
     args.log.info('T3')
     image = np.ma.median(image_all, axis=0)
-    error = np.ma.median(error_all, axis=0)
-    error = error.data
-    weight = np.ma.median(weight_all, axis=0)
     y = image.data * 1.
     y[image.mask] = np.nan
     image = convolve(y, G, preserve_nan=False, boundary='extend')
     args.log.info('T4')
-    image[weight.mask] = np.nan
-    error[weight.mask] = np.nan
+    image[np.isnan(weight)] = np.nan
     image[np.isnan(image)] = 0.0
-    error[np.isnan(error)] = 0.0
     args.log.info('T5')
 
-    return image, error, weight
+    return image, 0. * image, weight
 
 def make_image(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
     image = xgrid * 0.
