@@ -91,7 +91,6 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
     # Loop through shots, average images before convolution
     # Make a +/- 1 pixel mask for places to keep
     G = Gaussian2DKernel(sigma)
-    args.log.info('T1')
     image_all = np.ma.zeros((len(cnt_array),) + xgrid.shape)
     image_all.mask=True
     weight = np.nan * xgrid
@@ -101,7 +100,6 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
     xc = np.array(np.round(xc), dtype=int)
     yc = np.array(np.round(yc), dtype=int)
     gsel = np.where((xc>1) * (xc<len(xg)-1) * (yc>1) * (yc<len(yg)-1))[0]
-    args.log.info('T2')
     for k, cnt in enumerate(cnt_array):
         l1 = int(cnt[0])
         l2 = int(cnt[1])
@@ -112,15 +110,12 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
         for i in np.arange(-1, 2):
             for j in np.arange(-1, 2):
                 weight[yc[gi][bsel]+i, xc[gi][bsel]+j] = 1.
-    args.log.info('T3')
     image = np.ma.median(image_all, axis=0)
     y = image.data * 1.
     y[image.mask] = np.nan
     image = convolve(y, G, preserve_nan=False, boundary='extend')
-    args.log.info('T4')
     image[np.isnan(weight)] = np.nan
     image[np.isnan(image)] = 0.0
-    args.log.info('T5')
 
     return image, 0. * image, weight
 
@@ -350,13 +345,8 @@ for jk, h5file in enumerate(h5files):
         if norm_array[jk] < 0.:
             norm_array[jk] = np.nan
         args.log.info('Normalization/STD for %s: %0.2f, %0.2f' % (h5file, norm, std/norm))
-        diff_image = (cimage-v)/norm_array[jk] - nimage
-        limage = (cimage-v)/norm_array[jk]
-        bl, bottom_var = biweight(limage[(binimage<0.01) * np.isfinite(cimage)], calc_std=True)
-
-        threshold = np.sqrt((nimage * 0.25)**2 + (3.*bottom_var)**2)
-        flagged = np.abs(diff_image[yc[gsel], xc[gsel]]) > threshold[yc[gsel], xc[gsel]]
-        #spectra[np.where(gsel)[0][flagged]] = np.nan
+        flagged = image[yc[gsel], xc[gsel]]/norm_array[jk] < -0.03
+        spectra[np.where(gsel)[0][flagged]] = np.nan
         args.log.info('%i fibers flagged for too large of a difference' % flagged.sum())
         plt.figure(figsize=(10, 8))
         plt.scatter(nimage[sel], y[sel] / norm, s=5, alpha=0.05)
