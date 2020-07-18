@@ -130,8 +130,8 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
     y[image.mask] = np.nan
     image = convolve(y, G, preserve_nan=False, boundary='extend')
     args.log.info('T4')
-    image[weight.masked] = np.nan
-    error[weight.masked] = np.nan
+    image[weight.mask] = np.nan
+    error[weight.mask] = np.nan
     image[np.isnan(image)] = 0.0
     error[np.isnan(error)] = 0.0
     args.log.info('T5')
