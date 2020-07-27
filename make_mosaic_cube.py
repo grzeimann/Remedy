@@ -9,6 +9,7 @@ import matplotlib
 matplotlib.use('agg')
 import argparse as ap
 from astropy.convolution import convolve, Gaussian2DKernel
+from astropy.convolution import Gaussian1DKernel, interpolate_replace_nans
 from astropy.io import fits
 from astropy.wcs import WCS
 from astropy.table import Table
@@ -90,9 +91,10 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
                       binsize=2):
     # Loop through shots, average images before convolution
     # Make a +/- 1 pixel mask for places to keep
+    # Mask still needs work, need to grab bad pixels and block them out
     G = Gaussian2DKernel(sigma)
     image_all = np.ma.zeros((len(cnt_array),) + xgrid.shape)
-    image_all.mask=True
+    image_all.mask = True
     weight = np.nan * xgrid
 
     xc = np.interp(Pos[:, 0], xg, np.arange(len(xg)), left=0., right=len(xg))
@@ -110,6 +112,11 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
         for i in np.arange(-1, 2):
             for j in np.arange(-1, 2):
                 weight[yc[gi][bsel]+i, xc[gi][bsel]+j] = 1.
+        bsel = np.where(np.isnan(y[gi]))[0]
+        for i in np.arange(-1, 2):
+            for j in np.arange(-1, 2):
+                weight[yc[gi][bsel]+i, xc[gi][bsel]+j] = np.nan
+    image = np.ma.median(image_all, axis=0)
     image = np.ma.median(image_all, axis=0)
     y = image.data * 1.
     y[image.mask] = np.nan
@@ -283,6 +290,11 @@ for jk, h5file in enumerate(h5files):
     E.get_ADR_RAdec(Aother)
     raarray[cnt:cnt1, :] = ra[:, np.newaxis] - E.ADRra[np.newaxis, :] / 3600. / np.cos(np.deg2rad(A.dec0))
     decarray[cnt:cnt1, :] = dec[:, np.newaxis] - E.ADRdec[np.newaxis, :] / 3600.
+    Gk = Gaussian1DKernel(1.8)
+    for k in np.arange(len(spectra)):
+        if (np.isfinite(spectra[k])).sum() > 800:
+            spectra[k] = interpolate_replace_nans(spectra[k], Gk,
+                                                  **{'boundary': 'extend'})
     if args.filter_file is not None:
         wsel = response>0.0
         mask = np.isfinite(spectra[:, wsel]) * (spectra[:, wsel] != 0.0)
