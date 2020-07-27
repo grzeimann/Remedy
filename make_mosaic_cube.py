@@ -117,7 +117,6 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
             for j in np.arange(-1, 2):
                 weight[yc[gi][bsel]+i, xc[gi][bsel]+j] = np.nan
     image = np.ma.median(image_all, axis=0)
-    image = np.ma.median(image_all, axis=0)
     y = image.data * 1.
     y[image.mask] = np.nan
     image = convolve(y, G, preserve_nan=False, boundary='extend')
