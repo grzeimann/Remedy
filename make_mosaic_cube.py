@@ -95,7 +95,6 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
     G = Gaussian2DKernel(sigma)
     image_all = np.ma.zeros((len(cnt_array),) + xgrid.shape)
     image_all.mask = True
-    weight = 0.0 * xgrid
     weightk = 0.0 * xgrid
     xc = np.interp(Pos[:, 0], xg, np.arange(len(xg)), left=0., right=len(xg))
     yc = np.interp(Pos[:, 1], yg, np.arange(len(yg)), left=0., right=len(yg))
@@ -103,6 +102,7 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
     yc = np.array(np.round(yc), dtype=int)
     gsel = np.where((xc>1) * (xc<len(xg)-1) * (yc>1) * (yc<len(yg)-1))[0]
     for k, cnt in enumerate(cnt_array):
+        weight = 0.0 * xgrid
         l1 = int(cnt[0])
         l2 = int(cnt[1])
         gi = gsel[(gsel>=l1) * (gsel<=l2)]
@@ -121,7 +121,7 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
     y = image.data * 1.
     y[image.mask] = np.nan
     image = convolve(y, G, preserve_nan=False, boundary='extend')
-    image[weight == 0.] = np.nan
+    image[weightk == 0.] = np.nan
     image[np.isnan(image)] = 0.0
 
     return image, 0. * image, weight
