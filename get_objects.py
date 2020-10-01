@@ -38,6 +38,7 @@ for tarfolder in tarfolders:
             name = a.name
         except:
             flag = False
+            continue
         if 'gc' in inst:
             if name[-5:] == '.fits':
                 b = fits.open(T.extractfile(a))
