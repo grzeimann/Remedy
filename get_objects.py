@@ -82,7 +82,13 @@ for tarfolder in tarfolders:
                     prog = b[0].header['QPROG']
                 except:
                     prog = 'None'
-                print('%s: %s  %s  %s %0.1f' % (tarfolder, name[-8:-5], 
-                                                Target, prog, exptime))
+                try:
+                    ra = b[0].header['QRA']
+                    dec = b[0].header['QDEC']
+                except:
+                    ra = 0.0
+                    dec = 0.0
+                print('%s: %s  %s  %s %0.1f %0.5f %0.5f' % (tarfolder, name[-8:-5], 
+                                                Target, prog, exptime, ra, dec))
                 flag = False
     T.close()
