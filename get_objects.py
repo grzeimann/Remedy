@@ -33,8 +33,8 @@ for tarfolder in tarfolders:
     T = tarfile.open(tarfolder, 'r')
     flag = True
     while flag:
-        a = T.next()
         try:
+            a = T.next()
             name = a.name
         except:
             flag = False
