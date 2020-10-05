@@ -20,16 +20,19 @@ inst = 'virus'
 
 date = sys.argv[1]
 
+cal = sys.argv[2]
+
 ncalls = int(sys.argv[2])
 
 tarfolders = sorted(glob.glob(op.join(rootdir, date, inst,
                                       '%s0000*.tar' % inst)))
 
 call = ('python3 /work/03730/gregz/maverick/Remedy/quick_reduction.py %s %i '
-        '47 /work/03730/gregz/maverick/output/new_cal.h5 -nd 8 -fp '
+        '47 %s -nd 8 -fp '
         '/work/03730/gregz/maverick/fplaneall.txt')
 tarlist = []
-for tarfolder in tarfolders:
+dates = [op.basename(op.dirname(op.dirname(tarf))) for tarf in tarfolders]
+for date, tarfolder in zip(dates, tarfolders):
     T = tarfile.open(tarfolder, 'r')
     flag = True
     while flag:
@@ -51,10 +54,11 @@ for tarfolder in tarfolders:
                 prog = 'None'
             obs = int(op.basename(tarfolder)[-11:-4])
             if name[-8:-5] == 'sci':
-                tarlist.append([obs, name[-8:-5], Target, prog, exptime])
+                if Target == 'parallel':
+                    tarlist.append([obs, name[-8:-5], Target, prog, exptime, date])
             flag = False
-with open('%s_calls' % date, 'w') as out_file:       
+with open('%s_calls' % ch[0], 'w') as out_file:       
     for chunk in np.array_split(tarlist, ncalls):
-        calls = [call % (date, int(ch[0])) for ch in chunk]
+        calls = [call % (ch[-1], cal, int(ch[0])) for ch in chunk]
         call_str = '; '.join(calls)
         out_file.write(call_str + '\n')
