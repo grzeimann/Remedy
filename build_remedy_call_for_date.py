@@ -59,6 +59,6 @@ for date, tarfolder in zip(dates, tarfolders):
             flag = False
 with open('%s_calls' % tarlist[0][-1], 'w') as out_file:       
     for chunk in np.array_split(tarlist, ncalls):
-        calls = [call % (ch[-1], cal, int(ch[0])) for ch in chunk]
+        calls = [call % (ch[-1], int(ch[0]), cal) for ch in chunk]
         call_str = '; '.join(calls)
         out_file.write(call_str + '\n')
