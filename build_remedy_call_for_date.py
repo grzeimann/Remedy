@@ -57,7 +57,7 @@ for date, tarfolder in zip(dates, tarfolders):
                 if Target == 'parallel':
                     tarlist.append([obs, name[-8:-5], Target, prog, exptime, date])
             flag = False
-with open('%s_calls' % ch[0], 'w') as out_file:       
+with open('%s_calls' % tarlist[0][-1], 'w') as out_file:       
     for chunk in np.array_split(tarlist, ncalls):
         calls = [call % (ch[-1], cal, int(ch[0])) for ch in chunk]
         call_str = '; '.join(calls)
