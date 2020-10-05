@@ -29,7 +29,7 @@ tarfolders = sorted(glob.glob(op.join(rootdir, date, inst,
 
 call = ('python3 /work/03730/gregz/maverick/Remedy/quick_reduction.py %s %i '
         '47 %s -nd 8 -fp '
-        '/work/03730/gregz/maverick/fplaneall.txt')
+        '/work/03730/gregz/maverick/fplaneall.txt -nD')
 tarlist = []
 dates = [op.basename(op.dirname(op.dirname(tarf))) for tarf in tarfolders]
 for date, tarfolder in zip(dates, tarfolders):
