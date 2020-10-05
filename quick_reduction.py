@@ -141,6 +141,10 @@ parser.add_argument("-qs", "--quick_sky",
                     help='''Quick Sky''',
                     action="count", default=0)
 
+parser.add_argument("-mc", "--make_cube",
+                    help='''Make Cube''',
+                    action="count", default=0)
+
 parser.add_argument("-sx", "--source_x",
                     help='''x-position for spectrum to add in cube''',
                     type=float, default=0.0)
@@ -1935,6 +1939,7 @@ def plot_astrometry(f, A, sel, colors):
     plt.gca().xaxis.set_minor_locator(ml)
     plt.gca().yaxis.set_minor_locator(mly)
     plt.savefig('astrometry_%s_%07d.png'  % (args.date, args.observation), dpi=300)
+    return medianr, mediand, stdr, stdd, len(dr)
 
 def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
                     fwhm_virus=None):
@@ -1998,7 +2003,7 @@ def plot_photometry(GMag, stats, vmin=1., vmax=4., fwhm_guider=1.8,
     plt.xlabel("Pan-STARRS g' (AB mag)", fontsize=16, labelpad=10)
     plt.ylabel("Pan-STARRS g' - VIRUS g' + Cor", fontsize=16, labelpad=10)
     plt.savefig('mag_offset_%s_%07d.png'  % (args.date, args.observation), dpi=300)
-    return sel, GMag[:, 0] - GMag[:, 1] - median, 10**(-0.4*median), fwhm_virus
+    return sel, GMag[:, 0] - GMag[:, 1] - median, 10**(-0.4*median), fwhm_virus, isel.sum()
 
 def get_sky_fibers(norm_array, pos=None):
     if pos is not None:
@@ -2222,7 +2227,14 @@ class Survey(IsDescription):
      name  = StringCol(25)
      exp = Int32Col()
      offset  = Float32Col()    # float  (single-precision)
-
+     nstarsastrom = Int32Col()
+     nstarsphotom = Int32Col()
+     raoffset = Float32Col()
+     decoffset = Float32Col()
+     rastd = Float32Col()
+     decstd = Float32Col()
+     exptime = Float32Col()
+     
 class Detections(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
      dec  = Float32Col()    # float  (single-precision)
@@ -2248,7 +2260,7 @@ class CatSpectra(IsDescription):
      spectrum  = Float32Col((1036,))    # float  (single-precision)
      error  = Float32Col((1036,))    # float  (single-precision)
      weight  = Float32Col((1036,))    # float  (single-precision)
-
+     gmag  = Float32Col()    # float  (single-precision)
 
 class MatSpectra(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
@@ -2546,8 +2558,11 @@ gratio = np.ones((nexp,))
 gseeing = np.ones((nexp,))
 millum = np.ones((nexp,))
 transpar = np.ones((nexp,))
+EXPN = np.zeros((nexp,))
 for i in np.arange(1, nexp+1):
-    mill, trans, iq = get_mirror_illumination_guider(fns[i-1], ExP[i-1])
+    ind = int((i-1)*112)
+    mill, trans, iq = get_mirror_illumination_guider(fns[i-1], ExP[ind])
+    EXPN[i-1] = ExP[ind]
     log.info('Mirror Illumination, Transparency, and seeing for exposure %i'
              ': %0.2f, %0.2f, %0.2f' % (i, mill/1e4, trans, iq))
     gratio[i-1] = (mill * trans) /  5e5
@@ -2653,6 +2668,7 @@ E.get_ADR_RAdec(A)
 # New extraction method using all ra, dec, culled to Rad within one ifu at least
 R = []
 D = []
+GMM = []
 pancat = SkyCoord(raC*units.deg, decC*units.deg, frame='fk5')
 for i in info:
     image, fn, name, ui, tfile, sources = i
@@ -2663,8 +2679,10 @@ for i in info:
     sel = sep.arcsec < 35.
     R.append(raC[sel])
     D.append(decC[sel])
+    GMM.append(gC[sel])
 R = np.hstack(R)
 D = np.hstack(D)
+GMM = np.hstack(GMM)
 log.info('Extracting %i Bright Sources for PSF' % objsel.sum())
 
 mRA, mDec = (f['RA'][objsel], f['Dec'][objsel])
@@ -2703,7 +2721,7 @@ for i in np.arange(len(E.coords)):
         continue
     gmask = np.isfinite(specinfo[0]) * (specinfo[2] > (0.1)) 
     if gmask.sum() > 50.:
-        allspec_list.append([R[i], D[i]] + list(specinfo))
+        allspec_list.append([R[i], D[i], GMM[i]] + list(specinfo))
 X, Y, Z = [np.zeros((len(spec_list), 11)) for k in np.arange(3)]
 nwave = np.array([np.mean(xi) for xi in np.array_split(def_wave, 11)])
 seeing_array = np.linspace(np.median(gseeing)-0.8, np.median(gseeing)+0.8, 161)
@@ -2747,11 +2765,11 @@ E.ADRra = E.ADRra + np.interp(def_wave, nwave,
 E.ADRdec = E.ADRdec + np.interp(def_wave, nwave,
                                 np.median(Y, axis=0)-np.median(Y))
 
-othersel, colors, offset, fwhm_virus = plot_photometry(GMag, stats, vmin=seeing_array.min(),
+othersel, colors, offset, fwhm_virus, Nphotom = plot_photometry(GMag, stats, vmin=seeing_array.min(),
                                    vmax=seeing_array.max(),
                                    fwhm_guider=np.median(gseeing))
 
-plot_astrometry(f, A, np.where(objsel)[0], colors)
+raoffc, decoffc, raoffs, decoffs, Nastrom = plot_astrometry(f, A, np.where(objsel)[0], colors)
 
 norm = 1e-29 * 2.99792e18 / def_wave**2 * 1e17
 if np.isfinite(offset):
@@ -2824,10 +2842,11 @@ specrow = table.row
 for specinfo in allspec_list:
     specrow['ra'] = specinfo[0]
     specrow['dec'] = specinfo[1]
-    if len(specinfo[2]) > 0:
-        specrow['spectrum'] = specinfo[2] * norm
-        specrow['error'] = specinfo[3] * norm
-        specrow['weight'] = specinfo[4]
+    specrow['gmag'] = specinfo[2]
+    if len(specinfo[3]) > 0:
+        specrow['spectrum'] = specinfo[3] * norm
+        specrow['error'] = specinfo[4] * norm
+        specrow['weight'] = specinfo[5]
     specrow.append()
 table.flush()
 
@@ -2871,6 +2890,13 @@ for i in np.arange(nexp):
     specrow['name']  = he['OBJECT'].ljust(25)
     specrow['exp'] = i+1
     specrow['offset'] = offset
+    specrow['nstarsphotom'] = Nphotom
+    specrow['nstarsastrom'] = Nastrom
+    specrow['raoffset'] = raoffc
+    specrow['rastd'] = raoffs
+    specrow['decoffset'] = decoffc
+    specrow['decstd'] = decoffs
+    specrow['exptime'] = EXPN[i]
     specrow.append()
 table.flush()
 
@@ -2893,7 +2919,7 @@ for i in np.arange(len(E.ra)):
     specrow.append()
 table.flush()
 
-if nexp == 3:
+if not args.no_detect:
     table = h5spec.create_table(h5spec.root, 'Detections', Detections, 
                             "Detection Information")
     specrow = table.row
@@ -2979,30 +3005,26 @@ else:
 
 
 ## Making data cube
-log.info('Making Cube')
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore")
-    zgrid, egrid, xgrid, ygrid = make_cube(pos[:448*nexp, 0], pos[:448*nexp, 1],
-                                           scispectra[:448*nexp]*norm, 
-                                           errspectra[:448*nexp]*norm,
-                                           ADRx, 0. * def_wave, scale, ran)
-    crx = np.abs(ran[0]) / scale + 1.
-    cry = np.abs(ran[2]) / scale + 1.
-    A.get_ifuslot_projection('%03d' % args.ifuslot, scale, crx, cry)
-    
-    header = A.tp_ifuslot.to_header()
-    for key in header.keys():
-        if ('CCDSEC' in key) or ('DATASEC' in key):
-            continue
-        if ('BSCALE' in key) or ('BZERO' in key):
-            continue
-        he[key] = header[key]
-    he['VSEEING'] = fwhm_virus
-    he['GSEEING'] = np.median(gseeing)
-    write_cube(def_wave, xgrid, ygrid, zgrid, cubename, he)
-    write_cube(def_wave, xgrid, ygrid, egrid, ecubename, he)
-
-
-
-    
+if args.make_cube:
+    log.info('Making Cube')
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        zgrid, egrid, xgrid, ygrid = make_cube(pos[:448*nexp, 0], pos[:448*nexp, 1],
+                                               scispectra[:448*nexp]*norm, 
+                                               errspectra[:448*nexp]*norm,
+                                               ADRx, 0. * def_wave, scale, ran)
+        crx = np.abs(ran[0]) / scale + 1.
+        cry = np.abs(ran[2]) / scale + 1.
+        A.get_ifuslot_projection('%03d' % args.ifuslot, scale, crx, cry)
         
+        header = A.tp_ifuslot.to_header()
+        for key in header.keys():
+            if ('CCDSEC' in key) or ('DATASEC' in key):
+                continue
+            if ('BSCALE' in key) or ('BZERO' in key):
+                continue
+            he[key] = header[key]
+        he['VSEEING'] = fwhm_virus
+        he['GSEEING'] = np.median(gseeing)
+        write_cube(def_wave, xgrid, ygrid, zgrid, cubename, he)
+        write_cube(def_wave, xgrid, ygrid, egrid, ecubename, he)
