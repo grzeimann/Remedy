@@ -74,7 +74,7 @@ for niter in np.arange(2):
         DEC = np.zeros((totN,))
         GMAG = np.zeros((totN,))
         SN = np.zeros((totN,))
-        NAME = np.zeros((totN,), dtype='U<16')
+        NAME = np.zeros((totN,), dtype='|S16')
         SPEC = np.zeros((totN, 1036))
         ERROR = np.zeros((totN, 1036))
         WEIGHT = np.zeros((totN, 1036))
