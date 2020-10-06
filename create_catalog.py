@@ -86,7 +86,9 @@ for niter in np.arange(2):
         try:
             raoffset = h5file.root.Survey.cols.raoffset[0]
         except:
-            log.info('%s did not make cut' % name)
+            if niter == 0:
+                log.info('%s did not make cut' % name)
+            h5file.close()
             continue
         decoffset = h5file.root.Survey.cols.decoffset[0]
         rastd = h5file.root.Survey.cols.rastd[0]
