@@ -61,7 +61,7 @@ filtg = np.interp(def_wave, T['col1'], T['col2'], left=0.0, right=0.0)
 filtg /= filtg.sum()
 
 h5names = sorted(glob.glob(op.join(folder, '*.h5')))
-
+totN = 0
 for h5name in h5names:
     h5file = tables.open_file(h5name)
     name = op.basename(h5name).split('.h5')[0]
@@ -92,15 +92,16 @@ for h5name in h5names:
     sn = num / denom
     goodspec = (mask.sum(axis=1) > 0.8) * (sn > 1.)
     N = goodspec.sum()
-    log.info('%s has %i spectra for catalog' % (name, N))
     if N < 1:
         continue
+    totN += N
     virus_gmags = get_gmags(spectra[goodspec], weight[goodspec])
     normalization = 10**(-0.4 * (gmag[goodspec] - virus_gmags))
     norm_spectra = spectra[goodspec] * normalization[:, np.newaxis]
     osel = sn[goodspec] > 5.
     average_norm, std = biweight(normalization[osel], calc_std=True)
-    log.info('%s has and average normalization correction: %0.2f +/- %0.2f' %
-             (name, average_norm, std))
+    log.info('%s has %i and average normalization correction: %0.2f +/- %0.2f' %
+             (name, N, average_norm, std))
     h5file.close()
-    
+
+log.info('Total Number of sources is %i' % totN)
