@@ -39,7 +39,7 @@ def get_gmags(spec, weight):
     spectrum = spec * 1.
     spectrum = spectrum * 1e-17 * 1e29 * def_wave**2 / 2.99792e18
     gmask = (np.isfinite(spectrum) *
-             (weight > (0.7*np.nanmedian(weight, axis=1)[np.newaxis, :])))
+             (weight > (0.7*np.nanmedian(weight, axis=1)[:, np.newaxis])))
     nu = 2.99792e18 / def_wave
     dnu = np.diff(nu)
     dnu = np.hstack([dnu[0], dnu])
