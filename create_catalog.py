@@ -102,8 +102,8 @@ for h5name in h5names:
     norm_spectra = spectra[goodspec] * normalization[:, np.newaxis]
     osel = sn[goodspec] > 5.
     average_norm, std = biweight(normalization[osel], calc_std=True)
-    log.info('%s has %i and average normalization correction: %0.2f +/- %0.2f' %
-             (name, N, average_norm, std))
+    log.info('%s has %i/%i and average normalization correction: %0.2f +/- %0.2f' %
+             (name, osel.sum(), N, average_norm, std))
     h5file.close()
 
 log.info('Total Number of sources is %i for %i shots' % (totN, Nshots))
