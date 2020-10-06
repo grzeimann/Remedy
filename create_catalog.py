@@ -86,8 +86,11 @@ for h5name in h5names:
     gmag = h5file.root.CatSpectra.cols.gmag[:]
     ra = h5file.root.CatSpectra.cols.ra[:]
     dec = h5file.root.CatSpectra.cols.dec[:]
-    mask = weight < 0.15
-    goodspec = mask.sum(axis=1) > 0.8
+    mask = (weight > 0.15) * np.isfinite(spectra)
+    num = np.nansum(filtg[np.newaxis, :] * mask * (spectra / error), axis=1) 
+    denom = np.nansum(filtg[np.newaxis, :] * mask, axis=1)
+    sn = num / denom
+    goodspec = (mask.sum(axis=1) > 0.8) * (sn > 1.)
     N = goodspec.sum()
     log.info('%s has %i spectra for catalog' % (name, N))
     if N < 1:
