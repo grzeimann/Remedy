@@ -94,7 +94,7 @@ for h5name in h5names:
         continue
     virus_gmags = get_gmags(spectra[goodspec], weight[goodspec])
     normalization = 10**(-0.4 * (gmag[goodspec] - virus_gmags))
-    norm_spectra = spectra[goodspec] * normalization
+    norm_spectra = spectra[goodspec] * normalization[:, np.newaxis]
     average_norm = biweight(normalization)
     log.info('%s has and average normalization correction: %0.2f' %
              (name, average_norm))
