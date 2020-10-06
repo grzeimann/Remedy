@@ -7,7 +7,9 @@ Created on Tue Oct  6 09:22:00 2020
 """
 import glob
 import numpy as np
+import os
 import os.path as op
+import psutil
 import sys
 import tables
 
@@ -50,6 +52,8 @@ def get_gmags(spec, weight):
     gmag = -2.5 * np.log10(gmag) + 23.9
     return gmag
 
+outname = sys.argv[1]
+
 def_wave = np.linspace(3470, 5540, 1036)
 
 log = setup_logging('catalog')
@@ -63,47 +67,77 @@ filtg /= filtg.sum()
 h5names = sorted(glob.glob(op.join(folder, '*.h5')))
 totN = 0
 Nshots = 0
-for h5name in h5names:
-    h5file = tables.open_file(h5name)
-    name = op.basename(h5name).split('.h5')[0]
-    raoffset = h5file.root.Survey.cols.raoffset[0]
-    decoffset = h5file.root.Survey.cols.decoffset[0]
-    rastd = h5file.root.Survey.cols.rastd[0]
-    decstd = h5file.root.Survey.cols.decstd[0]
-    nstars = h5file.root.Survey.cols.nstarsastrom[0]
-    rule1 = np.abs(raoffset) < 0.25
-    rule2 = np.abs(decoffset) < 0.25
-    rule3 = np.abs(rastd) < 0.5
-    rule4 = np.abs(decstd) < 0.5
-    rule5 = nstars >= 5
-    good = rule1 * rule2 * rule3 * rule4 * rule5
-    if ~good:
-        log.info('%s did not make cut' % name)
+cnt = 0
+for niter in np.arange(2):
+    if niter == 1:
+        RA = np.zeros((totN,))
+        DEC = np.zeros((totN,))
+        GMAG = np.zeros((totN,))
+        SN = np.zeros((totN,))
+        NAME = np.zeros((totN,), dtype='U<16')
+        SPEC = np.zeros((totN, 1036))
+        ERROR = np.zeros((totN, 1036))
+        WEIGHT = np.zeros((totN, 1036))
+        process = psutil.Process(os.getpid())
+        log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
+    for h5name in h5names:
+        h5file = tables.open_file(h5name)
+        name = op.basename(h5name).split('.h5')[0]
+        raoffset = h5file.root.Survey.cols.raoffset[0]
+        decoffset = h5file.root.Survey.cols.decoffset[0]
+        rastd = h5file.root.Survey.cols.rastd[0]
+        decstd = h5file.root.Survey.cols.decstd[0]
+        nstars = h5file.root.Survey.cols.nstarsastrom[0]
+        rule1 = np.abs(raoffset) < 0.25
+        rule2 = np.abs(decoffset) < 0.25
+        rule3 = np.abs(rastd) < 0.5
+        rule4 = np.abs(decstd) < 0.5
+        rule5 = nstars >= 5
+        good = rule1 * rule2 * rule3 * rule4 * rule5
+        if ~good:
+            if niter == 0:
+                log.info('%s did not make cut' % name)
+            h5file.close()
+            continue
+        spectra = h5file.root.CatSpectra.cols.spectrum[:]
+        error = h5file.root.CatSpectra.cols.error[:]
+        weight = h5file.root.CatSpectra.cols.weight[:]
+        gmag = h5file.root.CatSpectra.cols.gmag[:]
+        ra = h5file.root.CatSpectra.cols.ra[:]
+        dec = h5file.root.CatSpectra.cols.dec[:]
+        mask = (weight > 0.15) * np.isfinite(spectra)
+        num = np.nansum(filtg[np.newaxis, :] * mask * (spectra / error), axis=1) 
+        denom = np.nansum(filtg[np.newaxis, :] * mask, axis=1)
+        sn = num / denom
+        goodspec = (mask.sum(axis=1) > 0.8) * (sn > 1.)
+        N = goodspec.sum()
+        if N < 1:
+            continue
+        if niter == 0:
+            totN += N
+            Nshots += 1
+        virus_gmags = get_gmags(spectra[goodspec], weight[goodspec])
+        normalization = 10**(-0.4 * (gmag[goodspec] - virus_gmags))
+        norm_spectra = spectra[goodspec] * normalization[:, np.newaxis]
+        osel = sn[goodspec] > 5.
+        average_norm, std = biweight(normalization[osel], calc_std=True)
+        if niter == 0:
+            log.info('%s has %i/%i and average normalization correction: %0.2f +/- %0.2f' %
+                     (name, osel.sum(), N, average_norm, std))
+        if niter == 1:
+            RA[cnt:cnt+N] = ra[goodspec]
+            DEC[cnt:cnt+N] = dec[goodspec]
+            GMAG[cnt:cnt+N] = gmag[goodspec]
+            SN[cnt:cnt+N] = sn[goodspec]
+            SPEC[cnt:cnt+N] = norm_spectra
+            ERROR[cnt:cnt+N] = error[goodspec] * normalization[:, np.newaxis] 
+            WEIGHT[cnt:cnt+N] = weight[goodspec]
+            NAME[cnt:cnt+N] = name
+            cnt += N
         h5file.close()
-        continue
-    spectra = h5file.root.CatSpectra.cols.spectrum[:]
-    error = h5file.root.CatSpectra.cols.error[:]
-    weight = h5file.root.CatSpectra.cols.weight[:]
-    gmag = h5file.root.CatSpectra.cols.gmag[:]
-    ra = h5file.root.CatSpectra.cols.ra[:]
-    dec = h5file.root.CatSpectra.cols.dec[:]
-    mask = (weight > 0.15) * np.isfinite(spectra)
-    num = np.nansum(filtg[np.newaxis, :] * mask * (spectra / error), axis=1) 
-    denom = np.nansum(filtg[np.newaxis, :] * mask, axis=1)
-    sn = num / denom
-    goodspec = (mask.sum(axis=1) > 0.8) * (sn > 1.)
-    N = goodspec.sum()
-    if N < 1:
-        continue
-    totN += N
-    Nshots += 1
-    virus_gmags = get_gmags(spectra[goodspec], weight[goodspec])
-    normalization = 10**(-0.4 * (gmag[goodspec] - virus_gmags))
-    norm_spectra = spectra[goodspec] * normalization[:, np.newaxis]
-    osel = sn[goodspec] > 5.
-    average_norm, std = biweight(normalization[osel], calc_std=True)
-    log.info('%s has %i/%i and average normalization correction: %0.2f +/- %0.2f' %
-             (name, osel.sum(), N, average_norm, std))
-    h5file.close()
+
+T = Table([RA, DEC, NAME, GMAG, SN], names=['RA', 'Dec', 'shotid', 'gmag', 'sn'])
+fits.HDUList([fits.PrimaryHDU(), fits.BinHDUTable(T), fits.ImageHDU(SPEC),
+              fits.ImageHDU(ERROR), fits.ImageHDU(WEIGHT)]).writeto(outname, overwrite=True)
 
 log.info('Total Number of sources is %i for %i shots' % (totN, Nshots))
