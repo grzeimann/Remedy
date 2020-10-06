@@ -2307,8 +2307,7 @@ u_ifuslots = np.unique(ifuslots)
 # Get photometric filter
 # =============================================================================
 T = Table.read(op.join(DIRNAME, 'filters/ps1g.dat'), format='ascii')
-filtg = np.interp(def_wave, T['col1'], T['col2'], left=0.0, right=0.0)
-filtg /= filtg.sum()
+
 
 # =============================================================================
 # Calibration factors to convert electrons to uJy
@@ -2645,8 +2644,8 @@ for i in info:
     if ui == args.ifuslot:
         A.get_ifuslot_projection(ifuslot, scale, crx, cry)
         header = A.tp_ifuslot.to_header()
-        F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
-        F.writeto(name, overwrite=True)
+        #F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
+        #F.writeto(name, overwrite=True)
 outfile_name = '%s_%07d_recon.png' % (args.date, args.observation)
 objsel = (f['Cgmag'] < 22.) * (f['dist'] < 1.5)
 nobjsel = (f['Cgmag'] < 22.)
