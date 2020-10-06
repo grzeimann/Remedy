@@ -2307,7 +2307,8 @@ u_ifuslots = np.unique(ifuslots)
 # Get photometric filter
 # =============================================================================
 T = Table.read(op.join(DIRNAME, 'filters/ps1g.dat'), format='ascii')
-
+filtg = np.interp(def_wave, T['col1'], T['col2'], left=0.0, right=0.0)
+filtg /= filtg.sum()
 
 # =============================================================================
 # Calibration factors to convert electrons to uJy
