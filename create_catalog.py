@@ -83,7 +83,11 @@ for niter in np.arange(2):
     for h5name in h5names:
         h5file = tables.open_file(h5name)
         name = op.basename(h5name).split('.h5')[0]
-        raoffset = h5file.root.Survey.cols.raoffset[0]
+        try:
+            raoffset = h5file.root.Survey.cols.raoffset[0]
+        except:
+            log.info('%s did not make cut' % name)
+            continue
         decoffset = h5file.root.Survey.cols.decoffset[0]
         rastd = h5file.root.Survey.cols.rastd[0]
         decstd = h5file.root.Survey.cols.decstd[0]
