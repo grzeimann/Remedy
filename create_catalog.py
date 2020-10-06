@@ -135,7 +135,8 @@ for niter in np.arange(2):
             NAME[cnt:cnt+N] = name
             cnt += N
         h5file.close()
-
+process = psutil.Process(os.getpid())
+log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
 T = Table([RA, DEC, NAME, GMAG, SN], names=['RA', 'Dec', 'shotid', 'gmag', 'sn'])
 fits.HDUList([fits.PrimaryHDU(), fits.BinHDUTable(T), fits.ImageHDU(SPEC),
               fits.ImageHDU(ERROR), fits.ImageHDU(WEIGHT)]).writeto(outname, overwrite=True)
