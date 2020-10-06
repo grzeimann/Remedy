@@ -62,6 +62,7 @@ filtg /= filtg.sum()
 
 h5names = sorted(glob.glob(op.join(folder, '*.h5')))
 totN = 0
+Nshots = 0
 for h5name in h5names:
     h5file = tables.open_file(h5name)
     name = op.basename(h5name).split('.h5')[0]
@@ -95,6 +96,7 @@ for h5name in h5names:
     if N < 1:
         continue
     totN += N
+    Nshots += 1
     virus_gmags = get_gmags(spectra[goodspec], weight[goodspec])
     normalization = 10**(-0.4 * (gmag[goodspec] - virus_gmags))
     norm_spectra = spectra[goodspec] * normalization[:, np.newaxis]
@@ -104,4 +106,4 @@ for h5name in h5names:
              (name, N, average_norm, std))
     h5file.close()
 
-log.info('Total Number of sources is %i' % totN)
+log.info('Total Number of sources is %i for %i shots' % (totN, Nshots))
