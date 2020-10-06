@@ -80,12 +80,12 @@ for h5name in h5names:
         log.info('%s did not make cut' % name)
         h5file.close()
         continue
-    spectra = h5file.root.Catspectra.cols.spectrum[:]
-    error = h5file.root.Catspectra.cols.error[:]
-    weight = h5file.root.Catspectra.cols.weight[:]
-    gmag = h5file.root.Catspectra.cols.gmag[:]
-    ra = h5file.root.Catspectra.cols.ra[:]
-    dec = h5file.root.Catspectra.cols.dec[:]
+    spectra = h5file.root.CatSpectra.cols.spectrum[:]
+    error = h5file.root.CatSpectra.cols.error[:]
+    weight = h5file.root.CatSpectra.cols.weight[:]
+    gmag = h5file.root.CatSpectra.cols.gmag[:]
+    ra = h5file.root.CatSpectra.cols.ra[:]
+    dec = h5file.root.CatSpectra.cols.dec[:]
     mask = weight < 0.15
     goodspec = mask.sum(axis=1) > 0.8
     N = goodspec.sum()
