@@ -73,6 +73,11 @@ for niter in np.arange(2):
         RA = np.zeros((totN,))
         DEC = np.zeros((totN,))
         GMAG = np.zeros((totN,))
+        RMAG = np.zeros((totN,))
+        IMAG = np.zeros((totN,))
+        ZMAG = np.zeros((totN,))
+        YMAG = np.zeros((totN,))
+
         SN = np.zeros((totN,))
         NAME = np.zeros((totN,), dtype='|S16')
         SPEC = np.zeros((totN, 1036))
@@ -109,6 +114,10 @@ for niter in np.arange(2):
         error = h5file.root.CatSpectra.cols.error[:]
         weight = h5file.root.CatSpectra.cols.weight[:]
         gmag = h5file.root.CatSpectra.cols.gmag[:]
+        rmag = h5file.root.CatSpectra.cols.rmag[:]
+        imag = h5file.root.CatSpectra.cols.imag[:]
+        zmag = h5file.root.CatSpectra.cols.zmag[:]
+        ymag = h5file.root.CatSpectra.cols.ymag[:]
         ra = h5file.root.CatSpectra.cols.ra[:]
         dec = h5file.root.CatSpectra.cols.dec[:]
         mask = (weight > 0.15) * np.isfinite(spectra)
@@ -134,6 +143,11 @@ for niter in np.arange(2):
             RA[cnt:cnt+N] = ra[goodspec]
             DEC[cnt:cnt+N] = dec[goodspec]
             GMAG[cnt:cnt+N] = gmag[goodspec]
+            RMAG[cnt:cnt+N] = rmag[goodspec]
+            IMAG[cnt:cnt+N] = imag[goodspec]
+            ZMAG[cnt:cnt+N] = zmag[goodspec]
+            YMAG[cnt:cnt+N] = ymag[goodspec]
+
             SN[cnt:cnt+N] = sn[goodspec]
             SPEC[cnt:cnt+N] = norm_spectra
             ERROR[cnt:cnt+N] = error[goodspec] * normalization[:, np.newaxis] 
@@ -143,7 +157,9 @@ for niter in np.arange(2):
         h5file.close()
 process = psutil.Process(os.getpid())
 log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
-T = Table([RA, DEC, NAME, GMAG, SN], names=['RA', 'Dec', 'shotid', 'gmag', 'sn'])
+T = Table([RA, DEC, NAME, GMAG, RMAG, IMAG, ZMAG, YMAG, SN],
+          names=['RA', 'Dec', 'shotid', 'gmag', 'rmag', 'imag', 'zmag', 'ymag',
+                 'sn'])
 fits.HDUList([fits.PrimaryHDU(), fits.BinTableHDU(T), fits.ImageHDU(SPEC),
               fits.ImageHDU(ERROR), fits.ImageHDU(WEIGHT)]).writeto(outname, overwrite=True)
 
