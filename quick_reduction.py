@@ -2261,6 +2261,10 @@ class CatSpectra(IsDescription):
      error  = Float32Col((1036,))    # float  (single-precision)
      weight  = Float32Col((1036,))    # float  (single-precision)
      gmag  = Float32Col()    # float  (single-precision)
+     rmag  = Float32Col()    # float  (single-precision)
+     imag  = Float32Col()    # float  (single-precision)
+     zmag  = Float32Col()    # float  (single-precision)
+     ymag  = Float32Col()    # float  (single-precision)
 
 class MatSpectra(IsDescription):
      ra  = Float32Col()    # float  (single-precision)
@@ -2600,8 +2604,10 @@ else:
                               dec+np.random.randn()*0.001, 11. / 60.)
     Pan.write(pname, format='ascii.fixed_width_two_line')
 
-raC, decC, gC = (np.array(Pan['raMean']), np.array(Pan['decMean']),
-                 np.array(Pan['gApMag']))
+raC, decC, gC, rC, iC, zC, yC = (np.array(Pan['raMean']), np.array(Pan['decMean']),
+                 np.array(Pan['gApMag']), np.array(Pan['rApMag']),
+                 np.array(Pan['iApMag']), np.array(Pan['zApMag']),
+                 np.array(Pan['yApMag']))
 coords = SkyCoord(raC*units.degree, decC*units.degree, frame='fk5')
 
 
@@ -2679,7 +2685,7 @@ for i in info:
     sel = sep.arcsec < 35.
     R.append(raC[sel])
     D.append(decC[sel])
-    GMM.append(gC[sel])
+    GMM.append([gC[sel], rC[sel], iC[sel], zC[sel], yC[sel]])
 R = np.hstack(R)
 D = np.hstack(D)
 GMM = np.hstack(GMM)
@@ -2721,7 +2727,8 @@ for i in np.arange(len(E.coords)):
         continue
     gmask = np.isfinite(specinfo[0]) * (specinfo[2] > (0.1)) 
     if gmask.sum() > 50.:
-        allspec_list.append([R[i], D[i], GMM[i]] + list(specinfo))
+        allspec_list.append([R[i], D[i], GMM[0, i], GMM[1, i], GMM[2, i],
+                             GMM[3, i], GMM[4, i]] + list(specinfo))
 X, Y, Z = [np.zeros((len(spec_list), 11)) for k in np.arange(3)]
 nwave = np.array([np.mean(xi) for xi in np.array_split(def_wave, 11)])
 seeing_array = np.linspace(np.median(gseeing)-0.8, np.median(gseeing)+0.8, 161)
@@ -2843,10 +2850,15 @@ for specinfo in allspec_list:
     specrow['ra'] = specinfo[0]
     specrow['dec'] = specinfo[1]
     specrow['gmag'] = specinfo[2]
-    if len(specinfo[3]) > 0:
-        specrow['spectrum'] = specinfo[3] * norm
-        specrow['error'] = specinfo[4] * norm
-        specrow['weight'] = specinfo[5]
+    specrow['rmag'] = specinfo[3]
+    specrow['imag'] = specinfo[4]
+    specrow['zmag'] = specinfo[5]
+    specrow['ymag'] = specinfo[6]
+
+    if len(specinfo[7]) > 0:
+        specrow['spectrum'] = specinfo[7] * norm
+        specrow['error'] = specinfo[8] * norm
+        specrow['weight'] = specinfo[9]
     specrow.append()
 table.flush()
 
