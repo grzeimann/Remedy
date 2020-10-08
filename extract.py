@@ -415,7 +415,7 @@ class Extract:
             S[:, 0] = ifux - self.ADRra[i] - xc
             S[:, 1] = ifuy - self.ADRdec[i] - yc
             weights[:, i] = I(S[:, 0], S[:, 1])
-        self.log.info('Total weight is: %0.2f' % np.median(np.sum(weights, axis=0)))
+        self.log.info('Average weight is: %0.2f' % np.median(np.sum(weights, axis=0)))
         return weights
     
     def build_weights_no_ADR(self, xc, yc, ifux, ifuy, psf):
@@ -476,10 +476,10 @@ class Extract:
             Error for the flux calibrated extracted spectrum
         '''
         var = error**2
-        spectrum = (np.nansum(data * mask * weights / var, axis=0) /
-                    np.nansum(mask * weights**2 / var, axis=0))
-        spectrum_error = np.sqrt(np.nansum(mask * weights, axis=0) /
-                                 np.nansum(mask * weights**2 / var, axis=0))
+        spectrum = (np.nansum(data * mask * weights, axis=0) /
+                    np.nansum(mask * weights**2, axis=0))
+        spectrum_error = np.sqrt(np.nansum(mask * weights * var, axis=0) /
+                                 np.nansum(mask * weights**2, axis=0))
         # Only use wavelengths with enough weight to avoid large noise spikes
         w = np.sum(mask * weights, axis=0)
         bad = w < 0.05
