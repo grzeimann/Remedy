@@ -27,3 +27,4 @@ L = fits.HDUList([fits.PrimaryHDU(), fits.BinTableHDU(T), fits.ImageHDU(spectra)
                   fits.ImageHDU(error)])
 fitsname = op.basename(filename).split('.h5')[0] + '.fits'
 L.writeto(fitsname, overwrite=True)
+t.close()
