@@ -120,11 +120,23 @@ for niter in np.arange(2):
         ymag = h5file.root.CatSpectra.cols.ymag[:]
         ra = h5file.root.CatSpectra.cols.ra[:]
         dec = h5file.root.CatSpectra.cols.dec[:]
+        avgdec = np.mean(dec)
+        dra = (ra[:, np.newaxis] - ra[np.newaxis, :])* np.cos(np.deg2rad(avgdec))
+        ddec = (dec[:, np.newaxis] - dec[np.newaxis, :])
+        dist = np.sqrt(dra**2 + ddec**2) * 3600.
+        neigh = (dist < 1.).sum(axis=1)
+        inds = np.where(neigh>1)[0]
+        clean = np.zeros((len(dist),), dtype=bool)
+        clean[neigh<=1] = True
+        for ind in inds:
+            test = (dist[ind, :ind] < 1.).sum() < 1
+            if test:
+                clean[ind] = True
         mask = (weight > 0.15) * np.isfinite(spectra)
         num = np.nansum(filtg[np.newaxis, :] * mask * (spectra / error), axis=1) 
         denom = np.nansum(filtg[np.newaxis, :] * mask, axis=1)
         sn = num / denom
-        goodspec = (mask.sum(axis=1) > 0.8) * (sn > 1.)
+        goodspec = (mask.sum(axis=1) > 0.8) * (sn > 1.) * clean
         N = goodspec.sum()
         if N < 1:
             continue
