@@ -3037,7 +3037,10 @@ if args.make_cube:
             if ('BSCALE' in key) or ('BZERO' in key):
                 continue
             he[key] = header[key]
-        he['VSEEING'] = numpy.nan_to_num(fwhm_virus)
+        try:
+            he['VSEEING'] = np.nan_to_num(fwhm_virus)
+        except:
+            log.warning('Whoops!')
         he['GSEEING'] = np.median(gseeing)
         write_cube(def_wave, xgrid, ygrid, zgrid, cubename, he)
         write_cube(def_wave, xgrid, ygrid, egrid, ecubename, he)
