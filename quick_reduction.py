@@ -3027,7 +3027,7 @@ if args.make_cube:
         sid, isl, iid, ap = _I[i].split('_')
         ifuslot_arr[i] = float(isl)
     i1 = np.where(float(args.ifuslot) == ifuslot_arr)[0][0]
-    log.info('Making Cube')
+    log.info('Making Cube with index %i' %i1)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         zgrid, egrid, xgrid, ygrid = make_cube(pos[i1:i1+448*nexp, 0], pos[i1:i1+448*nexp, 1],
