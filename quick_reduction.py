@@ -3019,12 +3019,21 @@ else:
 
 ## Making data cube
 if args.make_cube:
+    
+    
+    
+    ifuslot_arr = E.ra * 0.
+    for i in np.arange(len(E.ra)):
+        sid, isl, iid, ap = _I[i].split('_')
+        ifuslot_arr[i] = float(isl)
+    i1 = np.where(float(args.ifuslot) == ifuslot_arr)[0][0]
     log.info('Making Cube')
     with warnings.catch_warnings():
+        np.searchsorted()
         warnings.simplefilter("ignore")
-        zgrid, egrid, xgrid, ygrid = make_cube(pos[:448*nexp, 0], pos[:448*nexp, 1],
-                                               scispectra[:448*nexp]*norm, 
-                                               errspectra[:448*nexp]*norm,
+        zgrid, egrid, xgrid, ygrid = make_cube(pos[i1:i1+448*nexp, 0], pos[i1:i1+448*nexp, 1],
+                                               scispectra[i1:i1+448*nexp]*norm, 
+                                               errspectra[i1:i1+448*nexp]*norm,
                                                ADRx, 0. * def_wave, scale, ran)
         crx = np.abs(ran[0]) / scale + 1.
         cry = np.abs(ran[2]) / scale + 1.
