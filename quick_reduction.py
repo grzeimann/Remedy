@@ -3029,7 +3029,6 @@ if args.make_cube:
     i1 = np.where(float(args.ifuslot) == ifuslot_arr)[0][0]
     log.info('Making Cube')
     with warnings.catch_warnings():
-        np.searchsorted()
         warnings.simplefilter("ignore")
         zgrid, egrid, xgrid, ygrid = make_cube(pos[i1:i1+448*nexp, 0], pos[i1:i1+448*nexp, 1],
                                                scispectra[i1:i1+448*nexp]*norm, 
