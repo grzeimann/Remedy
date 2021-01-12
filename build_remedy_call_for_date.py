@@ -40,6 +40,7 @@ for date, tarfolder in zip(dates, tarfolders):
             a = T.next()
         except:
             print('This file had an issue: %s' % tarfolder)
+            T.close()
             flag = False
         try:
             name = a.name
