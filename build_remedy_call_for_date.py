@@ -36,7 +36,11 @@ for date, tarfolder in zip(dates, tarfolders):
     T = tarfile.open(tarfolder, 'r')
     flag = True
     while flag:
-        a = T.next()
+        try:
+            a = T.next()
+        except:
+            print('This file had an issue: %s' % tarfolder)
+            flag = False
         try:
             name = a.name
         except:
