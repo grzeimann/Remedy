@@ -86,9 +86,9 @@ for niter in np.arange(2):
         process = psutil.Process(os.getpid())
         log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
     for h5name in h5names:
-        h5file = tables.open_file(h5name)
-        name = op.basename(h5name).split('.h5')[0]
         try:
+            h5file = tables.open_file(h5name)
+            name = op.basename(h5name).split('.h5')[0]
             raoffset = h5file.root.Survey.cols.raoffset[0]
         except:
             if niter == 0:
