@@ -342,13 +342,13 @@ class Extract:
                                 np.array_split(data[:, sel], nchunks, axis=1),
                                 np.array_split(error[:, sel], nchunks, axis=1),
                                 np.array_split(mask[:,sel], nchunks, axis=1)):
-            marray = np.ma.array(chunk, mask=mchunk<1e-8)
-            print(marray)
+            marray = np.ma.array(chunk, mask=(mchunk<1e-8)*(~np.isfinite(chunk)))
             image = np.ma.median(marray, axis=1)
             image = image / np.ma.sum(image)
             S[:, 0] = xloc - self.ADRra[ichunk[cnt]]
             S[:, 1] = yloc - self.ADRdec[ichunk[cnt]]
             cnt += 1
+            
             try:
                 grid_z = (griddata(S[~image.mask], image.data[~image.mask],
                                    (xgrid, ygrid), method=interp_kind) *
