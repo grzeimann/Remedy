@@ -348,9 +348,7 @@ class Extract:
             S[:, 0] = xloc - self.ADRra[ichunk[cnt]]
             S[:, 1] = yloc - self.ADRdec[ichunk[cnt]]
             cnt += 1
-            
             try:
-                print(S[~image.mask])
                 grid_z = (griddata(S[~image.mask], image.data[~image.mask],
                                    (xgrid, ygrid), method=interp_kind) *
                           scale**2 / area)
@@ -539,7 +537,7 @@ class Extract:
         if len(distsel) == 0.:
             return None
         return (delta_ra[distsel], delta_dec[distsel], data[distsel],
-                error[distsel], mask[distsel])
+                error[distsel], mask[distsel], self.ifuslot_i[distsel])
         
     
     def get_spectrum_by_coord_index(self, ind):
@@ -570,10 +568,11 @@ class Extract:
                                                   self.mask, ra_cen, dec_cen,
                                                   thresh=7.)
         if info_result is None:
-            return [], [], [], [], [], []
+            return [], [], [], [], [], [], []
         
         self.log.info('Extracting %i' % ind)
-        rafibers, decfibers, data, error, mask = info_result
+        rafibers, decfibers, data, error, mask, ifuslot_i = info_result
+        print(ifuslot_i[0], len(rafibers))
         d = np.sqrt(rafibers**2 + decfibers**2)
         mask_extract = mask
         weights = self.build_weights(0., 0., rafibers, decfibers, self.psf)
