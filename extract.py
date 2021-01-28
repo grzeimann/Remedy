@@ -337,12 +337,13 @@ class Extract:
             self.log.warning('Using "linear" for interp_kind')
             interp_kind='linear'
         self.log.info('Made it Here 3')
-
+        
         for chunk, echunk, mchunk in zip(
                                 np.array_split(data[:, sel], nchunks, axis=1),
                                 np.array_split(error[:, sel], nchunks, axis=1),
                                 np.array_split(mask[:,sel], nchunks, axis=1)):
             marray = np.ma.array(chunk, mask=mchunk<1e-8)
+            print(marray)
             image = np.ma.median(marray, axis=1)
             image = image / np.ma.sum(image)
             S[:, 0] = xloc - self.ADRra[ichunk[cnt]]
@@ -357,6 +358,7 @@ class Extract:
             if convolve_image:
                 grid_z = convolve(grid_z, G)
             image_list.append(grid_z)
+        self.log.info('Made it Here 4')
         image = np.array(image_list)
         image[np.isnan(image)] = 0.0
         zarray = np.array([image, xgrid-xc, ygrid-yc])
