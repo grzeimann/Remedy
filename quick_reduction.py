@@ -2347,6 +2347,8 @@ for z in uzips:
 ziploop = np.sort(np.array(np.hstack(sel1), dtype=int))
 nslots = len(ziploop) / 4
 allifus = ifuslots[ziploop[::4]]
+print(uzips)
+print(allifus)
 
 
 # =============================================================================
@@ -3019,9 +3021,6 @@ else:
 
 ## Making data cube
 if args.make_cube:
-    
-    
-    
     ifuslot_arr = E.ra * 0.
     for i in np.arange(len(E.ra)):
         sid, isl, iid, ap = _I[i].split('_')
