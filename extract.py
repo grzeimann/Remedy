@@ -572,9 +572,11 @@ class Extract:
         d = np.sqrt(rafibers**2 + decfibers**2)
         mask_extract = mask
         weights = self.build_weights(0., 0., rafibers, decfibers, self.psf)
+        self.log.info('Made it Here 1: %i' % ind)
         norm = np.sum(weights, axis=0)
         weights = weights / norm[np.newaxis, :]
         result = self.get_spectrum(data, error, mask_extract, weights)
+        self.log.info('Made it Here 2: %i' % ind)
         spectrum, spectrum_error, mweight = [res for res in result]
         spec_package = [rafibers[:, np.newaxis]-self.ADRra, 
                         decfibers[:, np.newaxis]-self.ADRdec,
@@ -584,6 +586,7 @@ class Extract:
                                                 seeing_fac=1.5,
                                                 scale=0.5, boxsize=10.,
                                                 convolve_image=True)
+        self.log.info('Made it Here 3: %i' % ind)
         image, xgrid, ygrid = image_array
         return (spectrum / norm, spectrum_error / norm, mweight*norm, image, xgrid, ygrid, 
                spec_package)
