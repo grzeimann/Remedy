@@ -350,7 +350,7 @@ class Extract:
             cnt += 1
             
             try:
-                print(np.isnan(image.data[~image.mask]).sum(), image.data[~image.mask])
+                print(S[~image.mask])
                 grid_z = (griddata(S[~image.mask], image.data[~image.mask],
                                    (xgrid, ygrid), method=interp_kind) *
                           scale**2 / area)
