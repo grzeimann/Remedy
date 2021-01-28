@@ -2362,8 +2362,13 @@ tableh5 = h5spec.create_table(h5spec.root, 'Images', Images,
 
 for i in np.arange(len(allifus)):
     allifus[i] = catch_ifuslot_swap(allifus[i], args.date)
+    
 fn = fns[0]
 _I = np.hstack(_I)
+ifuslot_i = np.zeros((len(_I),), dtype=int)
+for i in np.arange(len(_I)):
+    sid, isl, iid, ap = _I[i].split('_')
+    ifuslot_i[i] = int(isl)
 h5file.close()
 h5file = None
 process = psutil.Process(os.getpid())
@@ -2704,6 +2709,7 @@ E.ra, E.dec = (RAFibers, DecFibers)
 E.data = scispectra
 E.error = errspectra
 E.mask = np.isfinite(scispectra)
+E.ifuslot_i = ifuslot_i
 spec_list = []
 for i in np.arange(len(E.coords)):
     specinfo = E.get_spectrum_by_coord_index(i)
