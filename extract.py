@@ -336,6 +336,8 @@ class Extract:
             self.log.warning('interp_kind must be "linear" or "cubic"')
             self.log.warning('Using "linear" for interp_kind')
             interp_kind='linear'
+        self.log.info('Made it Here 3')
+
         for chunk, echunk, mchunk in zip(
                                 np.array_split(data[:, sel], nchunks, axis=1),
                                 np.array_split(error[:, sel], nchunks, axis=1),
