@@ -68,6 +68,7 @@ h5names = sorted(glob.glob(op.join(folder, '*.h5')))
 totN = 0
 Nshots = 0
 cnt = 0
+ralist, declist, exptimelist = ([], [], [])
 for niter in np.arange(2):
     if niter == 1:
         RA = np.zeros((totN,))
@@ -97,6 +98,9 @@ for niter in np.arange(2):
             continue
         decoffset = h5file.root.Survey.cols.decoffset[0]
         rastd = h5file.root.Survey.cols.rastd[0]
+        ral = h5file.root.Survey.cols.ra[0]
+        decl = h5file.root.Survey.cols.dec[0]
+        exptimel = h5file.root.Survey.cols.exptime[0]
         decstd = h5file.root.Survey.cols.decstd[0]
         nstars = h5file.root.Survey.cols.nstarsastrom[0]
         rule1 = np.abs(raoffset) < 0.25
@@ -110,6 +114,11 @@ for niter in np.arange(2):
                 log.info('%s did not make cut' % name)
             h5file.close()
             continue
+        if niter == 0:
+            ralist.append(ral)
+            declist.append(decl)
+            exptimelist.append(exptimel)
+            
         spectra = h5file.root.CatSpectra.cols.spectrum[:]
         error = h5file.root.CatSpectra.cols.error[:]
         weight = h5file.root.CatSpectra.cols.weight[:]
@@ -172,6 +181,8 @@ log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
 T = Table([RA, DEC, NAME, GMAG, RMAG, IMAG, ZMAG, YMAG, SN],
           names=['RA', 'Dec', 'shotid', 'gmag', 'rmag', 'imag', 'zmag', 'ymag',
                  'sn'])
+T2 = Table([ralist, declist, exptimelist], names=['RA', 'Dec', 'exptime'])
+T2.write('survey_info.dat', format='ascii.fixed_width_two_line')
 fits.HDUList([fits.PrimaryHDU(), fits.BinTableHDU(T), fits.ImageHDU(SPEC),
               fits.ImageHDU(ERROR), fits.ImageHDU(WEIGHT)]).writeto(outname, overwrite=True)
 
