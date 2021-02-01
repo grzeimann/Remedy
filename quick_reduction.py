@@ -2343,9 +2343,6 @@ for z in uzips:
 ziploop = np.sort(np.array(np.hstack(sel1), dtype=int))
 nslots = len(ziploop) / 4
 allifus = ifuslots[ziploop[::4]]
-print(uzips)
-print(allifus)
-
 
 # =============================================================================
 # Reducing IFUSLOT
