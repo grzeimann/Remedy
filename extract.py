@@ -12,6 +12,7 @@ from astropy.convolution import Gaussian2DKernel, convolve
 from astropy.modeling.models import Moffat2D, Gaussian2D
 from input_utils import setup_logging
 from scipy.interpolate import griddata, LinearNDInterpolator
+from math_utils import biweight
 
 class Extract:
     def __init__(self, wave=None):
@@ -336,14 +337,17 @@ class Extract:
             self.log.warning('interp_kind must be "linear" or "cubic"')
             self.log.warning('Using "linear" for interp_kind')
             interp_kind='linear'
-        
         for chunk, echunk, mchunk in zip(
                                 np.array_split(data[:, sel], nchunks, axis=1),
                                 np.array_split(error[:, sel], nchunks, axis=1),
                                 np.array_split(mask[:,sel], nchunks, axis=1)):
-            marray = np.ma.array(chunk, mask=(mchunk<1e-8))
-            image = np.ma.median(marray, axis=1)
-            image = image / np.ma.sum(image)
+            marray = chunk * 1.
+            marray[mchunk<1e-8] = np.nan
+            #marray = np.ma.array(chunk, mask=(mchunk<1e-8))
+            #image = np.ma.median(marray, axis=1)
+            #image = image / np.ma.sum(image)
+            image = biweight(marray, axis=1)
+            image = image / np.nansum(image)
             S[:, 0] = xloc - self.ADRra[ichunk[cnt]]
             S[:, 1] = yloc - self.ADRdec[ichunk[cnt]]
             cnt += 1
