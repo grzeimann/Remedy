@@ -147,6 +147,7 @@ def get_tarfiles(filenames):
 
 def get_tarinfo(tarnames, filenames):
     l = []
+    tn = []
     for tarname in tarnames:
         if not op.exists(tarname):
             continue
@@ -154,6 +155,8 @@ def get_tarinfo(tarnames, filenames):
         members = T.getmembers()
         names = [t.name for t in members]
         l.append([T, members, names])
+        tn.append(tarname)
+    tarnames = tn
     L = []
     for filename in filenames:
         tarbase = op.dirname(op.dirname(op.dirname(filename))) + '.tar'
