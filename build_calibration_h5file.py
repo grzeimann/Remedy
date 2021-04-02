@@ -139,7 +139,6 @@ def get_scifilenames(args, daterange, kind):
 
 def get_tarfiles(filenames):
     tarnames = []
-    print(len(filenames), filenames)
     for fn in filenames:
         tarbase = op.dirname(op.dirname(op.dirname(fn))) + '.tar'
         if tarbase not in tarnames:
@@ -152,6 +151,7 @@ def get_tarinfo(tarnames, filenames):
     for tarname in tarnames:
         if not op.exists(tarname):
             continue
+        args.log.info('Opening %s' % tarname)
         T = tarfile.open(tarname, 'r')
         members = T.getmembers()
         names = [t.name for t in members]
