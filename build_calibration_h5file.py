@@ -139,6 +139,7 @@ def get_scifilenames(args, daterange, kind):
 
 def get_tarfiles(filenames):
     tarnames = []
+    print(len(filenames), filenames)
     for fn in filenames:
         tarbase = op.dirname(op.dirname(op.dirname(fn))) + '.tar'
         if tarbase not in tarnames:
@@ -160,6 +161,7 @@ def get_tarinfo(tarnames, filenames):
     L = []
     for filename in filenames:
         tarbase = op.dirname(op.dirname(op.dirname(filename))) + '.tar'
+        tarbase = tarbase.replace('/work', '/scratch')
         matches = np.where(tarbase == np.array(tarnames))[0]
         if not len(matches):
             continue
