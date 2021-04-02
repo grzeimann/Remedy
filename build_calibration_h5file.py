@@ -168,6 +168,8 @@ def get_tarinfo(tarnames, filenames):
     return L
 
 def get_ifuslots(tarfolder):
+    if not op.exists(tarfolder):
+        return []
     T = tarfile.open(tarfolder, 'r')
     flag = True
     ifuslots = []
