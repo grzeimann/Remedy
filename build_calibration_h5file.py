@@ -148,6 +148,7 @@ def get_tarfiles(filenames):
 def get_tarinfo(tarnames, filenames):
     l = []
     tn = []
+    tarnames = np.unique(tarnames)
     for tarname in tarnames:
         if not op.exists(tarname):
             continue
