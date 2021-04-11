@@ -13,7 +13,7 @@ import tarfile
 
 from astropy.io import fits
 
-rootdir = '/work/03946/hetdex/maverick'
+rootdir = '/work2/03946/hetdex/maverick'
 
 date = sys.argv[1]
 
