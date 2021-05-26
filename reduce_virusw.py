@@ -479,7 +479,7 @@ def get_script_path():
 # =============================================================================
 # Get Folder and Filenames
 # =============================================================================
-filenames = glob.glob(op.join(folder, '*.fits'))
+filenames = sorted(glob.glob(op.join(folder, '*.fits')))
 DIRNAME = get_script_path()
 # =============================================================================
 # Make a list of the objects for each filename, ignore those without 'OBJECT' 
