@@ -563,6 +563,7 @@ masterarc_list, arctime_list = make_mastercal_list(arc_filenames,
 trace_list = []
 fltspec = []
 log.info('Getting trace for each master domeFlat')
+print(flt_filenames)
 for masterflt, mtime in zip(masterflt_list, flttime_list):
     masterbias = masterbias_list[get_cal_index(mtime, biastime_list)]
     fits.HDUList([fits.PrimaryHDU(masterbias), 
