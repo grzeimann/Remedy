@@ -333,7 +333,7 @@ def get_spectra_chi2(flt, sci, err,
     return spec
 
 def get_trace(twilight):
-    ref = np.loadtxt('Fiber_Locations/20210512/virusw_fibloc.txt')
+    ref = np.loadtxt(op.join(DIRNAME, 'Fiber_Locations/20210512/virusw_fibloc.txt'))
     N1 = (ref[:, 1] == 0.).sum()
     good = np.where(ref[:, 1] == 0.)[0]
 
@@ -469,11 +469,17 @@ def get_filenames(gnames, typelist, names):
                 matches.append(gn)
     return np.array(matches)        
 
+def get_script_path():
+    '''
+    Get script path, aka, where does Remedy live?
+    '''
+    return op.dirname(op.realpath(sys.argv[0]))
+
 # =============================================================================
 # Get Folder and Filenames
 # =============================================================================
 filenames = glob.glob(op.join(folder, '*.fits'))
-
+DIRNAME = get_script_path()
 # =============================================================================
 # Make a list of the objects for each filename, ignore those without 'OBJECT' 
 # in the header
