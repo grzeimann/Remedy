@@ -38,6 +38,7 @@ parser.add_argument("-lr", "--lowres",
 folder = '/Users/gregz/cure/Remedy/virusw/VIRUS-W_Jan21'
 outfolder = '/Users/gregz/cure/Remedy/virusw/reductions'
 argv = [folder, outfolder, "-lr"]
+argv = None
 args = parser.parse_args(args=argv)
 
 log = setup_logging('virusw_reductions')
