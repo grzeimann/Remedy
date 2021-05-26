@@ -50,8 +50,10 @@ parser.add_argument("-ra", "--reduce_all",
 
 folder = '/Users/gregz/cure/Remedy/virusp/raw'
 outfolder = '/Users/gregz/cure/Remedy/virusp/reductions'
-argv = [folder, outfolder, "-b", "-ra"]
+argv = None
 args = parser.parse_args(args=argv)
+folder = args.folder
+outfolder = args.outfolder
 
 # Make output folder if it doesn't exist
 mkpath(outfolder)
@@ -596,10 +598,17 @@ def get_filenames(gnames, typelist, names):
                 matches.append(gn)
     return np.array(matches)
 
+def get_script_path():
+    '''
+    Get script path, aka, where does Remedy live?
+    '''
+    return op.dirname(op.realpath(sys.argv[0]))
+
 # =============================================================================
 # Get Folder and Filenames
 # =============================================================================
-filenames = glob.glob(op.join(folder, '*.fits'))
+filenames = sorted(glob.glob(op.join(folder, '*.fits')))
+DIRNAME = get_script_path()
 
 # =============================================================================
 # Make a list of the objects for each filename, ignore those without 'OBJECT' 
