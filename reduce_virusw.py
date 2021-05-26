@@ -602,8 +602,6 @@ for fltsp, mtime in zip(fltspec, flttime_list):
     ftf, ftf_smooth = get_fiber_to_fiber(domeflat_rect)
     ftf_list.append(ftf)
 
-IFUcenfile = '/Users/gregz/cure/virus_early/virus_config/IFUcen_files/virusw_mapping.txt'
-ifucen = np.loadtxt(IFUcenfile, skiprows=7)
 for fn in sci_filenames:
     log.info('Reducing: %s' % op.basename(fn))
     f = fits.open(fn)
