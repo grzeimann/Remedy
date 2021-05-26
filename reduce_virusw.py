@@ -379,7 +379,6 @@ def get_trace(twilight):
     x = np.arange(twilight.shape[1])
     trace = np.zeros((Trace.shape[0], twilight.shape[1]))
     for i in np.arange(Trace.shape[0]):
-        print(i)
         sel = Trace[i, :] != 0.
         trace[i] = np.polyval(np.polyfit(xchunks[sel], Trace[i, sel], 7), x)
     return trace
@@ -566,6 +565,9 @@ fltspec = []
 log.info('Getting trace for each master domeFlat')
 for masterflt, mtime in zip(masterflt_list, flttime_list):
     masterbias = masterbias_list[get_cal_index(mtime, biastime_list)]
+    fits.HDUList([fits.PrimaryHDU(masterbias), 
+                  fits.ImageHDU(masterflt)]).writeto(op.join(outfolder, 'test.fits'), 
+                                                     overwrite=True)
     trace = get_trace(masterflt-masterbias)
     trace_list.append(trace)
     domeflat_spec = get_spectra(masterflt-masterbias, trace)
