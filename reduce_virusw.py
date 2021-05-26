@@ -40,7 +40,8 @@ outfolder = '/Users/gregz/cure/Remedy/virusw/reductions'
 argv = [folder, outfolder, "-lr"]
 argv = None
 args = parser.parse_args(args=argv)
-
+folder = args.folder
+outfolder = args.folder
 log = setup_logging('virusw_reductions')
 
 gain = 0.62
