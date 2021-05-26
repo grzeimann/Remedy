@@ -379,6 +379,7 @@ def get_trace(twilight):
     x = np.arange(twilight.shape[1])
     trace = np.zeros((Trace.shape[0], twilight.shape[1]))
     for i in np.arange(Trace.shape[0]):
+        print(i)
         sel = Trace[i, :] != 0.
         trace[i] = np.polyval(np.polyfit(xchunks[sel], Trace[i, sel], 7), x)
     return trace
