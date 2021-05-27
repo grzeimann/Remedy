@@ -102,7 +102,7 @@ parser.add_argument("hdf5file",
 parser.add_argument("-r", "--rootdir",
                     help='''Directory for raw data. 
                     (just before date folders)''',
-                    type=str, default='/work/03946/hetdex/maverick')
+                    type=str, default='/work2/03946/hetdex/maverick')
 
 parser.add_argument("-ra", "--ra",
                     help='''RA of the IFUSLOT to be reduced''',
@@ -1411,7 +1411,7 @@ def get_mirror_illumination_throughput(fn=None, default=51.4e4, default_t=1.,
         F = fits.open(fn)
         names = ['RHO_STRT', 'THE_STRT', 'PHI_STRT', 'X_STRT', 'Y_STRT']
         r, t, p, x, y = [F[0].header[name] for name in names]
-        mirror_illum = float(os.popen('/work/03946/hetdex/hdr1/software/illum_lib/hetillum -p'
+        mirror_illum = float(os.popen('/work2/03946/hetdex/hdr1/software/illum_lib/hetillum -p'
                              ' -x "[%0.4f,%0.4f,%0.4f]" "[%0.4f,%0.4f]" 256' %
                                       (x, y, p, 0.042, 0.014)).read().split('\n')[0])
         area = mirror_illum * default
@@ -1433,7 +1433,7 @@ def get_mirror_illumination_throughput(fn=None, default=51.4e4, default_t=1.,
 
 def get_mirror_illumination_guider(fn, exptime, default=51.4e4, default_t=1.,
                                    default_iq=1.8,
-                                   path='/work/03946/hetdex/maverick'):
+                                   path='/work2/03946/hetdex/maverick'):
     try:
         M = []
         path = op.join(path, args.date)
