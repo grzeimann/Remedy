@@ -1717,8 +1717,8 @@ def fit_astrometry(f, A1, thresh=25.):
     return A1
 
 
-def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-1.,
-                vmax=15.):
+def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-0.5,
+                vmax=5.):
     """
     filename_array is an array-like object that contains the filenames
     of fits files to plot. The output plot will be the shape of the input array.
