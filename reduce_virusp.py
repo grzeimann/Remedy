@@ -6,6 +6,7 @@ Created on Wed May 12 10:04:09 2021
 @author: gregz
 """
 
+import argparse as ap
 import glob
 import numpy as np
 import os.path as op
@@ -17,7 +18,7 @@ from astropy.stats import sigma_clip
 from astropy.stats import mad_std
 from astropy.time import Time
 from distutils.dir_util import mkpath
-from input_utils import setup_logging, setup_parser
+from input_utils import setup_logging
 from math_utils import biweight
 from scipy.interpolate import interp1d
 from scipy.ndimage import percentile_filter
@@ -26,7 +27,7 @@ from sklearn.decomposition import PCA
 # Turn off annoying warnings (even though some deserve attention)
 warnings.filterwarnings("ignore")
 
-parser = setup_parser()
+parser = ap.ArgumentParser(add_help=True)
 
 parser.add_argument("folder", help='''Input folder''', type=str)
 
