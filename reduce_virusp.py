@@ -97,6 +97,11 @@ else:
     else:
         def_wave = np.linspace(4730., 6940., 2048)
 
+def get_script_path():
+    '''
+    Get script path, aka, where does Remedy live?
+    '''
+    return op.dirname(op.realpath(sys.argv[0]))
 
 def identify_sky_pixels(sky, per=50, size=50):
     cont = percentile_filter(sky, per, size=size)
@@ -382,7 +387,7 @@ def get_spectra_chi2(array_flt, array_sci, array_err,
     return spec
 
 def get_trace(twilight):
-    ref = np.loadtxt('Fiber_Locations/20210512/virusp_fibloc.txt')
+    ref = np.loadtxt(op.join(DIRNAME, 'Fiber_Locations/20210512/virusp_fibloc.txt'))
     N1 = (ref[:, 1] == 0.).sum()
     good = np.where(ref[:, 1] == 0.)[0]
     def get_trace_chunk(flat, XN):
@@ -598,12 +603,6 @@ def get_filenames(gnames, typelist, names):
             if name in str(tp).lower():
                 matches.append(gn)
     return np.array(matches)
-
-def get_script_path():
-    '''
-    Get script path, aka, where does Remedy live?
-    '''
-    return op.dirname(op.realpath(sys.argv[0]))
 
 # =============================================================================
 # Get Folder and Filenames
