@@ -1758,12 +1758,12 @@ def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-0.5,
                     ax.imshow(data, vmin=vmin, vmax=vmax,
                               interpolation='nearest', origin='lower',
                               cmap=cmap, norm=norm)
-                    ax.scatter(fF['imagex'][sel], fF['imagey'][sel], color='g',
-                               marker='x', s=8)
-                    ax.text(32.5, 32.5, 'V' + specnums[index[0]],
-                            horizontalalignment='center',
-                            verticalalignment='center', color='firebrick',
-                            fontsize=10)
+                    #ax.scatter(fF['imagex'][sel], fF['imagey'][sel], color='g',
+                    #           marker='x', s=8)
+                    #ax.text(32.5, 32.5, 'V' + specnums[index[0]],
+                    #        horizontalalignment='center',
+                    #        verticalalignment='center', color='firebrick',
+                    #        fontsize=10)
             
                 except:
                     ax.imshow(np.zeros((65, 65)), vmin=vmin, vmax=vmax,
