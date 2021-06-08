@@ -58,7 +58,7 @@ def_wave = np.linspace(3470, 5540, 1036)
 
 log = setup_logging('catalog')
 
-folder = '/work/03946/hetdex/virus_parallels/data'
+folder = '/work2/03946/hetdex/virus_parallels/data'
 DIRNAME = get_script_path()
 T = Table.read(op.join(DIRNAME, 'filters/ps1g.dat'), format='ascii')
 filtg = np.interp(def_wave, T['col1'], T['col2'], left=0.0, right=0.0)
@@ -68,7 +68,7 @@ h5names = sorted(glob.glob(op.join(folder, '*.h5')))
 totN = 0
 Nshots = 0
 cnt = 0
-ralist, declist, exptimelist = ([], [], [])
+ralist, declist, exptimelist, goodlist = ([], [], [], [])
 for niter in np.arange(2):
     if niter == 1:
         RA = np.zeros((totN,))
@@ -113,11 +113,16 @@ for niter in np.arange(2):
             if niter == 0:
                 log.info('%s did not make cut' % name)
             h5file.close()
+            ralist.append(ral)
+            declist.append(decl)
+            exptimelist.append(exptimel)
+            goodlist.append(False)
             continue
         if niter == 0:
             ralist.append(ral)
             declist.append(decl)
             exptimelist.append(exptimel)
+            goodlist.append(True)
             
         spectra = h5file.root.CatSpectra.cols.spectrum[:]
         error = h5file.root.CatSpectra.cols.error[:]
@@ -181,7 +186,7 @@ log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
 T = Table([RA, DEC, NAME, GMAG, RMAG, IMAG, ZMAG, YMAG, SN],
           names=['RA', 'Dec', 'shotid', 'gmag', 'rmag', 'imag', 'zmag', 'ymag',
                  'sn'])
-T2 = Table([ralist, declist, exptimelist], names=['RA', 'Dec', 'exptime'])
+T2 = Table([ralist, declist, exptimelist, goodlist], names=['RA', 'Dec', 'exptime', 'good'])
 T2.write('survey_info.dat', format='ascii.fixed_width_two_line')
 fits.HDUList([fits.PrimaryHDU(), fits.BinTableHDU(T), fits.ImageHDU(SPEC),
               fits.ImageHDU(ERROR), fits.ImageHDU(WEIGHT)]).writeto(outname, overwrite=True)
