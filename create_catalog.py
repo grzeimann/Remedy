@@ -113,11 +113,12 @@ for niter in np.arange(2):
             if niter == 0:
                 log.info('%s did not make cut' % name)
             h5file.close()
-            ralist.append(ral)
-            declist.append(decl)
-            exptimelist.append(exptimel)
-            goodlist.append(False)
-            nstarslist.append(nstars)
+            if niter == 0:
+                ralist.append(ral)
+                declist.append(decl)
+                exptimelist.append(exptimel)
+                goodlist.append(False)
+                nstarslist.append(nstars)
             continue
         if niter == 0:
             ralist.append(ral)
