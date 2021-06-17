@@ -21,7 +21,7 @@ base = '/work2/00115/gebhardt/maverick/gettar'
 
 def get_structaz(filename):
     date = filename.split('_')[0]
-    obs = filename.split('_')[1]
+    obs = filename.split('_')[1][:7]
     fn = op.join(base, '%ssci' % date[:6])
     print(fn)
     process = subprocess.Popen('cat %s | grep %s | grep %s ' %
