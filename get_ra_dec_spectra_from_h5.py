@@ -23,12 +23,15 @@ def get_structaz(filename):
     date = filename.split('_')[0]
     obs = filename.split('_')[1]
     fn = op.join(base, '%ssci' % date[:6])
+    print(fn)
     process = subprocess.Popen('cat %s | grep %s | grep %s ' %
                                        (fn, date, obs),
                                        stdout=subprocess.PIPE, shell=True)
     line = process.stdout.readline()
     b = line.rstrip().decode("utf-8")
+    print(b)
     b = b.split(' ')[7]
+    print(b)
     return b
 
 structaz = get_structaz(filename)
