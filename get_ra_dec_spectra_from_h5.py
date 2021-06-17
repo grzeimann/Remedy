@@ -34,7 +34,7 @@ def get_structaz(filename):
     print(b)
     return b
 
-structaz = get_structaz(filename)
+structaz = get_structaz(op.basename(filename))
 t = tables.open_file(filename)
 ra = getattr(t.root, 'Info').cols.ra[:]
 dec = getattr(t.root, 'Info').cols.dec[:]
