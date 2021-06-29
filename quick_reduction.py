@@ -102,7 +102,7 @@ parser.add_argument("hdf5file",
 parser.add_argument("-r", "--rootdir",
                     help='''Directory for raw data. 
                     (just before date folders)''',
-                    type=str, default='/work2/03946/hetdex/maverick')
+                    type=str, default='/work/03946/hetdex/maverick')
 
 parser.add_argument("-ra", "--ra",
                     help='''RA of the IFUSLOT to be reduced''',
@@ -1433,7 +1433,7 @@ def get_mirror_illumination_throughput(fn=None, default=51.4e4, default_t=1.,
 
 def get_mirror_illumination_guider(fn, exptime, default=51.4e4, default_t=1.,
                                    default_iq=1.8,
-                                   path='/work2/03946/hetdex/maverick'):
+                                   path='/work/03946/hetdex/maverick'):
     try:
         M = []
         path = op.join(path, args.date)
