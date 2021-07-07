@@ -58,7 +58,7 @@ def_wave = np.linspace(3470, 5540, 1036)
 
 log = setup_logging('catalog')
 
-folder = '/work2/03946/hetdex/virus_parallels/data'
+folder = '/work/03946/hetdex/virus_parallels/data'
 DIRNAME = get_script_path()
 T = Table.read(op.join(DIRNAME, 'filters/ps1g.dat'), format='ascii')
 filtg = np.interp(def_wave, T['col1'], T['col2'], left=0.0, right=0.0)
