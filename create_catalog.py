@@ -68,6 +68,7 @@ h5names = sorted(glob.glob(op.join(folder, '*.h5')))
 totN = 0
 Nshots = 0
 cnt = 0
+C = 0
 ralist, declist, exptimelist, goodlist, nstarslist  = ([], [], [], [], [])
 raofflist, decofflist, rastdlist, decstdlist  = ([], [], [], [])
 for niter in np.arange(2):
@@ -132,6 +133,7 @@ for niter in np.arange(2):
             decofflist.append(decoffset)
             rastdlist.append(rastd)
             decstdlist.append(decstd)
+            C += len(h5file.root.Info)
         spectra = h5file.root.CatSpectra.cols.spectrum[:]
         error = h5file.root.CatSpectra.cols.error[:]
         weight = h5file.root.CatSpectra.cols.weight[:]
@@ -189,6 +191,7 @@ for niter in np.arange(2):
             NAME[cnt:cnt+N] = name
             cnt += N
         h5file.close()
+
 process = psutil.Process(os.getpid())
 log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
 T = Table([RA, DEC, NAME, GMAG, RMAG, IMAG, ZMAG, YMAG, SN],
@@ -203,3 +206,4 @@ fits.HDUList([fits.PrimaryHDU(), fits.BinTableHDU(T), fits.ImageHDU(SPEC),
               fits.ImageHDU(ERROR), fits.ImageHDU(WEIGHT)]).writeto(outname, overwrite=True)
 
 log.info('Total Number of sources is %i for %i shots' % (totN, Nshots))
+log.info('Total Number of fibers is %i' % (C))
