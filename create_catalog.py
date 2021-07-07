@@ -154,7 +154,7 @@ for niter in np.arange(2):
             test = (dist[ind, :ind] < 1.).sum() < 1
             if test:
                 clean[ind] = True
-        mask = (weight > 0.15) * np.isfinite(spectra)
+        mask = (weight > 0.05) * np.isfinite(spectra)
         num = np.nansum(filtg[np.newaxis, :] * mask * (spectra / error), axis=1) 
         denom = np.nansum(filtg[np.newaxis, :] * mask, axis=1)
         sn = num / denom
