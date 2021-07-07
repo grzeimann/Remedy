@@ -142,7 +142,10 @@ def get_tarfiles(filenames):
     for fn in filenames:
         tarbase = op.dirname(op.dirname(op.dirname(fn))) + '.tar'
         if tarbase not in tarnames:
-            tarnames.append(tarbase.replace('/work', '/scratch'))
+            if '/work2' in tarbase:
+                tarnames.append(tarbase.replace('/work2', '/scratch'))
+            else:
+                tarnames.append(tarbase.replace('/work', '/scratch'))
     return tarnames
 
 def get_tarinfo(tarnames, filenames):
