@@ -26,8 +26,8 @@ from input_utils import setup_parser, set_daterange, setup_logging
 from math_utils import biweight
 from scipy.interpolate import interp1d
 
-karl_tarlist = '/work2/00115/gebhardt/maverick/gettar/%starlist'
-karl_scilist = '/work2/00115/gebhardt/maverick/gettar/%ssci'
+karl_tarlist = '/work/00115/gebhardt/maverick/gettar/%starlist'
+karl_scilist = '/work/00115/gebhardt/maverick/gettar/%ssci'
 
 warnings.filterwarnings("ignore")
 
@@ -142,7 +142,7 @@ def get_tarfiles(filenames):
     for fn in filenames:
         tarbase = op.dirname(op.dirname(op.dirname(fn))) + '.tar'
         if tarbase not in tarnames:
-            tarnames.append(tarbase.replace('/work2', '/scratch'))
+            tarnames.append(tarbase.replace('/work', '/scratch'))
     return tarnames
 
 def get_tarinfo(tarnames, filenames):
@@ -162,7 +162,7 @@ def get_tarinfo(tarnames, filenames):
     L = []
     for filename in filenames:
         tarbase = op.dirname(op.dirname(op.dirname(filename))) + '.tar'
-        tarbase = tarbase.replace('/work2', '/scratch')
+        tarbase = tarbase.replace('/work', '/scratch')
         matches = np.where(tarbase == np.array(tarnames))[0]
         if not len(matches):
             continue
