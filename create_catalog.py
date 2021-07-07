@@ -68,7 +68,8 @@ h5names = sorted(glob.glob(op.join(folder, '*.h5')))
 totN = 0
 Nshots = 0
 cnt = 0
-ralist, declist, exptimelist, goodlist, nstarslist = ([], [], [], [], [])
+ralist, declist, exptimelist, goodlist, nstarslist  = ([], [], [], [], [])
+raofflist, decofflist, rastdlist, decstdlist  = ([], [], [], [])
 for niter in np.arange(2):
     if niter == 1:
         RA = np.zeros((totN,))
@@ -119,6 +120,10 @@ for niter in np.arange(2):
                 exptimelist.append(exptimel)
                 goodlist.append(False)
                 nstarslist.append(nstars)
+                raofflist.append(raoffset)
+                decofflist.append(decoffset)
+                rastdlist.append(rastd)
+                decstdlist.append(decstd)
             continue
         if niter == 0:
             ralist.append(ral)
@@ -126,6 +131,10 @@ for niter in np.arange(2):
             exptimelist.append(exptimel)
             goodlist.append(True)
             nstarslist.append(nstars)
+            raofflist.append(raoffset)
+            decofflist.append(decoffset)
+            rastdlist.append(rastd)
+            decstdlist.append(decstd)
         spectra = h5file.root.CatSpectra.cols.spectrum[:]
         error = h5file.root.CatSpectra.cols.error[:]
         weight = h5file.root.CatSpectra.cols.weight[:]
@@ -188,7 +197,10 @@ log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
 T = Table([RA, DEC, NAME, GMAG, RMAG, IMAG, ZMAG, YMAG, SN],
           names=['RA', 'Dec', 'shotid', 'gmag', 'rmag', 'imag', 'zmag', 'ymag',
                  'sn'])
-T2 = Table([ralist, declist, exptimelist, goodlist, nstarslist], names=['RA', 'Dec', 'exptime', 'good', 'nstars'])
+T2 = Table([ralist, declist, exptimelist, goodlist, nstarslist, raofflist,
+            decofflist, rastdlist, decstdlist], 
+           names=['RA', 'Dec', 'exptime', 'good', 'nstars', 'raoff', 'decoff',
+                  'rastd', 'decstd'])
 T2.write('survey_info.dat', format='ascii.fixed_width_two_line')
 fits.HDUList([fits.PrimaryHDU(), fits.BinTableHDU(T), fits.ImageHDU(SPEC),
               fits.ImageHDU(ERROR), fits.ImageHDU(WEIGHT)]).writeto(outname, overwrite=True)
