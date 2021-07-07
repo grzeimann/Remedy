@@ -104,12 +104,9 @@ for niter in np.arange(2):
         exptimel = h5file.root.Survey.cols.exptime[0]
         decstd = h5file.root.Survey.cols.decstd[0]
         nstars = h5file.root.Survey.cols.nstarsastrom[0]
-        rule1 = np.abs(raoffset) < 0.25
-        rule2 = np.abs(decoffset) < 0.25
-        rule3 = np.abs(rastd) < 0.5
-        rule4 = np.abs(decstd) < 0.5
+        rule1 = np.sqrt(raoffset**2 + decoffset**2) < 0.5
         rule5 = nstars >= 5
-        good = rule1 * rule2 * rule3 * rule4 * rule5
+        good = rule1 * rule5
         if ~good:
             if niter == 0:
                 log.info('%s did not make cut' % name)
