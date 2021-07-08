@@ -16,8 +16,6 @@ from astropy.io import fits
 
 rootdir = '/work/03946/hetdex/maverick'
 
-varrr = 'ohno'
-
 inst = 'virus'
 
 date = sys.argv[1]
