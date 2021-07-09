@@ -22,7 +22,9 @@ date = sys.argv[1]
 
 cal = sys.argv[2]
 
-ncalls = int(sys.argv[3])
+target = sys.argv[3]
+
+ncalls = int(sys.argv[4])
 
 tarfolders = sorted(glob.glob(op.join(rootdir, date, inst,
                                       '%s0000*.tar' % inst)))
@@ -59,7 +61,7 @@ for date, tarfolder in zip(dates, tarfolders):
                 prog = 'None'
             obs = int(op.basename(tarfolder)[-11:-4])
             if name[-8:-5] == 'sci':
-                if Target == 'parallel':
+                if target in Target:
                     tarlist.append([obs, name[-8:-5], Target, prog, exptime, date])
             flag = False
 with open('%s_calls' % tarlist[0][-1], 'w') as out_file:       
