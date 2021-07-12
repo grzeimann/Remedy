@@ -59,19 +59,18 @@ def get_gmags(spec, weight):
 
 def get_rv_cor(item_list):
     try:
-        print(item_list)
-        sc = SkyCoord(item_list[0] + ' ' +
-                      item_list[1], unit=(u.hourangle, u.deg))
+        sc = SkyCoord(item_list[0]*u.deg, item_list[1]*u.deg)
         s = item_list[2]
         t = Time(s, format='mjd') + item_list[3] / 2. * u.second
         vcorr = sc.radial_velocity_correction(kind='barycentric', obstime=t,
                                               location=loc)
         vcorr = vcorr.value
         mjd = t.mjd
+        log.info('Barycentric RV correction: %0.2f, %0.2f' % (vcorr, mjd))
     except:
         vcorr = 0.0
         mjd = 0.0
-        log.info('Barycentric RV correction failed for this source')
+        log.warning('Barycentric RV correction failed for this source')
     return vcorr, mjd
         
 def get_tarinfo(tarfolder):
