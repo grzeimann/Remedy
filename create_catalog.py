@@ -59,6 +59,7 @@ def get_gmags(spec, weight):
 
 def get_rv_cor(item_list):
     try:
+        print(item_list)
         sc = SkyCoord(item_list[0] + ' ' +
                       item_list[1], unit=(u.hourangle, u.deg))
         s = item_list[2]
