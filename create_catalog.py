@@ -95,16 +95,21 @@ def get_itemlist(filename):
     date = filename.split('_')[0]
     obs = filename.split('_')[1][:7]
     fn = op.join(basedir, '%ssci' % date[:6])
-    print(fn)
     process = subprocess.Popen('cat %s | grep %s | grep %s ' %
                                        (fn, date, obs),
                                        stdout=subprocess.PIPE, shell=True)
     line = process.stdout.readline()
     b = line.rstrip().decode("utf-8")
-    exptime = b.split(' ')[2]
-    trajcra = b.split(' ')[5]
-    trajcdec = b.split(' ')[6]
-    mjd = b.split(' ')[4]
+    try:
+        exptime = float(b.split(' ')[2]) 
+        trajcra = float(b.split(' ')[5]) * 15.
+        trajcdec = float(b.split(' ')[6])
+        mjd = float(b.split(' ')[4])
+    except:
+        exptime = 180.
+        trajcra = 180.
+        trajcdec = 50.
+        mjd = -999.
     return [trajcra, trajcdec, mjd, exptime]
 
 
