@@ -10,11 +10,16 @@ import numpy as np
 import os
 import os.path as op
 import psutil
+import subprocess
 import sys
 import tables
+import tarfile
 
+from astropy.coordinates import SkyCoord, EarthLocation
 from astropy.io import fits
 from astropy.table import Table
+from astropy.time import Time
+import astropy.units as u
 from input_utils import setup_logging
 from math_utils import biweight
 
@@ -52,12 +57,67 @@ def get_gmags(spec, weight):
     gmag = -2.5 * np.log10(gmag) + 23.9
     return gmag
 
+def get_rv_cor(item_list):
+    try:
+        sc = SkyCoord(item_list[0] + ' ' +
+                      item_list[1], unit=(u.hourangle, u.deg))
+        s = item_list[2]
+        t = Time(s, format='mjd') + item_list[3] / 2. * u.second
+        vcorr = sc.radial_velocity_correction(kind='barycentric', obstime=t,
+                                              location=loc)
+        vcorr = vcorr.value
+        mjd = t.mjd
+    except:
+        vcorr = 0.0
+        mjd = 0.0
+        log.info('Barycentric RV correction failed for this source')
+    return vcorr, mjd
+        
+def get_tarinfo(tarfolder):
+    T = tarfile.open(tarfolder, 'r')
+    flag = True
+    while flag:
+        try:
+            a = T.next()
+            name = a.name
+        except:
+            flag = False
+            continue
+        if name[-5:] == '.fits':
+            b = fits.open(T.extractfile(a))
+            item_list = [b[0].header['QRA'], b[0].header['QDEC'],
+                         b[0].header['DATE-OBS'], b[0].header['EXPTIME']]
+            flag = False
+    T.close()
+    return item_list
+
+def get_itemlist(filename):
+    date = filename.split('_')[0]
+    obs = filename.split('_')[1][:7]
+    fn = op.join(basedir, '%ssci' % date[:6])
+    print(fn)
+    process = subprocess.Popen('cat %s | grep %s | grep %s ' %
+                                       (fn, date, obs),
+                                       stdout=subprocess.PIPE, shell=True)
+    line = process.stdout.readline()
+    b = line.rstrip().decode("utf-8")
+    exptime = b.split(' ')[2]
+    trajcra = b.split(' ')[5]
+    trajcdec = b.split(' ')[6]
+    mjd = b.split(' ')[4]
+    return [trajcra, trajcdec, mjd, exptime]
+
+
+
 outname = sys.argv[1]
 
 def_wave = np.linspace(3470, 5540, 1036)
 
 log = setup_logging('catalog')
 
+loc = EarthLocation.of_site('McDonald Observatory')
+
+basedir = '/work/00115/gebhardt/maverick/gettar'
 folder = '/work/03946/hetdex/virus_parallels/data'
 DIRNAME = get_script_path()
 T = Table.read(op.join(DIRNAME, 'filters/ps1g.dat'), format='ascii')
@@ -82,6 +142,8 @@ for niter in np.arange(2):
         YMAG = np.zeros((totN,))
 
         SN = np.zeros((totN,))
+        VCOR = np.zeros((totN,))
+        MJD = np.zeros((totN,))
         NAME = np.zeros((totN,), dtype='|S16')
         SPEC = np.zeros((totN, 1036))
         ERROR = np.zeros((totN, 1036))
@@ -176,6 +238,8 @@ for niter in np.arange(2):
             log.info('%s has %i/%i and average normalization correction: %0.2f +/- %0.2f' %
                      (name, osel.sum(), N, average_norm, std))
         if niter == 1:
+            item_list = get_itemlist(op.basename(h5name))
+            vcor, mjd = get_rv_cor(item_list)
             RA[cnt:cnt+N] = ra[goodspec]
             DEC[cnt:cnt+N] = dec[goodspec]
             GMAG[cnt:cnt+N] = gmag[goodspec]
@@ -183,7 +247,9 @@ for niter in np.arange(2):
             IMAG[cnt:cnt+N] = imag[goodspec]
             ZMAG[cnt:cnt+N] = zmag[goodspec]
             YMAG[cnt:cnt+N] = ymag[goodspec]
-
+            
+            VCOR[cnt:cnt+N] = vcor * np.ones((goodspec.sum(),))
+            MJD[cnt:cnt+N] = mjd * np.ones((goodspec.sum(),))
             SN[cnt:cnt+N] = sn[goodspec]
             SPEC[cnt:cnt+N] = norm_spectra
             ERROR[cnt:cnt+N] = error[goodspec] * normalization[:, np.newaxis] 
@@ -194,9 +260,9 @@ for niter in np.arange(2):
 
 process = psutil.Process(os.getpid())
 log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
-T = Table([RA, DEC, NAME, GMAG, RMAG, IMAG, ZMAG, YMAG, SN],
+T = Table([RA, DEC, NAME, GMAG, RMAG, IMAG, ZMAG, YMAG, SN, VCOR, MJD],
           names=['RA', 'Dec', 'shotid', 'gmag', 'rmag', 'imag', 'zmag', 'ymag',
-                 'sn'])
+                 'sn', 'barycor', 'mjd'])
 T2 = Table([ralist, declist, exptimelist, goodlist, nstarslist, raofflist,
             decofflist, rastdlist, decstdlist], 
            names=['RA', 'Dec', 'exptime', 'good', 'nstars', 'raoff', 'decoff',
