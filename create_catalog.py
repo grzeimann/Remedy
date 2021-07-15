@@ -147,6 +147,7 @@ for niter in np.arange(2):
         YMAG = np.zeros((totN,))
 
         SN = np.zeros((totN,))
+        EP = np.zeros((totN,))
         VCOR = np.zeros((totN,))
         MJD = np.zeros((totN,))
         NAME = np.zeros((totN,), dtype='|S16')
@@ -255,6 +256,7 @@ for niter in np.arange(2):
             
             VCOR[cnt:cnt+N] = vcor * np.ones((goodspec.sum(),))
             MJD[cnt:cnt+N] = mjd * np.ones((goodspec.sum(),))
+            EP[cnt:cnt+N] = exptimel * np.ones((goodspec.sum(),))
             SN[cnt:cnt+N] = sn[goodspec]
             SPEC[cnt:cnt+N] = norm_spectra
             ERROR[cnt:cnt+N] = error[goodspec] * normalization[:, np.newaxis] 
@@ -263,11 +265,13 @@ for niter in np.arange(2):
             cnt += N
         h5file.close()
 
+IDS = np.arange(1, len(RA)+1)
+IDS = ['HETVIPS%09d' % iD for iD in IDS]
 process = psutil.Process(os.getpid())
 log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
-T = Table([RA, DEC, NAME, GMAG, RMAG, IMAG, ZMAG, YMAG, SN, VCOR, MJD],
-          names=['RA', 'Dec', 'shotid', 'gmag', 'rmag', 'imag', 'zmag', 'ymag',
-                 'sn', 'barycor', 'mjd'])
+T = Table([IDS, RA, DEC, NAME, GMAG, RMAG, IMAG, ZMAG, YMAG, SN, VCOR, MJD, EP],
+          names=['objID', 'RA', 'Dec', 'shotid', 'gmag', 'rmag', 'imag', 'zmag', 'ymag',
+                 'sn', 'barycor', 'mjd', 'exptime'])
 T2 = Table([ralist, declist, exptimelist, goodlist, nstarslist, raofflist,
             decofflist, rastdlist, decstdlist], 
            names=['RA', 'Dec', 'exptime', 'good', 'nstars', 'raoff', 'decoff',
