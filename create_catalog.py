@@ -155,7 +155,10 @@ for niter in np.arange(2):
         ERROR = np.zeros((totN, 1036))
         WEIGHT = np.zeros((totN, 1036))
         process = psutil.Process(os.getpid())
+        EA = np.zeros((Nshots, 1036))
+        SS = np.zeros((Nshots, 1036))
         log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
+        III = 0
     for h5name in h5names:
         try:
             h5file = tables.open_file(h5name)
@@ -244,6 +247,14 @@ for niter in np.arange(2):
             log.info('%s has %i/%i and average normalization correction: %0.2f +/- %0.2f' %
                      (name, osel.sum(), N, average_norm, std))
         if niter == 1:
+            inds = np.random.randint(N, size=20)
+            es = np.zeros((20, 1036))
+            ss = np.zeros((20, 1036))
+            for j, ind in enumerate(inds):
+                es[j] = h5file.root.Fibers.cols.error[ind]
+                ss[j] = h5file.root.Fibers.cols.skyspectrum[ind]
+            EA[III] = np.nanmedian(es, axis=0)
+            SS[III] = np.nanmedian(ss, axis=0)
             item_list = get_itemlist(op.basename(h5name))
             vcor, mjd = get_rv_cor(item_list)
             RA[cnt:cnt+N] = ra[goodspec]
@@ -263,6 +274,7 @@ for niter in np.arange(2):
             WEIGHT[cnt:cnt+N] = weight[goodspec]
             NAME[cnt:cnt+N] = name
             cnt += N
+            III += 1
         h5file.close()
 
 IDS = np.arange(1, len(RA)+1)
@@ -279,6 +291,6 @@ T2 = Table([ralist, declist, exptimelist, goodlist, nstarslist, raofflist,
 T2.write('survey_info.dat', format='ascii.fixed_width_two_line')
 fits.HDUList([fits.PrimaryHDU(), fits.BinTableHDU(T), fits.ImageHDU(SPEC),
               fits.ImageHDU(ERROR), fits.ImageHDU(WEIGHT)]).writeto(outname, overwrite=True)
-
+fits.HDUList([fits.PrimaryHDU(EA), fits.ImageHDU(SS)]).writeto('shot_error_sky.fits', overwrite=True)
 log.info('Total Number of sources is %i for %i shots' % (totN, Nshots))
 log.info('Total Number of fibers is %i' % (C))
