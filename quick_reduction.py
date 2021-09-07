@@ -1754,6 +1754,7 @@ def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-0.25,
                 try:
                     data = f * 1.
                     data[np.isnan(data)] = 0.0
+                    data[(data<vmin) * (data>vmax)] = 0.0
                     sel = fF['ifuslot'] == int(ifuname)
                     ax.imshow(data, vmin=vmin, vmax=vmax,
                               interpolation='nearest', origin='lower',
