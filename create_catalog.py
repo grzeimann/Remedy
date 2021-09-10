@@ -301,7 +301,7 @@ for ind in inds:
         dupl[stack_inds] = True
     I = stack_inds[np.argmax(SN[stack_inds])]
     keep[I] = True
-log.info('Number of unique sources is %i' % (len(keep)))
+log.info('Number of unique sources is %i' % (keep.sum()))
 IDS = np.arange(1, len(RA)+1)
 IDS = ['HETVIPS%09d' % iD for iD in IDS]
 process = psutil.Process(os.getpid())
