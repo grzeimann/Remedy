@@ -292,10 +292,10 @@ for ind in inds:
     ddec = (d[ind] - d[ll:hl])
     d = np.sqrt(dra**2 + ddec**2)*3600.
     sel = d < 1.
-    stack_inds = inds[sel]
+    stack_inds = inds[ll:hl][sel]
     for i in inds[sel]:
         dupl.append(i)
-    I = inds[sel][np.argmax(SN[inds[sel]])]
+    I = stack_inds[np.argmax(SN[stack_inds])]
     keep.append(I)
 log.info('Number of unique sources is %i' % (len(keep)))
 IDS = np.arange(1, len(RA)+1)
