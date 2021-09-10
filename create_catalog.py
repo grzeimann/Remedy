@@ -290,8 +290,8 @@ for ind in inds:
     hl = int(np.min([ind+100, len(inds)+1]))
     dra = np.cos(d[ind] * np.pi / 180.) * (r[ind] - r[ll:hl])
     ddec = (d[ind] - d[ll:hl])
-    d = np.sqrt(dra**2 + ddec**2)*3600.
-    sel = d < 1.
+    D = np.sqrt(dra**2 + ddec**2)*3600.
+    sel = D < 1.
     stack_inds = inds[ll:hl][sel]
     for i in stack_inds:
         dupl.append(i)
