@@ -279,12 +279,12 @@ for niter in np.arange(2):
         h5file.close()
 
 inds = np.argsort(RA)
-dupl = []
-keep = []
+dupl = np.zeros((len(RA),), dtype=bool)
+keep = np.zeros((len(RA),), dtype=bool)
 r = RA[inds]
 d = DEC[inds]
 for ind in inds:
-    if ind in dupl:
+    if dupl[ind]:
         continue
     ll = int(np.max([ind-100, 0]))
     hl = int(np.min([ind+100, len(inds)+1]))
@@ -294,9 +294,9 @@ for ind in inds:
     sel = D < 1.
     stack_inds = inds[ll:hl][sel]
     for i in stack_inds:
-        dupl.append(i)
+        dupl[stack_inds] = True
     I = stack_inds[np.argmax(SN[stack_inds])]
-    keep.append(I)
+    keep[I] = True
 log.info('Number of unique sources is %i' % (len(keep)))
 IDS = np.arange(1, len(RA)+1)
 IDS = ['HETVIPS%09d' % iD for iD in IDS]
