@@ -288,7 +288,7 @@ for ind in inds:
         continue
     ll = int(np.max([ind-100, 0]))
     hl = int(np.min([ind+100, len(inds)+1]))
-    dra = np.cos(d * np.pi / 180.) * (r[ind] - r[ll:hl])
+    dra = np.cos(d[ind] * np.pi / 180.) * (r[ind] - r[ll:hl])
     ddec = (d[ind] - d[ll:hl])
     d = np.sqrt(dra**2 + ddec**2)*3600.
     sel = d < 1.
