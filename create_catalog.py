@@ -177,8 +177,9 @@ for niter in np.arange(2):
         decstd = h5file.root.Survey.cols.decstd[0]
         nstars = h5file.root.Survey.cols.nstarsastrom[0]
         rule1 = np.sqrt(raoffset**2 + decoffset**2) < 0.5
+        rule2 = exptimel > 300.
         rule5 = nstars >= 5
-        good = rule1 * rule5
+        good = rule1 * rule5 * rule2
         if ~good:
             if niter == 0:
                 log.info('%s did not make cut' % name)
@@ -277,6 +278,26 @@ for niter in np.arange(2):
             III += 1
         h5file.close()
 
+inds = np.argsort(RA)
+dupl = []
+keep = []
+r = RA[inds]
+d = DEC[inds]
+for ind in inds:
+    if ind in dupl:
+        continue
+    ll = int(np.max([ind-100, 0]))
+    hl = int(np.min([ind+100, len(inds)+1]))
+    dra = np.cos(d * np.pi / 180.) * (r[ind] - r[ll:hl])
+    ddec = (d[ind] - d[ll:hl])
+    d = np.sqrt(dra**2 + ddec**2)*3600.
+    sel = d < 1.
+    stack_inds = inds[sel]
+    for i in inds[sel]:
+        dupl.append(i)
+    I = inds[sel][np.argmax(SN[inds[sel]])]
+    keep.append(I)
+log.info('Number of unique sources is %i' % (len(keep)))
 IDS = np.arange(1, len(RA)+1)
 IDS = ['HETVIPS%09d' % iD for iD in IDS]
 process = psutil.Process(os.getpid())
@@ -292,5 +313,14 @@ T2.write('survey_info.dat', format='ascii.fixed_width_two_line')
 fits.HDUList([fits.PrimaryHDU(), fits.BinTableHDU(T), fits.ImageHDU(SPEC),
               fits.ImageHDU(ERROR), fits.ImageHDU(WEIGHT)]).writeto(outname, overwrite=True)
 fits.HDUList([fits.PrimaryHDU(EA), fits.ImageHDU(SS)]).writeto('shot_error_sky.fits', overwrite=True)
+IDS = np.arange(1, len(RA[keep])+1)
+IDS = ['HETVIPS%09d' % iD for iD in IDS]
+T = Table([IDS, RA[keep], DEC[keep], NAME[keep], GMAG[keep], RMAG[keep], 
+           IMAG[keep], ZMAG[keep], YMAG[keep], SN[keep], VCOR[keep], MJD[keep],
+           EP[keep]],
+          names=['objID', 'RA', 'Dec', 'shotid', 'gmag', 'rmag', 'imag', 'zmag', 'ymag',
+                 'sn', 'barycor', 'mjd', 'exptime'])
+fits.HDUList([fits.PrimaryHDU(), fits.BinTableHDU(T), fits.ImageHDU(SPEC[keep]),
+              fits.ImageHDU(ERROR[keep]), fits.ImageHDU(WEIGHT[keep])]).writeto(outname.replace('.fits', '_unique.fits'), overwrite=True)
 log.info('Total Number of sources is %i for %i shots' % (totN, Nshots))
 log.info('Total Number of fibers is %i' % (C))
