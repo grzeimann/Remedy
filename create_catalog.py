@@ -293,7 +293,7 @@ for ind in inds:
     d = np.sqrt(dra**2 + ddec**2)*3600.
     sel = d < 1.
     stack_inds = inds[ll:hl][sel]
-    for i in inds[sel]:
+    for i in stack_inds:
         dupl.append(i)
     I = stack_inds[np.argmax(SN[stack_inds])]
     keep.append(I)
