@@ -283,7 +283,11 @@ dupl = np.zeros((len(RA),), dtype=bool)
 keep = np.zeros((len(RA),), dtype=bool)
 r = RA[inds]
 d = DEC[inds]
+cnt = 1
 for ind in inds:
+    if cnt % 10000 == 0:
+        log.info('Now at %i' % cnt)
+    cnt += 1
     if dupl[ind]:
         continue
     ll = int(np.max([ind-100, 0]))
