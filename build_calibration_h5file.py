@@ -145,7 +145,7 @@ def get_tarfiles(filenames):
             if '/work2' in tarbase:
                 tarnames.append(tarbase.replace('/work2', '/scratch'))
             else:
-                tarnames.append(tarbase.replace('/work', '/scratch'))
+                tarnames.append(tarbase.replace('/work', '/work'))
     return tarnames
 
 def get_tarinfo(tarnames, filenames):
@@ -165,7 +165,7 @@ def get_tarinfo(tarnames, filenames):
     L = []
     for filename in filenames:
         tarbase = op.dirname(op.dirname(op.dirname(filename))) + '.tar'
-        tarbase = tarbase.replace('/work', '/scratch')
+        tarbase = tarbase.replace('/work', '/work')
         matches = np.where(tarbase == np.array(tarnames))[0]
         if not len(matches):
             continue
