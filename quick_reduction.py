@@ -2481,7 +2481,7 @@ fac[ExP==0.] = 1.
 mult_fac2 = mult_fac[np.newaxis, :] * fac[:, np.newaxis]
 scispectra[:] = scispectra / throughput[np.newaxis, :] * mult_fac2
 errspectra[:] = errspectra / throughput[np.newaxis, :] * mult_fac2
-skyrect[:] = skyrect * mult_fac2
+skyrect[:] = skyrect * mult_fac2 / throughput[np.newaxis, :]
 # =============================================================================
 # Make 2d sky-sub image 
 # =============================================================================
@@ -2581,6 +2581,7 @@ for i in np.arange(0, nexp):
     sel = (np.array(inds / 112, dtype=int) % nexp) == i
     scispectra[sel] = scispectra[sel] / gratio[i]
     errspectra[sel] = errspectra[sel] / gratio[i]
+    skyrect[sel] = skyrect[sel] / (millum / 5e5)
     log.info('Guider ratio for exposure %i to 50m^2: %0.2f' %
              (i+1, gratio[i]))
 
