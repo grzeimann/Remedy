@@ -2481,7 +2481,7 @@ fac[ExP==0.] = 1.
 mult_fac2 = mult_fac[np.newaxis, :] * fac[:, np.newaxis]
 scispectra[:] = scispectra / throughput[np.newaxis, :] * mult_fac2
 errspectra[:] = errspectra / throughput[np.newaxis, :] * mult_fac2
-skyrect[:] = skyrect * mult_fac2 / throughput[np.newaxis, :]
+skyrect[:] = skyrect  * mult_fac2
 # =============================================================================
 # Make 2d sky-sub image 
 # =============================================================================
