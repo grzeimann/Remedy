@@ -2462,7 +2462,7 @@ for k in np.arange(nexp):
         else:
             skysub, totsky = get_skysub(scirect[I], sky)
         skysubrect[I] = skysub
-        skyrect[I] = totsky
+        skyrect[I] = sky
         skyrect_orig[I] = sky
 
 scispectra = skysubrect * 1.
