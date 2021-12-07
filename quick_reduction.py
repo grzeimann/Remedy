@@ -2481,6 +2481,7 @@ fac[ExP==0.] = 1.
 mult_fac2 = mult_fac[np.newaxis, :] * fac[:, np.newaxis]
 scispectra[:] = scispectra / throughput[np.newaxis, :] * mult_fac2
 errspectra[:] = errspectra / throughput[np.newaxis, :] * mult_fac2
+skyrect[:] = skyrect * mult_fac2
 # =============================================================================
 # Make 2d sky-sub image 
 # =============================================================================
@@ -2782,12 +2783,13 @@ othersel, colors, offset, fwhm_virus, Nphotom = plot_photometry(GMag, stats, vmi
 raoffc, decoffc, raoffs, decoffs, Nastrom = plot_astrometry(f, A, np.where(objsel)[0], colors)
 
 norm = 1e-29 * 2.99792e18 / def_wave**2 * 1e17
+skyrect[:] *= norm
 if np.isfinite(offset):
     log.info('Offset multiplication: %0.2f' % offset)
     norm *= offset
 scispectra[:] *= norm
 errspectra[:] *= norm
-skyrect[:] *= norm
+
 # =============================================================================
 # Detections
 # =============================================================================
