@@ -70,7 +70,7 @@ def get_mask(weigh):
     # Select values that are not extreme outliers (watch for nans so use nanmedian)
     wmask = weigh > 0.3 * np.nanmedian(weigh)
     if wmask.sum() < 100:
-        return True
+        return np.ones(weigh.shape, dtype=bool)
     
     # Fit Polynomial
     fit = fitter(P, def_wave[wmask], weigh[wmask])
@@ -86,7 +86,7 @@ def get_mask(weigh):
     
     # Mask additionally spectra whose average weight is less than 5%
     if np.nanmedian(weigh) < 0.05:
-        mask = True
+        mask = np.ones(weigh.shape, dtype=bool)
     return mask
 
 DIRNAME = get_script_path()
