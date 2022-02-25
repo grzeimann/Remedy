@@ -285,7 +285,7 @@ for filename in shots_of_interest:
             log.info('Normalization for source %i: %0.2f' %
                      (i+1, normalization))
         # Add the shot "intname" to the table
-        dtable = Table(table[ind])
+        dtable = Table(table[i])
         dtable['obs_id'] = intname
         Sources.append(dtable)
         Spectra.append(spectrum)
