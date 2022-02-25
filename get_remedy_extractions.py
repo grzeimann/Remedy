@@ -69,6 +69,8 @@ def get_mask(weigh):
     
     # Select values that are not extreme outliers (watch for nans so use nanmedian)
     wmask = weigh > 0.3 * np.nanmedian(weigh)
+    if wmask.sum() < 100:
+        return True
     
     # Fit Polynomial
     fit = fitter(P, def_wave[wmask], weigh[wmask])
