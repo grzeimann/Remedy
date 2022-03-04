@@ -24,6 +24,7 @@ import psutil
 
 
 from astrometry import Astrometry
+from astroquery.mast import Catalogs
 from astropy.coordinates import SkyCoord, match_coordinates_sky
 from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.convolution import interpolate_replace_nans, Gaussian1DKernel
@@ -2600,7 +2601,9 @@ if op.exists(pname):
     Pan = Table.read(pname, format='ascii.fixed_width_two_line')
 else:
     try:
-        Pan = query_panstarrs(ra, dec, 11. / 60.)
+        Pan = Catalogs.query_region("%s %s" (ra, dec), radius=11./60., 
+                                       catalog="Panstarrs", data_release="dr2",
+                                       table="stack") 
     except:
         log.info('Panstarrs initial query failed, '
                  'trying with small coord adjustment')
