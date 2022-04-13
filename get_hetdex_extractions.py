@@ -142,6 +142,14 @@ parser.add_argument("-gm", "--gmag", type=str,
 		    help='''gmag name''',
 		    default='gmag')
 
+parser.add_argument("-li", "--low_index", type=int,
+		    help='''low index''',
+		    default=None)
+
+parser.add_argument("-hi", "--high_index", type=int,
+		    help='''high index''',
+		    default=None)
+
 parser.add_argument("-gn", "--g_normalize",
                     help='''Normalize by g magnitude''',
                     action="count", default=0)
@@ -162,7 +170,11 @@ filenames = sorted(glob.glob(op.join(args.folder, '*.h5')))
 # Get BinTable from input fits file
 # =============================================================================
 fitsfile = fits.open(args.extraction_file)
-bintable = fitsfile[1].data
+if (args.low_index is not None) and (args.high_index is not None):
+    bintable = fitsfile[1].data[args.low_index:args.high_index]
+else:
+    bintable = fitsfile[1].data
+
 coords = SkyCoord(bintable[args.RA]*u.deg, bintable[args.Dec]*u.deg)
 
 # =============================================================================
