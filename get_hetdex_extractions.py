@@ -256,14 +256,17 @@ for filename in shots_of_interest:
     
     # Setup extract for extraction
     E = Extract()
+    log.info('Time Check 1')
     E.ra, E.dec = (t.root.Data.Fibers.cols.ra[:], t.root.Data.Fibers.cols.dec[:])
+    log.info('Time Check 2')
     E.data = t.root.Data.Fibers.cols.calfib[:] * 2.
     E.error = t.root.Data.Fibers.cols.calfibe[:] * 2.
+    log.info('Time Check 3')
     E.ifuslot_i = t.root.Data.Fibers.cols.ifuslot[:]
     E.mask = np.isfinite(E.data)
     tophat = E.tophat_psf(3., 10.5, 0.025)
     moffat = E.moffat_psf(seeing, 10.5, 0.025)
-
+    log.info('Time Check 4')
     newpsf = tophat[0] * moffat[0] / np.max(tophat[0])
     psf = [newpsf, moffat[1], moffat[2]]
     E.psf = psf
