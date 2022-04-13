@@ -176,8 +176,14 @@ table.add_column(Column(np.zeros((len(table),), dtype=int), name='obs_id'))
 # =============================================================================
 matched_sources = {}
 shots_of_interest = []
+
+log.info('Combing through %i h5 files' % len(filenames))
+cnt = 0
 for filename in filenames:
     # Open h5 file
+    if (cnt % 100 == 0):
+        log.info('Looking at filename number %i' % (cnt+1))
+    cnt += 1
     t = tables.open_file(filename, mode='r')
     R = t.root.Shot.cols.ra[0]
     D = t.root.Shot.cols.dec[0] 
