@@ -247,7 +247,7 @@ for filename in shots_of_interest:
     R = t.root.Shot.cols.ra[0]
     D = t.root.Shot.cols.dec[0]
     pa = t.root.Shot.cols.pa[0]
-    rot = t.root.Shot.cols.rot[0]
+    # rot = t.root.Shot.cols.rot[0]
     seeing = t.root.Shot.cols.fwhm_virus[0]
     
     # Build the astrometry for the 
