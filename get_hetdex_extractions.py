@@ -239,8 +239,6 @@ for filename in shots_of_interest:
     deltaRA = ((epoch - args.epoch) * pmra / 1e3 / 3600. /
                        np.cos(bintable[args.Dec][ind] * np.pi / 180.))
     deltaDE = (epoch - args.epoch) * pmdec / 1e3 / 3600.
-    deltaRA[np.isnan(deltaRA)] = 0.0
-    deltaDE[np.isnan(deltaDE)] = 0.0
     ncoords = SkyCoord((bintable[args.RA][ind]+deltaRA)*u.deg,
                        (bintable[args.Dec][ind]+deltaDE)*u.deg)
     
