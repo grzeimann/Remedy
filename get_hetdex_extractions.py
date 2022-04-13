@@ -225,8 +225,8 @@ for filename in shots_of_interest:
     ind = matched_sources[filename]
     
     # Get date, integer name of the shot (DATEOBSID), and epoch from the date
-    date = op.basename(filename).split('_')[0]
-    intname = int(''.join(op.basename(filename).split('.')[0].split('_')))
+    date = op.basename(filename).split('v')[0]
+    intname = int(''.join(op.basename(filename).split('.')[0].split('v')))
     epoch = Time(dt(int(date[:4]), int(date[4:6]), int(date[6:8]))).byear
     
     # Get the proper motion corrections
