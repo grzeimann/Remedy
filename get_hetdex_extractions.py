@@ -260,7 +260,7 @@ for filename in shots_of_interest:
     E = Extract()
     E.ra, E.dec = (t.root.Data.Fibers.cols.ra[:], t.root.Data.Fibers.cols.dec[:])
     E.data = t.root.Data.Fibers.cols.calfib[:] * 2.
-    E.error = t.root.Data.Fibers.cols.error[:] * 2.
+    E.error = t.root.Data.Fibers.cols.calfibe[:] * 2.
     E.ifuslot_i = t.root.Data.Fibers.cols.ifuslot[:]
     E.mask = np.isfinite(E.data)
     tophat = E.tophat_psf(3., 10.5, 0.025)
