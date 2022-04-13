@@ -230,9 +230,15 @@ for filename in shots_of_interest:
     epoch = Time(dt(int(date[:4]), int(date[4:6]), int(date[6:8]))).byear
     
     # Get the proper motion corrections
-    deltaRA = ((epoch - args.epoch) * bintable['pmra'][ind] / 1e3 / 3600. /
+    try:
+        pmra = bintable['pmra'][ind] 
+        pmdec = bintable['pmdec'][ind]
+    except:
+        pmra = 0.0
+        pmdec = 0.0
+    deltaRA = ((epoch - args.epoch) * pmra / 1e3 / 3600. /
                        np.cos(bintable[args.Dec][ind] * np.pi / 180.))
-    deltaDE = (epoch - args.epoch) * bintable['pmdec'][ind] / 1e3 / 3600.
+    deltaDE = (epoch - args.epoch) * pmdec / 1e3 / 3600.
     deltaRA[np.isnan(deltaRA)] = 0.0
     deltaDE[np.isnan(deltaDE)] = 0.0
     ncoords = SkyCoord((bintable[args.RA][ind]+deltaRA)*u.deg,
@@ -244,7 +250,7 @@ for filename in shots_of_interest:
     D = t.root.Shot.cols.dec[0]
     pa = t.root.Shot.cols.pa[0]
     rot = t.root.Shot.cols.rot[0]
-    seeing = t.root.Survey.cols.fwhm[0]
+    seeing = t.root.Shot.cols.fwhm_virus[0]
     
     # Build the astrometry for the 
     A = Astrometry(R, D, pa, 0., 0., fplane_file=args.fplane_file)
