@@ -19,6 +19,7 @@ g = fits.open(filename2)
 
 inds = np.where(f[1].data['sn'] > 100.)[0]
 inds2 = np.where(g[1].data['sn'] > 20.)[0]
+print('The two arrays are %i and %i long' % (len(inds), len(inds2)))
 
 s = SkyCoord(f[1].data['RA'][inds]*u.deg, f[1].data['Dec'][inds]*u.deg)
 S = SkyCoord(g[1].data['RA'][inds2]*u.deg, g[1].data['Dec'][inds2]*u.deg)
