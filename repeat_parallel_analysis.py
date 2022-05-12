@@ -32,6 +32,8 @@ cnt = 0
 for i in inds:
     idx, d2d, d3d = s[i].match_to_catalog_sky(S)
     sel = np.where((d2d.arcsec < 1.)  * (f[1].data['shotid'][i] != shotids))[0]
+    if c(nt % 100) == 0:
+        print('We are at %i' % cnt+1)
     if len(sel) > 0.:
         cnt += len(sel)
         keep1.append(i)
