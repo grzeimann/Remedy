@@ -23,6 +23,7 @@ print('The two arrays are %i and %i long' % (len(inds), len(inds2)))
 
 s = SkyCoord(f[1].data['RA'][inds]*u.deg, f[1].data['Dec'][inds]*u.deg)
 S = SkyCoord(g[1].data['RA'][inds2]*u.deg, g[1].data['Dec'][inds2]*u.deg)
+shotid = f[1].data['shotid'][inds]
 shotids = g[1].data['shotid'][inds2]
 spectra = f[2].data[inds]
 spectra2 = g[2].data[inds2]
@@ -30,10 +31,9 @@ spectra2 = g[2].data[inds2]
 keep1 = []
 keep2 = []
 cnt = 0
-for i in inds:
+for i in np.arange(len(inds)):
     d2d = s[i].separation(S)
-    print(len(d2d))
-    sel = np.where((d2d.arcsec < 1.)  * (f[1].data['shotid'][i] != shotids))[0]
+    sel = np.where((d2d.arcsec < 1.)  * (shotid[i] != shotids))[0]
     if (cnt % 100) == 0:
         print('We are at %i' % (cnt+1))
     if len(sel) > 0.:
