@@ -31,7 +31,7 @@ keep1 = []
 keep2 = []
 cnt = 0
 for i in inds:
-    idx, d2d, d3d = s[i].match_to_catalog_sky(S)
+    idx, d2d, d3d = S.match_to_catalog_sky(s[i])
     print(len(idx))
     sel = np.where((d2d.arcsec < 1.)  * (f[1].data['shotid'][i] != shotids))[0]
     if (cnt % 100) == 0:
