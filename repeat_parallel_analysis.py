@@ -47,4 +47,5 @@ for i, sel in zip(keep1, keep2):
     for s in sel:
         diff[cnt] = (spectra[i] - spectra2[s]) / spectra[i]
         cnt += 1
-fits.PrimaryHDU(diff).writeto('/work/03730/gregz/maverick/parallel/repeat_difference.fits')
+fits.PrimaryHDU(diff).writeto('/work/03730/gregz/maverick/parallel/repeat_difference.fits',
+                              overwrite=True)
