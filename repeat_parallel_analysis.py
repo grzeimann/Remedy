@@ -20,7 +20,7 @@ g = fits.open(filename2)
 inds = np.where(f[1].data['sn'] > 100.)[0]
 inds2 = np.where(g[1].data['sn'] > 20.)[0]
 
-s = SkyCoord(f[1].data['RA'][inds2]*u.deg, f[1].data['Dec'][inds2]*u.deg)
+s = SkyCoord(f[1].data['RA'][inds]*u.deg, f[1].data['Dec'][inds]*u.deg)
 S = SkyCoord(g[1].data['RA'][inds2]*u.deg, g[1].data['Dec'][inds2]*u.deg)
 shotids = g[1].data['shotid'][inds2]
 spectra = f[2].data[inds]
