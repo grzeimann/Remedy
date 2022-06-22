@@ -126,6 +126,10 @@ parser.add_argument("-sf", "--source_file",
                     help='''file for spectrum to add in cube''',
                     type=str, default=None)
 
+parser.add_argument("-nt", "--nametype",
+                    help='''nametype''',
+                    type=str, default='sci')
+
 parser.add_argument("-s", "--simulate",
                     help='''Simulate source''',
                     action="count", default=0)
@@ -828,7 +832,6 @@ def get_fiber_to_fiber(fltspec, scispec, wave_all, twispec):
     sky = S(wave_all) * ftf 
     error = np.sqrt((5. * 3.2**2) + (scispec * 5.)) / 5.
     cont = get_continuum(scispec-sky, nbins=50)
-    
     return ftf, (scispec - sky - cont) / error
     
 def background_pixels(trace, image):
@@ -1005,7 +1008,7 @@ def get_sci_twi_files(kind='twi'):
             twinames = sorted(tf.getnames())
     return scinames, twinames, scitarfile, twitarfile
 
-def reduce_ifuslot(ifuloop, h5table, tableh5):
+def reduce_ifuslot(ifuloop, h5table, tableh5, nametype='sci'):
     '''
     Parameters
     ----------
@@ -1036,7 +1039,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
     specrow = tableh5.row
     ifuslot = '%03d' % h5table[ifuloop[0]]['ifuslot']
     amp = 'LL'
-    fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
+    fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, nametype)
     filenames = fnmatch.filter(scinames, fnames_glob)
     nexposures = len(filenames)
     N = len(ifuloop) * nexposures * 112
@@ -2354,7 +2357,7 @@ tableh5 = h5spec.create_table(h5spec.root, 'Images', Images,
                             "Image Information")
 (pos, fltspectra, scispectra, errspectra, wave_all, 
  fns, tfile, _I, C1, intm, ExP, mscispectra, twispectra) = reduce_ifuslot(ziploop, h5table,
-                                                              tableh5)
+                                                              tableh5, args.nametype)
 
 for i in np.arange(len(allifus)):
     allifus[i] = catch_ifuslot_swap(allifus[i], args.date)
