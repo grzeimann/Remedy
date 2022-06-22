@@ -376,7 +376,7 @@ def get_ifuslots():
     '''
         
     file_glob = build_path(args.rootdir, args.date, args.observation,
-                           '*', 'LL', exp='exp01')
+                           '*', 'LL', exp='exp01', base=args.nametype)
         
     filenames = sorted(glob.glob(file_glob))
     
@@ -982,7 +982,7 @@ def get_sci_twi_files(kind='twi'):
         name of the tar file containing the fits files if there is one
     '''
     file_glob = build_path(args.rootdir, args.date, args.observation,
-                           '047', 'LL')
+                           '047', 'LL', base=args.nametype)
     path = splitall(file_glob)
     scitarfile = op.join(*path[:-3]) + ".tar"
     if op.exists(scitarfile):
