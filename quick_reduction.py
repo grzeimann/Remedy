@@ -1008,7 +1008,7 @@ def get_sci_twi_files(kind='twi'):
             twinames = sorted(tf.getnames())
     return scinames, twinames, scitarfile, twitarfile
 
-def reduce_ifuslot(ifuloop, h5table, tableh5, nametype='sci'):
+def reduce_ifuslot(ifuloop, h5table, tableh5):
     '''
     Parameters
     ----------
@@ -1036,10 +1036,11 @@ def reduce_ifuslot(ifuloop, h5table, tableh5, nametype='sci'):
     # Check if tarred
 
     scinames, twinames, scitarfile, twitarfile = get_sci_twi_files()
+    
     specrow = tableh5.row
     ifuslot = '%03d' % h5table[ifuloop[0]]['ifuslot']
     amp = 'LL'
-    fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, nametype)
+    fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, args.nametype)
     filenames = fnmatch.filter(scinames, fnames_glob)
     nexposures = len(filenames)
     N = len(ifuloop) * nexposures * 112
@@ -1104,7 +1105,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5, nametype='sci'):
         mastersci[:] = mastersci - plaw2
         
         log.info('Done making mastertwi for %s%s' % (ifuslot, amp))
-        fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, 'sci')
+        fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, args.nametype)
         filenames = fnmatch.filter(scinames, fnames_glob)
         for j, fn in enumerate(filenames):
             sciimage, scierror, header = base_reduction(fn, tfile=scitarfile,
@@ -2357,7 +2358,7 @@ tableh5 = h5spec.create_table(h5spec.root, 'Images', Images,
                             "Image Information")
 (pos, fltspectra, scispectra, errspectra, wave_all, 
  fns, tfile, _I, C1, intm, ExP, mscispectra, twispectra) = reduce_ifuslot(ziploop, h5table,
-                                                              tableh5, args.nametype)
+                                                              tableh5)
 
 for i in np.arange(len(allifus)):
     allifus[i] = catch_ifuslot_swap(allifus[i], args.date)
