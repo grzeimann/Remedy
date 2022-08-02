@@ -2587,8 +2587,8 @@ for i in np.arange(0, nexp):
     scispectra[sel] = scispectra[sel] / gratio[i]
     errspectra[sel] = errspectra[sel] / gratio[i]
     skyrect[sel] = skyrect[sel] / (millum[i] / 5e5)
-    log.info('Guider ratio for exposure %i to 50m^2: %0.2f' %
-             (i+1, gratio[i]))
+    log.info('%s_%07d Guider ratio for exposure %i to 50m^2: %0.2f' %
+             (args.date, args.observation, i+1, gratio[i]))
 
 # =============================================================================
 # Build astrometry class
