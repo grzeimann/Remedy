@@ -2694,7 +2694,7 @@ for i in info:
     raifu, decifu = A.get_ifuslot_ra_dec(ifuslot)
     c = SkyCoord(raifu*units.deg, decifu*units.deg, frame='fk5')
     sep = c.separation(pancat)
-    sel = sep.arcsec < 35.
+    sel = (sep.arcsec < 35.) * (gC < 23.) * (gC > 10.)
     R.append(raC[sel])
     D.append(decC[sel])
     GMM.append([gC[sel], rC[sel], iC[sel], zC[sel], yC[sel]])
