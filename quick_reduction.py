@@ -2601,13 +2601,14 @@ A = Astrometry(ra, dec, pa, 0., 0., fplane_file=args.fplane_file)
 # =============================================================================
 log.info('Querying Pan-STARRS at: %0.5f %0.5f' % (ra, dec))
 pname = 'Panstarrs_%0.6f_%0.5f_%0.4f.dat' % (ra, dec, 11. / 60.)
+log.info('%s_%07d: %s' % (args.date, args.observation, pname))
 if op.exists(pname):
     Pan = Table.read(pname, format='ascii.fixed_width_two_line')
 else:
     try:
         Pan = Catalogs.query_region("%s %s" % (ra, dec), radius=11./60., 
                                        catalog="Panstarrs", data_release="dr2",
-                                       table="stack") 
+                                       table="mean") 
     except:
         log.info('Panstarrs initial query failed, '
                  'trying with small coord adjustment')
