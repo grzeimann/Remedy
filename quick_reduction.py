@@ -2586,7 +2586,7 @@ for i in np.arange(0, nexp):
     sel = (np.array(inds / 112, dtype=int) % nexp) == i
     scispectra[sel] = scispectra[sel] / gratio[i]
     errspectra[sel] = errspectra[sel] / gratio[i]
-    skyrect[sel] = skyrect[sel] / (millum[i] / 5e5)
+    skyrect[sel] = skyrect[sel] / gratio[i]
     log.info('%s_%07d Guider ratio for exposure %i to 50m^2: %0.2f' %
              (args.date, args.observation, i+1, gratio[i]))
 
