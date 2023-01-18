@@ -363,6 +363,8 @@ def get_trace(twilight, specid, ifuslot, ifuid, amp, obsdate, tr_folder):
     for i in np.arange(Trace.shape[0]):
         sel = Trace[i, :] > 0.
         trace[i] = np.polyval(np.polyfit(xchunks[sel], Trace[i, sel], 7), x)
+    if (specid == '504') and (ifuid == '018') and (amp == 'RU'):
+        return trace[:-1, :], ref[:-1]
     return trace, ref
 
 
