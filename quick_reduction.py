@@ -2612,8 +2612,9 @@ else:
     except:
         log.info('Panstarrs initial query failed, '
                  'trying with small coord adjustment')
-        Pan = query_panstarrs(ra+np.random.randn()*0.001,
-                              dec+np.random.randn()*0.001, 11. / 60.)
+        Pan = Catalogs.query_region("%s %s" % (ra+0.0001, dec+0.0001), radius=11./60., 
+                                       catalog="Panstarrs", data_release="dr2",
+                                       table="mean") 
     Pan.write(pname, format='ascii.fixed_width_two_line')
 
 raC, decC, gC, rC, iC, zC, yC = (np.array(Pan['raMean']), np.array(Pan['decMean']),
