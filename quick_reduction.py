@@ -1873,6 +1873,7 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
         mean, median, std = sigma_clipped_stats(image, sigma=3.0, stdfunc=np.std)
         daofind = DAOStarFinder(fwhm=4.0, threshold=7. * std, exclude_border=True) 
         sources = daofind(image)
+        print(sources)
         if sources is None:
             sources = []
         log.info('Found %i sources in %03d' % (len(sources), ui))
