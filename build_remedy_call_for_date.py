@@ -64,6 +64,7 @@ for date, tarfolder in zip(dates, tarfolders):
                 if target in Target:
                     tarlist.append([obs, name[-8:-5], Target, prog, exptime, date])
             flag = False
+print('Number of calls: %i' % len(tarlist))
 with open('%s_calls' % tarlist[0][-1], 'w') as out_file:       
     for chunk in np.array_split(tarlist, ncalls):
         calls = [call % (ch[-1], int(ch[0]), cal) for ch in chunk]
