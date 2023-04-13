@@ -1740,7 +1740,7 @@ def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-0.25,
     from astropy.visualization.stretch import AsinhStretch
     from astropy.visualization import ImageNormalize
     stretch = AsinhStretch()
-    norm = ImageNormalize(stretch=stretch)
+    norm = ImageNormalize(stretch=stretch, vmin=vmin, vmax=vmax)
     fig = plt.figure(figsize=(8, 8))
     for i in np.arange(10):
         for j in np.arange(1,11):
@@ -1772,7 +1772,7 @@ def cofes_plots(ifunums, specnums, filename_array, outfile_name, fF, vmin=-0.25,
                     #        fontsize=10)
             
                 except:
-                    ax.imshow(np.zeros((65, 65)), vmin=vmin, vmax=vmax,
+                    ax.imshow(np.zeros((65, 65)),
                               interpolation='nearest', origin='lower',
                               cmap=cmap, norm=norm)
     for i in np.arange(10):
