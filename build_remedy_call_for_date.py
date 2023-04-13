@@ -49,8 +49,11 @@ for date, tarfolder in zip(dates, tarfolders):
         except:
             flag = False
         if name[-5:] == '.fits':
-            b = fits.open(T.extractfile(a))
-            Target = b[0].header['OBJECT']
+            try:
+                b = fits.open(T.extractfile(a))
+                Target = b[0].header['OBJECT']
+            except:
+                print('Failed to open fits file from %s' % tarfolder)
             try:
                 exptime = b[0].header['EXPTIME']
             except:
