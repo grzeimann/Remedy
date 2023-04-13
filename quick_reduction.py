@@ -1605,7 +1605,6 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords, gC,
     Sources = np.zeros((len(sources), 12))
     Sources[:, 0], Sources[:, 1] = (sources['xcentroid'], sources['ycentroid'])
     Sources[:, 2] = gmags
-    print(ran, Sources)
     RA, Dec = A.get_ifupos_ra_dec('%03d' % ifuslot,
                                   Sources[:, 0]*scale + ran[0],
                                   Sources[:, 1]*scale + ran[2])
@@ -1874,7 +1873,6 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
         mean, median, std = sigma_clipped_stats(image, sigma=3.0, stdfunc=np.std)
         daofind = DAOStarFinder(fwhm=4.0, threshold=7. * std, exclude_border=True) 
         sources = daofind(image)
-        print(sources)
         if sources is None:
             sources = []
         log.info('Found %i sources in %03d' % (len(sources), ui))
