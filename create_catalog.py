@@ -22,7 +22,7 @@ from astropy.time import Time
 import astropy.units as u
 from input_utils import setup_logging
 from astropy.stats import biweight_location as biweight
-from astorpy.stats import mad_std
+from astropy.stats import mad_std
 
 # =============================================================================
 # Set Criteria for Keeping Spectrum
