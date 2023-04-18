@@ -215,7 +215,7 @@ for niter in np.arange(2):
         imag = h5file.root.CatSpectra.cols.imag[:]
         zmag = h5file.root.CatSpectra.cols.zmag[:]
         ymag = h5file.root.CatSpectra.cols.ymag[:]
-        offset = h5file.root.CatSpectra.cols.offset[0]
+        offset = h5file.root.Survey.cols.offset[0]
         ra = h5file.root.CatSpectra.cols.ra[:]
         dec = h5file.root.CatSpectra.cols.dec[:]
         avgdec = np.mean(dec)
