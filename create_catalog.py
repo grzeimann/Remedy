@@ -21,7 +21,8 @@ from astropy.table import Table
 from astropy.time import Time
 import astropy.units as u
 from input_utils import setup_logging
-from math_utils import biweight
+from astropy.stats import biweight_location as biweight
+from astorpy.stats import mad_std
 
 # =============================================================================
 # Set Criteria for Keeping Spectrum
@@ -243,7 +244,8 @@ for niter in np.arange(2):
         normalization = 10**(-0.4 * (gmag[goodspec] - virus_gmags))
         norm_spectra = spectra[goodspec] * normalization[:, np.newaxis]
         osel = sn[goodspec] > 5.
-        average_norm, std = biweight(normalization[osel], calc_std=True)
+        average_norm = biweight(normalization[osel], ignore_nan=True)
+        std = mad_std(normalization[osel], ignore_nan=True)
         if niter == 0:
             log.info('%s has %i/%i and average normalization correction: %0.2f +/- %0.2f' %
                      (name, osel.sum(), N, average_norm, std))
