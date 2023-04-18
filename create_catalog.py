@@ -215,6 +215,7 @@ for niter in np.arange(2):
         imag = h5file.root.CatSpectra.cols.imag[:]
         zmag = h5file.root.CatSpectra.cols.zmag[:]
         ymag = h5file.root.CatSpectra.cols.ymag[:]
+        offset = h5file.root.CatSpectra.cols.offset[0]
         ra = h5file.root.CatSpectra.cols.ra[:]
         dec = h5file.root.CatSpectra.cols.dec[:]
         avgdec = np.mean(dec)
@@ -247,8 +248,8 @@ for niter in np.arange(2):
         average_norm = biweight(normalization[osel], ignore_nan=True)
         std = mad_std(normalization[osel], ignore_nan=True)
         if niter == 0:
-            log.info('%s has %i/%i and average normalization correction: %0.2f +/- %0.2f' %
-                     (name, osel.sum(), N, average_norm, std))
+            log.info('%s has %i/%i and average normalization correction: %0.2f +/- %0.2f --- %0.2f' %
+                     (name, osel.sum(), N, average_norm, std, offset))
         if niter == 1:
             inds = np.random.randint(N, size=20)
             es = np.zeros((20, 1036))
