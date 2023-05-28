@@ -83,13 +83,17 @@ for tarfolder in tarfolders:
                     prog = b[0].header['QPROG']
                 except:
                     prog = 'None'
+                try: 
+                    dt = b[0].header['DATE']
+                except: 
+                    dt = '20220222T00:00:00.0'
                 try:
                     ra = b[0].header['QRA']
                     dec = b[0].header['QDEC']
                 except:
                     ra = '00:00:00'
                     dec = '+00:00:00'
-                print('%s: %s  %s  %s %0.1f %s %s' % (tarfolder, name[-8:-5], 
-                                                Target, prog, exptime, ra, dec))
+                print('%s: %s  %s  %s %0.1f %s %s %s' % (tarfolder, name[-8:-5], 
+                                                Target, prog, exptime, ra, dec, dt))
                 flag = False
     T.close()
