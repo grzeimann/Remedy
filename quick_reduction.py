@@ -2667,8 +2667,8 @@ for i in info:
         #F = fits.PrimaryHDU(np.array(image, 'float32'), header=header)
         #F.writeto(name, overwrite=True)
 outfile_name = '%s_%07d_recon.png' % (args.date, args.observation)
-objsel = (f['Cgmag'] < 22.) * (f['dist'] < 1.5)
-nobjsel = (f['Cgmag'] < 22.)
+objsel = (f['Cgmag'] < 22.) * (f['dist'] < 1.5) * (f['Cgmag'] > 14.) 
+nobjsel = (f['Cgmag'] < 22.) * (f['Cgmag'] > 14.) 
 cofes_plots(ifunums, specnums, filename_array, outfile_name, f[nobjsel])
 
 log.info('%s_%07d Astrometry: %0.6f %0.5f %0.2f' % (args.date, args.observation, A.ra0, A.dec0, A.rot))
