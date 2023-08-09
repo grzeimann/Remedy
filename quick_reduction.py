@@ -1614,7 +1614,6 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords, gC,
     B = A.get_ifupos_ra_dec('%03d' % ifuslot,
                                   Sources[:, 0]*scale + ran[0],
                                   Sources[:, 1]*scale + ran[2])
-    print(B)
     RA, Dec = A.get_ifupos_ra_dec('%03d' % ifuslot,
                                   Sources[:, 0]*scale + ran[0],
                                   Sources[:, 1]*scale + ran[2])
@@ -1881,6 +1880,7 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
                                        ran=ran,  scale=scale, seeing=seeing)
         # Make full fits file with wcs info (using default header)
         mean, median, std = sigma_clipped_stats(image, sigma=3.0, stdfunc=np.std)
+        print(mean, median, std)
         daofind = DAOStarFinder(fwhm=4.0, threshold=7. * std, exclude_border=True) 
         sources = daofind(image)
         if sources is None:
