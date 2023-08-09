@@ -1611,6 +1611,10 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords, gC,
     Sources = np.zeros((len(sources), 12))
     Sources[:, 0], Sources[:, 1] = (X, Y)
     Sources[:, 2] = gmags
+    B = A.get_ifupos_ra_dec('%03d' % ifuslot,
+                                  Sources[:, 0]*scale + ran[0],
+                                  Sources[:, 1]*scale + ran[2])
+    print(B)
     RA, Dec = A.get_ifupos_ra_dec('%03d' % ifuslot,
                                   Sources[:, 0]*scale + ran[0],
                                   Sources[:, 1]*scale + ran[2])
