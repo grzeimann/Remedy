@@ -1598,7 +1598,9 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords, gC,
         return None
 
     positions = (sources['xcentroid'], sources['ycentroid'])
+    print(positions)
     apertures = CircularAperture(positions, r=apradius)
+    print(apertures)
     phot_table = aperture_photometry(image, apertures,
                                      mask=~np.isfinite(image))
     gmags = np.where(phot_table['aperture_sum'] > 0.,
