@@ -43,7 +43,7 @@ from fiber_utils import get_spectra, get_spectra_error, get_spectra_chi2
 from input_utils import setup_logging
 from math_utils import biweight
 from photutils import DAOStarFinder, aperture_photometry, CircularAperture
-from photutils import centroid_com
+from photutils.centroids import centroid_com
 from scipy.interpolate import griddata, interp1d, interp2d
 from scipy.signal import savgol_filter
 from sklearn.decomposition import PCA
@@ -2614,7 +2614,7 @@ else:
                  'trying with small coord adjustment')
         Pan = Catalogs.query_region("%s %s" % (ra, dec), radius=11./60., 
                                        catalog="Panstarrs", data_release="dr2",
-                                       table="mean")
+                                       table="stack")
     Pan.write(pname, format='ascii.fixed_width_two_line')
 
 raC, decC, gC, rC, iC, zC, yC = (np.array(Pan['raMean']), np.array(Pan['decMean']),
