@@ -42,7 +42,9 @@ from fiber_utils import build_model_image, detect_sources, get_powerlaw
 from fiber_utils import get_spectra, get_spectra_error, get_spectra_chi2
 from input_utils import setup_logging
 from math_utils import biweight
-from photutils import DAOStarFinder, aperture_photometry, CircularAperture
+from photutils.detection import DAOStarFinder
+from photutils.aperture import aperture_photometry
+from photutils.aperture import CircularAperture
 from photutils.centroids import centroid_com
 from scipy.interpolate import griddata, interp1d, interp2d
 from scipy.signal import savgol_filter
