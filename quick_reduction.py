@@ -1596,9 +1596,12 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords, gC,
     '''
     if len(sources) == 0:
         return None
+    positions = []
+    X, Y = (np.array(sources['xcentroid']),
+            np.array(sources['ycentroid']))
+    for x, y in zip(X, Y):
+        positions.append([float(x), float(y)])
 
-    positions = (np.array(sources['xcentroid']), 
-                 np.array(sources['ycentroid']))
     apertures = CircularAperture(positions, r=apradius)
     phot_table = aperture_photometry(image, apertures,
                                      mask=~np.isfinite(image))
@@ -1606,15 +1609,15 @@ def match_to_archive(sources, image, A, ifuslot, scale, ran, coords, gC,
                      -2.5 * np.log10(phot_table['aperture_sum']) + 23.9,
                      99.)
     Sources = np.zeros((len(sources), 12))
-    Sources[:, 0], Sources[:, 1] = (sources['xcentroid'], sources['ycentroid'])
+    Sources[:, 0], Sources[:, 1] = (X, Y)
     Sources[:, 2] = gmags
     RA, Dec = A.get_ifupos_ra_dec('%03d' % ifuslot,
                                   Sources[:, 0]*scale + ran[0],
                                   Sources[:, 1]*scale + ran[2])
     ifu = A.fplane.by_ifuslot('%03d' % ifuslot)
     ifux, ifuy = (ifu.y, ifu.x) 
-    fx, fy = (sources['xcentroid']*scale + ran[0] + ifux,
-              sources['ycentroid']*scale + ran[2] + ifuy)
+    fx, fy = (X*scale + ran[0] + ifux,
+              Y*scale + ran[2] + ifuy)
 
     # Find closest bright source, use that for offset, then match
     # Make image class that combines, does astrometry, detections, updates coords
