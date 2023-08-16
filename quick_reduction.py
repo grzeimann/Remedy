@@ -2617,6 +2617,16 @@ pname = 'Panstarrs_%0.6f_%0.5f_%0.4f.dat' % (ra, dec, 11. / 60.)
 log.info('%s_%07d: %s' % (args.date, args.observation, pname))
 if op.exists(pname):
     Pan = Table.read(pname, format='ascii.fixed_width_two_line')
+    try:
+        raC, decC, gC, rC, iC, zC, yC = (np.array(Pan['raMean']), np.array(Pan['decMean']),
+                         np.array(Pan['gMeanApMag']), np.array(Pan['rMeanApMag']),
+                         np.array(Pan['iMeanApMag']), np.array(Pan['zMeanApMag']),
+                         np.array(Pan['yMeanApMag']))
+    except:
+        raC, decC, gC, rC, iC, zC, yC = (np.array(Pan['raMean']), np.array(Pan['decMean']),
+                         np.array(Pan['gApMag']), np.array(Pan['rApMag']),
+                         np.array(Pan['iApMag']), np.array(Pan['zApMag']),
+                         np.array(Pan['yApMag']))
 else:
     try:
          
