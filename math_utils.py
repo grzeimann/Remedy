@@ -69,7 +69,7 @@ def biweight(a, nan_treatment=True, c=9.0, axis=None, calc_std=False):
     
     u = d / c / MAD
      
-    mask = ((np.abs(u) < 1.) * np.isfinite(u)).astype(np.int)
+    mask = ((np.abs(u) < 1.) * np.isfinite(u)).astype(int)
     u1 = (1 - u**2)**2
     BL = (a_median + sumfunc(d * u1 * mask, axis=axis) /
           sumfunc(u1 * mask, axis))
