@@ -11,7 +11,7 @@ import numpy as np
 from astropy.convolution import Gaussian2DKernel, convolve
 from astropy.modeling.models import Moffat2D, Gaussian2D
 from input_utils import setup_logging
-from scipy.interpolate import griddata, LinearNDInterpolator
+from scipy.interpolate import griddata, LinearNDInterpolator, interp2d
 from math_utils import biweight
 
 class Extract:
@@ -138,7 +138,7 @@ class Extract:
         xgrid, ygrid = np.meshgrid(x, y)
         t = np.linspace(0., np.pi * 2., 360)
         r = np.arange(radius - fibradius, radius + fibradius * 7./6.,
-                      1. / 6. * fibradius)
+                      1. / 36. * fibradius)
         xr, yr, zr = ([], [], [])
         for i, ri in enumerate(r):
             xr.append(np.cos(t) * ri)
@@ -147,7 +147,7 @@ class Extract:
                       np.ones(t.shape) / (np.pi * fibradius**2))
         xr, yr, zr = [np.hstack(var) for var in [xr, yr, zr]]
         psf = griddata(np.array([xr, yr]).swapaxes(0,1), zr, (xgrid, ygrid),
-                       method='linear')
+                       method='nearest')
         psf[np.isnan(psf)]=0.
         zarray = np.array([psf, xgrid, ygrid])
         zarray[0] /= zarray[0].sum()
@@ -333,7 +333,7 @@ class Extract:
         if convolve_image:
             seeing = seeing_fac / scale
             G = Gaussian2DKernel(seeing / 2.35)
-        if interp_kind not in ['linear', 'cubic']:
+        if interp_kind not in ['linear', 'cubic', 'nearest']:
             self.log.warning('interp_kind must be "linear" or "cubic"')
             self.log.warning('Using "linear" for interp_kind')
             interp_kind='linear'
@@ -362,7 +362,7 @@ class Extract:
             image_list.append(grid_z)
         image = np.array(image_list)
         image[np.isnan(image)] = 0.0
-        zarray = np.array([image, xgrid-xc, ygrid-yc])
+        zarray = [image, xgrid-xc, ygrid-yc]
         return zarray
 
     def get_psf_curve_of_growth(self, psf):
@@ -413,14 +413,13 @@ class Extract:
         '''
         S = np.zeros((len(ifux), 2))
         T = np.array([psf[1].ravel(), psf[2].ravel()]).swapaxes(0, 1)
-        I = LinearNDInterpolator(T, psf[0].ravel(),
-                                 fill_value=0.0)
+        I = LinearNDInterpolator(T, psf[0].ravel())
         weights = np.zeros((len(ifux), len(self.wave)))
         for i in np.arange(len(self.wave)):
             S[:, 0] = ifux - self.ADRra[i] - xc
             S[:, 1] = ifuy - self.ADRdec[i] - yc
             weights[:, i] = I(S[:, 0], S[:, 1])
-        self.log.info('Average weight is: %0.2f' % np.median(np.sum(weights, axis=0)))
+        self.log.info('Average weight is: %0.2f' % np.nanmedian(np.nansum(weights, axis=0)))
         return weights
     
     def build_weights_no_ADR(self, xc, yc, ifux, ifuy, psf):
@@ -447,8 +446,7 @@ class Extract:
         '''
         S = np.zeros((len(ifux), 2))
         T = np.array([psf[1].ravel(), psf[2].ravel()]).swapaxes(0, 1)
-        I = LinearNDInterpolator(T, psf[0].ravel(),
-                                 fill_value=0.0)
+        I = LinearNDInterpolator(T, psf[0].ravel())
         scale = np.abs(psf[1][0, 1] - psf[1][0, 0])
         area = 0.75**2 * np.pi
         S[:, 0] = ifux - xc
@@ -486,7 +484,7 @@ class Extract:
         spectrum_error = np.sqrt(np.nansum(mask * weights * var, axis=0) /
                                  np.nansum(mask * weights**2, axis=0))
         # Only use wavelengths with enough weight to avoid large noise spikes
-        w = np.sum(mask * weights, axis=0)
+        w = np.nansum(mask * weights, axis=0)
         bad = w < 0.05
         for i in np.arange(1, 2):
             bad[i:] += bad[:-i]
@@ -572,12 +570,13 @@ class Extract:
         if info_result is None:
             return [], [], [], [], [], [], []
         
-        self.log.info('Extracting %i' % ind)
+        self.log.info('Extracting %i' % (ind+1))
         rafibers, decfibers, data, error, mask, ifuslot_i = info_result
         d = np.sqrt(rafibers**2 + decfibers**2)
         mask_extract = mask
+
         weights = self.build_weights(0., 0., rafibers, decfibers, self.psf)
-        norm = np.sum(weights, axis=0)
+        norm = np.nansum(weights, axis=0)
         weights = weights / norm[np.newaxis, :]
         result = self.get_spectrum(data, error, mask_extract, weights)
         spectrum, spectrum_error, mweight = [res for res in result]
