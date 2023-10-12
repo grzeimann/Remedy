@@ -345,7 +345,7 @@ def get_trace(twilight, specid, ifuslot, ifuid, amp, obsdate, tr_folder):
         loc = np.where((diff_array[:-1] > 0.) * (diff_array[1:] < 0.))[0]
         
         peaks = flat[loc+1]
-        loc = loc[peaks > 0.1 * np.median(peaks)]+1
+        loc = loc[peaks > 0.2 * np.median(peaks)]+1
         trace = get_trace_chunk(flat, loc)
         T = np.zeros((len(ref)))
         if len(trace) == N1:
