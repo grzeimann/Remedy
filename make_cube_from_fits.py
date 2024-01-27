@@ -87,7 +87,7 @@ tp = A.setup_TP(A.ra0, A.dec0, 0.)
 
 header = tp.to_header()
 
-h5files = sorted(glob.glob('/Users/grz85/work/Backup/cure/Remedy/M33/2*.fits'))
+h5files = sorted(glob.glob('/work/03730/gregz/ls6/M33/2*.fits'))
 
 cnt = 0
 cnt_array = np.zeros((len(h5files), 2), dtype=int)
