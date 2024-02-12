@@ -6,6 +6,7 @@ Created on Thu Jan 25 08:46:45 2024
 @author: grz85
 """
 from astropy.convolution import convolve, Gaussian2DKernel
+from astropy.convolution import Gaussian1DKernel, interpolate_replace_nans
 from astropy.io import fits
 import numpy as np
 import os.path as op
@@ -110,14 +111,17 @@ for jk, h5file in enumerate(h5files):
     ra = f[3].data[:, 0] * 1.
     dec = f[3].data[:, 1] * 1.
     
-    spectra = f[0].data
-    error = f[1].data
+    spectra = f[0].data * 1.
+    error = f[1].data * 1.
     cnt1 = cnt + len(ra)
     E = Extract()
     Aother = Astrometry(bounding_box[0], bounding_box[1], pa, 0., 0.)
     E.get_ADR_RAdec(Aother)
     raarray[cnt:cnt1, :] = ra[:, np.newaxis] - E.ADRra[np.newaxis, :] / 3600. / np.cos(np.deg2rad(A.dec0))
     decarray[cnt:cnt1, :] = dec[:, np.newaxis] - E.ADRdec[np.newaxis, :] / 3600.
+    G = Gaussian1DKernel(2.5)
+    for j in np.arange(len(spectra)):
+        spectra[j] = interpolate_replace_nans(spectra[j], G)
     specarray[cnt:cnt1, :] = spectra
     errarray[cnt:cnt1, :] = error
     cnt += len(ra)
