@@ -231,8 +231,14 @@ def build_master_frame(file_list, tarinfo_list, ifuslot, amp, kind, log,
     for itm, tinfo in zip(file_list, tarinfo_list):
         fn = itm + '%s%s_%s.fits' % (ifuslot, amp, kind)
         try:
+            tarbase = op.dirname(op.dirname(op.dirname(fn))) + '.tar'
+            
+            if op.exists(tarbase):
+                T = tinfo[0]
+                s = '/'.join(fn.split('/')[-4:])
+                ind = np.where(s == np.array(tinfo[2]))[0][0]
+                a = fits.open(T.extractfile(tinfo[1][ind]))
             I, E, header = base_reduction(fn, tinfo, get_header=True)
-            log.info('Loaded %s' % fn)
             if (kind == 'flt') or (kind == 'twi'):
                 if (np.mean(I) < 50.) or (np.mean(I) > 50000):
                     continue
