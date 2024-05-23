@@ -230,36 +230,31 @@ def build_master_frame(file_list, tarinfo_list, ifuslot, amp, kind, log,
     bia_list = []
     for itm, tinfo in zip(file_list, tarinfo_list):
         fn = itm + '%s%s_%s.fits' % (ifuslot, amp, kind)
-        try:
-            tarbase = op.dirname(op.dirname(op.dirname(fn))) + '.tar'
+#        try:
             
-            if op.exists(tarbase):
-                T = tinfo[0]
-                s = '/'.join(fn.split('/')[-4:])
-                ind = np.where(s == np.array(tinfo[2]))[0][0]
-                a = fits.open(T.extractfile(tinfo[1][ind]))
-            I, E, header = base_reduction(fn, tinfo, get_header=True)
-            if (kind == 'flt') or (kind == 'twi'):
-                if (np.mean(I) < 50.) or (np.mean(I) > 50000):
-                    continue
-            if kind == 'sci':
-                if (np.mean(I) < 1.) or (np.mean(I) > 50000):
-                    continue
-            hspecid, hifuid = ['%03d' % int(header[name])
-                               for name in ['SPECID', 'IFUID']]
-            hcontid = header['CONTID']
-            if (hspecid != specid) or (hifuid != ifuid) or (hcontid != contid):
+
+        I, E, header = base_reduction(fn, tinfo, get_header=True)
+        if (kind == 'flt') or (kind == 'twi'):
+            if (np.mean(I) < 50.) or (np.mean(I) > 50000):
                 continue
-            date, time = header['DATE'].split('T')
-            datelist = date.split('-')
-            timelist = time.split(':')
-            d = datetime(int(datelist[0]), int(datelist[1]), int(datelist[2]),
-                         int(timelist[0]), int(timelist[1]),
-                         int(timelist[2].split('.')[0]))
-            bia_list.append([I, header['SPECID'], header['OBJECT'], d,
-                             header['IFUID'], header['CONTID']])
-        except:
-            log.warning('Could not load %s' % fn)
+        if kind == 'sci':
+            if (np.mean(I) < 1.) or (np.mean(I) > 50000):
+                continue
+        hspecid, hifuid = ['%03d' % int(header[name])
+                           for name in ['SPECID', 'IFUID']]
+        hcontid = header['CONTID']
+        if (hspecid != specid) or (hifuid != ifuid) or (hcontid != contid):
+            continue
+        date, time = header['DATE'].split('T')
+        datelist = date.split('-')
+        timelist = time.split(':')
+        d = datetime(int(datelist[0]), int(datelist[1]), int(datelist[2]),
+                     int(timelist[0]), int(timelist[1]),
+                     int(timelist[2].split('.')[0]))
+        bia_list.append([I, header['SPECID'], header['OBJECT'], d,
+                         header['IFUID'], header['CONTID']])
+#        except:
+#            log.warning('Could not load %s' % fn)
 
     # Select only the bias frames that match the input amp, e.g., "RU"
     if not len(bia_list):
