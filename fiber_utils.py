@@ -85,6 +85,7 @@ def base_reduction(filename, tinfo, get_header=False):
     '''
     # Load fits file
     tarbase = op.dirname(op.dirname(op.dirname(filename))) + '.tar'
+    print(tarbase, op.exists(tarbase))
     if op.exists(tarbase):
         T = tinfo[0]
         s = '/'.join(filename.split('/')[-4:])
