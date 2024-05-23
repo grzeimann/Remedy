@@ -232,6 +232,7 @@ def build_master_frame(file_list, tarinfo_list, ifuslot, amp, kind, log,
         fn = itm + '%s%s_%s.fits' % (ifuslot, amp, kind)
         try:
             I, E, header = base_reduction(fn, tinfo, get_header=True)
+            log.info('Loaded %s' % fn)
             if (kind == 'flt') or (kind == 'twi'):
                 if (np.mean(I) < 50.) or (np.mean(I) > 50000):
                     continue
