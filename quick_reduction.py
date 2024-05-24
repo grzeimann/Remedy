@@ -2646,7 +2646,7 @@ else:
                          np.array(Pan['gMeanApMag']), np.array(Pan['rMeanApMag']),
                          np.array(Pan['iMeanApMag']), np.array(Pan['zMeanApMag']),
                          np.array(Pan['yMeanApMag']))
-    Pan.write(pname, format='ascii.fixed_width_two_line')
+    Pan.write(pname, format='ascii.fixed_width_two_line', overwrite=True)
 
 
 coords = SkyCoord(raC*units.degree, decC*units.degree, frame='fk5')
