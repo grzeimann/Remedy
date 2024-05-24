@@ -117,7 +117,7 @@ def get_scifilenames(args, daterange, kind):
     filenames = []
     dates = []
     for date in daterange:
-        date = '%04d%02d%02d' % (date.year, date.month, date.day)
+        date = '%04d%02d' % (date.year, date.month)
         if date not in dates:
             dates.append(date)
     
@@ -177,7 +177,7 @@ def get_tarinfo(tarnames, filenames):
 def get_objects(daterange, instrument='virus', rootdir='/work/03946/hetdex/maverick'):
     dates = []
     for date in daterange:
-        date = '%04d%02d' % (date.year, date.month)
+        date = '%04d%02d%02d' % (date.year, date.month, date.day)
         if date not in dates:
             dates.append(date)
     tarfolders = []
@@ -200,7 +200,7 @@ def get_objects(daterange, instrument='virus', rootdir='/work/03946/hetdex/maver
             for name in names_list:
                 if ifuslot_str in name:
                     c = op.join(args.rootdir, name)
-                    filename_list.append(c[:-14])
+                    filename_list.append(c)
             exposures = np.unique([name.split('/')[1] for name in names_list])
             b = fits.open(T.extractfile(T.getmember(names_list[0])))
             Target = b[0].header['OBJECT']
@@ -420,6 +420,7 @@ tarinfo_dict = {}
 daterange_darks = expand_date_range(args.daterange, args.dark_days)
 daterange = list(args.daterange)
 objectdict, filename_list = get_objects(daterange)
+print(filename_list)
 for kind in kinds:
     args.log.info('Getting file names for %s' % kind)
     if kind == 'sci':
@@ -427,7 +428,7 @@ for kind in kinds:
     else:
         filename_dict[kind] = get_filenames(args, daterange, kind)
     print(filename_dict[kind])
-    filename_dict[kind] = [fn for fn in filename_list if kind in fn]
+    filename_dict[kind] = [fn[:-14] for fn in filename_list if kind in fn]
     print(filename_dict[kind])
     tarname_dict[kind] = get_tarfiles(filename_dict[kind])
     tarinfo_dict[kind] = get_tarinfo(tarname_dict[kind], filename_dict[kind])
