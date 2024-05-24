@@ -409,7 +409,7 @@ tarname_dict = {}
 tarinfo_dict = {}
 daterange_darks = expand_date_range(args.daterange, args.dark_days)
 daterange = list(args.daterange)
-objectdict, ifuslots = get_objects(daterange)
+#objectdict, ifuslots = get_objects(daterange)
 for kind in kinds:
     args.log.info('Getting file names for %s' % kind)
     if kind == 'sci':
