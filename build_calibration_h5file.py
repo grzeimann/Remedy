@@ -117,7 +117,7 @@ def get_scifilenames(args, daterange, kind):
     filenames = []
     dates = []
     for date in daterange:
-        date = '%04d%02d' % (date.year, date.month)
+        date = '%04d%02d%02d' % (date.year, date.month, date.day)
         if date not in dates:
             dates.append(date)
     
@@ -174,13 +174,21 @@ def get_tarinfo(tarnames, filenames):
         L.append(l[ind])
     return L
 
-def get_objects(dates, instrument='virus', rootdir='/work/03946/hetdex/maverick'):
+def get_objects(daterange, instrument='virus', rootdir='/work/03946/hetdex/maverick'):
+    dates = []
+    for date in daterange:
+        date = '%04d%02d' % (date.year, date.month)
+        if date not in dates:
+            dates.append(date)
     tarfolders = []
+    ifuslot = '%03d' % int(args.ifuslot)
+    ifuslot_str = '_%sLL' % ifuslot
     for date in dates:
         tarnames = sorted(glob.glob(op.join(rootdir, date, instrument, '%s0000*.tar' % instrument)))
         for t in tarnames:
             tarfolders.append(t)
     objectdict = {}
+    filename_list = []
     for tarfolder in tarfolders:
         date = tarfolder.split('/')[-3]
         obsnum = int(tarfolder[-11:-4])
@@ -189,9 +197,10 @@ def get_objects(dates, instrument='virus', rootdir='/work/03946/hetdex/maverick'
         try:
             names_list = T.getnames()
             names_list = [name for name in names_list if name[-5:] == '.fits']
-            namedict = ''
+            for name in names_list:
+                if ifuslot_str in name:
+                    filename_list.append(name)
             exposures = np.unique([name.split('/')[1] for name in names_list])
-            ifuslots = np.unique([op.basename(name).split('_')[1][:3] for name in names_list])
             b = fits.open(T.extractfile(T.getmember(names_list[0])))
             Target = b[0].header['OBJECT']
 
@@ -201,7 +210,7 @@ def get_objects(dates, instrument='virus', rootdir='/work/03946/hetdex/maverick'
         except:
             objectdict['%s_%07d_%02d' % (date, obsnum, NEXP)] = ''
             continue
-    return objectdict, namedict
+    return objectdict, filename_list
 
 def get_ifuslots(tarfolder):
     if not op.exists(tarfolder):
@@ -409,17 +418,18 @@ tarname_dict = {}
 tarinfo_dict = {}
 daterange_darks = expand_date_range(args.daterange, args.dark_days)
 daterange = list(args.daterange)
-#objectdict, ifuslots = get_objects(daterange)
+objectdict, filename_list = get_objects(daterange)
 for kind in kinds:
     args.log.info('Getting file names for %s' % kind)
     if kind == 'sci':
         filename_dict[kind] = get_scifilenames(args, daterange, kind)
     else:
         filename_dict[kind] = get_filenames(args, daterange, kind)
-        
+    print(filename_dict[kind])
+    filename_dict[kind] = [fn for fn in filename_list if kind in fn]
+    print(filename_dict[kind])
     tarname_dict[kind] = get_tarfiles(filename_dict[kind])
     tarinfo_dict[kind] = get_tarinfo(tarname_dict[kind], filename_dict[kind])
-    print(tarinfo_dict[kind])
     args.log.info('Number of tarfiles for %s: %i' %
                   (kind, len(tarname_dict[kind])))
     if kind == 'flt':
