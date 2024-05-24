@@ -199,7 +199,8 @@ def get_objects(daterange, instrument='virus', rootdir='/work/03946/hetdex/maver
             names_list = [name for name in names_list if name[-5:] == '.fits']
             for name in names_list:
                 if ifuslot_str in name:
-                    filename_list.append(name)
+                    c = op.join(args.rootdir, name)
+                    filename_list.append(c[:-14])
             exposures = np.unique([name.split('/')[1] for name in names_list])
             b = fits.open(T.extractfile(T.getmember(names_list[0])))
             Target = b[0].header['OBJECT']
