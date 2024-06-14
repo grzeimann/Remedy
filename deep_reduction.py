@@ -277,7 +277,6 @@ for k in np.arange(allra.shape[0]):
             dist_sel = (d2d.arcsec <= 4.25) * goodfibers
             if dist_sel.sum() > 5:
                 nstars += 1
-                fig, ax = plt.subplots(1, 1, figsize=(9.5,8))
                 specs = allamps[k][fibsel][dist_sel]
                 gmag = np.zeros((specs.shape[0],))
                 fnu = np.zeros((specs.shape[0],))
