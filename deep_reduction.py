@@ -20,6 +20,11 @@ from astropy.convolution import convolve, Gaussian1DKernel
 from astropy.table import Table
 from astropy.modeling.models import Moffat2D
 from input_utils import setup_logging
+import warnings
+
+warnings.filterwarnings("ignore")
+
+
 
 def moffat_psf_integration(xloc, yloc, seeing, boxsize=14.,
                                scale=0.1, alpha=3.5):
@@ -160,77 +165,81 @@ wave = np.linspace(3470, 5540, 1036)
 li = np.searchsorted(wave, 3580)
 hi = np.searchsorted(wave, 5450)
 
-ResidualMaps = np.ones((allamps.shape[1], allamps.shape[2], allamps.shape[3])) * np.nan
-for I in np.arange(allamps.shape[1]):
-    log.info('Working on amplifier: %s' % unique_amps[I])
 
-    y = allamps[:, I, :, :] * 1.
+if op.exists('all_flux.fits'):
+    allamps = fits.open('all_flux.fits')[0].data
+else:
+    ResidualMaps = np.ones((allamps.shape[1], allamps.shape[2], allamps.shape[3])) * np.nan
+    for I in np.arange(allamps.shape[1]):
+        log.info('Working on amplifier: %s' % unique_amps[I])
     
-    # Mask all sources
-    y[allmask[:, I, :]] = np.nan
-    
-    # Avg residual in the whole amplifier
-    avg = biweight(y, axis=(1, 2), ignore_nan=True)
-    
-    # Subtract the average number
-    image = biweight(y - avg[:, np.newaxis, np.newaxis], axis=0, ignore_nan=True)
-    
-    AmpImages = np.zeros((allamps.shape[0], allamps.shape[2], allamps.shape[3]))
-    for X in np.arange(allamps.shape[0]):
+        y = allamps[:, I, :, :] * 1.
+        
+        # Mask all sources
+        y[allmask[:, I, :]] = np.nan
+        
+        # Avg residual in the whole amplifier
+        avg = biweight(y, axis=(1, 2), ignore_nan=True)
+        
         # Subtract the average number
-        image1 = allamps[X, I, :, :] - avg[X]
+        image = biweight(y - avg[:, np.newaxis, np.newaxis], axis=0, ignore_nan=True)
         
-        # Get the average residual as a funciton of wavelength
-        y = biweight(image1, axis=0, ignore_nan=True)
+        AmpImages = np.zeros((allamps.shape[0], allamps.shape[2], allamps.shape[3]))
+        for X in np.arange(allamps.shape[0]):
+            # Subtract the average number
+            image1 = allamps[X, I, :, :] - avg[X]
+            
+            # Get the average residual as a funciton of wavelength
+            y = biweight(image1, axis=0, ignore_nan=True)
+            
+            # Get the sky model - the biweight of the sky model (for scaling later)
+            z = allskies[X] - biweight(allskies[X], ignore_nan=True)
+            
+            # Only fit a limited wavelength range
+            sel = (wave > 3600) * (wave < 5450)
+            
+            # Find chi2 best fit scaling
+            newmult = np.nansum(z[sel] * y[sel]) / np.nansum(z[sel]**2)
+            
+            # Find the smooth continuum residual as well
+            G = Gaussian1DKernel(15.)
+            other = convolve(y - z*newmult, G, boundary='extend')
+            
+            # Subtract those components
+            newimage = image1 - z[np.newaxis, :] * newmult - other[np.newaxis, :]
+            
+            # Save the new sky subtracted frame
+            AmpImages[X] = newimage
         
-        # Get the sky model - the biweight of the sky model (for scaling later)
-        z = allskies[X] - biweight(allskies[X], ignore_nan=True)
+        # Calculate the biweight residual
+        K = AmpImages * 1.
+        K[allmask[:, I, :]] = np.nan
+        avgResidual = biweight(K, axis=0, ignore_nan=True)
         
-        # Only fit a limited wavelength range
-        sel = (wave > 3600) * (wave < 5450)
+        # Loop through each exposure to find the right scaling for the residual
+        mults = np.zeros((allamps.shape[0],))
+        newmask = allmask[:, I, :] * True
+        for X in np.arange(allamps.shape[0]):
+            # Make an absolute cut
+            fiber_collapse = biweight(AmpImages[X][:, li:hi] - avgResidual[:, li:hi], axis=1, ignore_nan=True)
+            fiber_flag = fiber_collapse > 0.2
+            for j in np.arange(1):
+                fiber_flag[:-1] += fiber_flag[1:]
+                fiber_flag[1:] += fiber_flag[:-1]
+            newmask[X] = fiber_flag # 
         
-        # Find chi2 best fit scaling
-        newmult = np.nansum(z[sel] * y[sel]) / np.nansum(z[sel]**2)
-        
-        # Find the smooth continuum residual as well
-        G = Gaussian1DKernel(15.)
-        other = convolve(y - z*newmult, G, boundary='extend')
-        
-        # Subtract those components
-        newimage = image1 - z[np.newaxis, :] * newmult - other[np.newaxis, :]
-        
-        # Save the new sky subtracted frame
-        AmpImages[X] = newimage
+        # Calculate the biweight residual again
+        K = AmpImages * 1.
+        K[newmask] = np.nan
+        avgResidual = biweight(K, axis=0, ignore_nan=True)
+        ResidualMaps[I, :, :] = avgResidual
+        for X in np.arange(allamps.shape[0]):
+            AmpImages[X] -= avgResidual
     
-    # Calculate the biweight residual
-    K = AmpImages * 1.
-    K[allmask[:, I, :]] = np.nan
-    avgResidual = biweight(K, axis=0, ignore_nan=True)
+        allamps[:, I, :, :] = AmpImages
     
-    # Loop through each exposure to find the right scaling for the residual
-    mults = np.zeros((allamps.shape[0],))
-    newmask = allmask[:, I, :] * True
-    for X in np.arange(allamps.shape[0]):
-        # Make an absolute cut
-        fiber_collapse = biweight(AmpImages[X][:, li:hi] - avgResidual[:, li:hi], axis=1, ignore_nan=True)
-        fiber_flag = fiber_collapse > 0.2
-        for j in np.arange(1):
-            fiber_flag[:-1] += fiber_flag[1:]
-            fiber_flag[1:] += fiber_flag[:-1]
-        newmask[X] = fiber_flag # 
-    
-    # Calculate the biweight residual again
-    K = AmpImages * 1.
-    K[newmask] = np.nan
-    avgResidual = biweight(K, axis=0, ignore_nan=True)
-    ResidualMaps[I, :, :] = avgResidual
-    for X in np.arange(allamps.shape[0]):
-        AmpImages[X] -= avgResidual
-
-    allamps[:, I, :, :] = AmpImages
-
-fits.PrimaryHDU(allamps).writeto('all_flux.fits', overwrite=True)
-fits.PrimaryHDU(ResidualMaps).writeto('residual_maps.fits', overwrite=True)
+    fits.PrimaryHDU(allamps).writeto('all_flux.fits', overwrite=True)
+    fits.PrimaryHDU(ResidualMaps).writeto('residual_maps.fits', overwrite=True)
 
 
 
@@ -287,14 +296,14 @@ for k in np.arange(allra.shape[0]):
                 radius[k, j, :len(fnu)] = np.sqrt(dra**2 + ddec**2)
         X = radius[k].ravel()
         Y = photometry[k].ravel()
-        sel = Y != 0.0
+        selp = Y != 0.0
         r = np.linspace(0, 4.25, 51)
         seeing = np.linspace(1.0, 4.0, 61)
         chi2 = 0. * seeing
         for i, see in enumerate(seeing):
             v = moffat_psf_integration(r, 0. * r, see, alpha=3.5)
-            M = np.interp(X[sel], r, v)
-            chi2[i] = np.nansum((M - Y[sel])**2)
+            M = np.interp(X[selp], r, v)
+            chi2[i] = np.nansum((M - Y[selp])**2)
         mchi2 = np.min(chi2)
         x0 = np.argmin(chi2)
         fitted_seeing = seeing[x0]
@@ -304,11 +313,11 @@ for k in np.arange(allra.shape[0]):
         for j in np.arange(photometry[k].shape[0]):
             Y = photometry[k][j]
             X = radius[k][j]
-            sel = Y != 0.0
+            selp = Y != 0.0
             v = moffat_psf_integration(r, 0. * r, fitted_seeing, alpha=3.5)
-            if sel.sum() > 4.:
+            if selp.sum() > 4.:
                 M = np.interp(X[sel], r, v)
-                norm[k, j] = np.nansum(Y[sel]) / np.nansum(M)
+                norm[k, j] = np.nansum(Y[selp]) / np.nansum(M)
  
 L = fits.HDUList(fits.PrimaryHDU(), fits.ImageHDU(allra), 
                  fits.ImageHDU(alldec), fits.ImageHDU(guider), fits.ImageHDU(offsets),
