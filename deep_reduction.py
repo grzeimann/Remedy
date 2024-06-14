@@ -315,7 +315,7 @@ for k in np.arange(allra.shape[0]):
             selp = Y != 0.0
             v = moffat_psf_integration(r, 0. * r, fitted_seeing, alpha=3.5)
             if selp.sum() > 4.:
-                M = np.interp(X[sel], r, v)
+                M = np.interp(X[selp], r, v)
                 norm[k, j] = np.nansum(Y[selp]) / np.nansum(M)
  
 L = fits.HDUList(fits.PrimaryHDU(), fits.ImageHDU(allra), 
