@@ -318,7 +318,7 @@ for k in np.arange(allra.shape[0]):
                 M = np.interp(X[selp], r, v)
                 norm[k, j] = np.nansum(Y[selp]) / np.nansum(M)
  
-L = fits.HDUList(fits.PrimaryHDU(), fits.ImageHDU(allra), 
+L = fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(allra), 
                  fits.ImageHDU(alldec), fits.ImageHDU(guider), fits.ImageHDU(offsets),
-                 fits.ImageHDU(exposure_seeing), fits.ImageHDU(norm))
+                 fits.ImageHDU(exposure_seeing), fits.ImageHDU(norm)])
 L.writeto('all_info.fits', overwrite=True)
