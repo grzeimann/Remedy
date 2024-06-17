@@ -320,7 +320,8 @@ for k in np.arange(allra.shape[0]):
  
 L = fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(allra), 
                  fits.ImageHDU(alldec), fits.ImageHDU(guider), fits.ImageHDU(offsets),
-                 fits.ImageHDU(exposure_seeing), fits.ImageHDU(norm)])
+                 fits.ImageHDU(exposure_seeing), fits.ImageHDU(norm),
+                 fits.ImageHDU([T.ra.deg, T.dec.deg])])
 L.writeto('all_info.fits', overwrite=True)
 
 star_average = np.nanmedian(norm, axis=0)
