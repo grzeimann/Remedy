@@ -322,3 +322,38 @@ L = fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(allra),
                  fits.ImageHDU(alldec), fits.ImageHDU(guider), fits.ImageHDU(offsets),
                  fits.ImageHDU(exposure_seeing), fits.ImageHDU(norm)])
 L.writeto('all_info.fits', overwrite=True)
+
+star_average = np.nanmedian(norm, axis=0)
+star_sel = np.abs(star_average - np.nanmedian(star_average)) < 0.15
+
+allamps = np.ones((len(filenames) * 3, len(unique_amps), 112, 1036)) * np.nan
+
+# Grab the data and put it into the arrays
+for j, filename in enumerate(filenames):
+    log.info('Working on %s' % filename)
+    h5file = tables.open_file(filename, mode='r')
+    fwhm = h5file.root.Survey.cols.fwhm[:]
+    offset = h5file.root.Survey.cols.offset[:]
+    ra = h5file.root.Info.cols.ra[:]
+    dec = h5file.root.Info.cols.dec[:]
+    mask = np.zeros((len(ra),), dtype=bool)
+    coord = SkyCoord(ra*u.deg, dec*u.deg)
+    idx, d2d, d3d = coord.match_to_catalog_3d(pcoord)
+    mask[d2d.arcsec < 4.] = True
+    spec = h5file.root.Fibers.cols.error[:]
+    h5table = h5file.root.Info
+    ifuslots = np.array(['%03d' % i for i in h5table.cols.ifuslot[:]])
+    amps = [x.decode("utf-8") for x in h5table.cols.amp[:]]
+    combos = np.array(['%s_%s' % (ifuslot, amp) for ifuslot, amp in zip(ifuslots, amps)])
+    for i, combo in enumerate(unique_amps):
+
+        sel = (combo == combos)
+        nexp = int(sel.sum() / 112)
+        for k in np.arange(nexp):
+            ind = j * 3 + k
+            li = k * 112
+            hi = (k+1) * 112
+            y = spec[sel][li:hi] * 1.
+            allamps[ind, i, :] = y
+    h5file.close()
+fits.PrimaryHDU(allamps).writeto('all_error.fits', overwrite=True)
