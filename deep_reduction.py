@@ -320,9 +320,11 @@ for k in np.arange(allra.shape[0]):
  
 L = fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(allra), 
                  fits.ImageHDU(alldec), fits.ImageHDU(guider), fits.ImageHDU(offsets),
-                 fits.ImageHDU(exposure_seeing), fits.ImageHDU(norm),
-                 fits.ImageHDU([T.ra.deg, T.dec.deg])])
+                 fits.ImageHDU(exposure_seeing), fits.ImageHDU(norm)])
+
 L.writeto('all_info.fits', overwrite=True)
+
+Pan[sel].writeto('PanSTARRS_egs_stars.cat', format='ascii.fixed_width_two_line')
 
 star_average = np.nanmedian(norm, axis=0)
 star_sel = np.abs(star_average - np.nanmedian(star_average)) < 0.15
