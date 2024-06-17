@@ -324,7 +324,8 @@ L = fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(allra),
 
 L.writeto('all_info.fits', overwrite=True)
 
-Pan[sel].writeto('PanSTARRS_egs_stars.cat', format='ascii.fixed_width_two_line')
+Pan[sel].write('PanSTARRS_egs_stars.cat', format='ascii.fixed_width_two_line',
+               overwrite=True)
 
 star_average = np.nanmedian(norm, axis=0)
 star_sel = np.abs(star_average - np.nanmedian(star_average)) < 0.15
