@@ -1692,7 +1692,7 @@ def fit_astrometry(f, A1, thresh=25.):
                                                        args.observation, dR,
                                                        dD))
     min_std = 9999
-    for aoff in np.linspace(-0.55, 0.55, 101):
+    for aoff in np.linspace(-1.0, 1.0, 201):
         rot = A.rot * 1. + aoff
         A.tp = A.setup_TP(A.ra0, A.dec0, rot, A.x0,  A.y0)
         mRA, mDec = A.tp.wcs_pix2world(f['fx'][sel], f['fy'][sel], 1)
