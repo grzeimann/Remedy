@@ -1907,7 +1907,7 @@ def advanced_analysis(tfile, fn, scispectra, allifus, pos, A, scale, ran,
                                       'Cgmag', 'RA', 'Dec', 'fx', 'fy', 'dra',
                                       'ddec', 'ifuslot'])
     # Fit astrometric offset
-    for j in np.arange(1):
+    for j in np.arange(2):
         A = fit_astrometry(f, A)
         Total_sources = []
         for i, ui in enumerate(allifus):
