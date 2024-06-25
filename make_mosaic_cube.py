@@ -408,6 +408,13 @@ header['CRPIX2'] = (N+1) / 2
 header['CDELT3'] = 2.
 header['CRPIX3'] = 1.
 header['CRVAL3'] = 3470.
+header['CTYPE1'] = 'RA---TAN'
+header['CTYPE2'] = 'DEC--TAN'
+header['CTYPE3'] = 'WAVE'
+header['CUNIT1'] = 'deg'
+header['CUNIT2'] = 'deg'
+header['CUNIT3'] = 'Angstrom'
+header['SPECSYS'] = 'TOPOCENT'
 F = fits.PrimaryHDU(np.array(cube, 'float32'), header=header)
 F.writeto(name, overwrite=True)
 name = op.basename('%s_errorcube.fits' % args.surname)
@@ -416,5 +423,12 @@ header['CRPIX2'] = (N+1) / 2
 header['CDELT3'] = 2.
 header['CRPIX3'] = 1.
 header['CRVAL3'] = 3470.
+header['CTYPE1'] = 'RA---TAN'
+header['CTYPE2'] = 'DEC--TAN'
+header['CTYPE3'] = 'WAVE'
+header['CUNIT1'] = 'deg'
+header['CUNIT2'] = 'deg'
+header['CUNIT3'] = 'Angstrom'
+header['SPECSYS'] = 'TOPOCENT'
 F = fits.PrimaryHDU(np.array(ecube, 'float32'), header=header)
 F.writeto(name, overwrite=True)
