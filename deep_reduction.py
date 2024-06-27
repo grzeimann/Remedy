@@ -161,7 +161,7 @@ for j, filename in enumerate(filenames):
 # Sub the average residual (scaled? No) 
 
 fits.PrimaryHDU(allamps).writeto('all_initial_spectra.fits', overwrite=True)
-fits.PrimaryHDU(allmask).writeto('all_initial_mask.fits', overwrite=True)
+fits.PrimaryHDU(np.array(allmask, dtype='float32')).writeto('all_initial_mask.fits', overwrite=True)
 fits.PrimaryHDU(allskies).writeto('all_initial_skies.fits', overwrite=True)
 
 wave = np.linspace(3470, 5540, 1036)
