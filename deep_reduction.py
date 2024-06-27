@@ -163,7 +163,7 @@ for j, filename in enumerate(filenames):
 if not op.exists('all_initial_spectra.fits'):
     fits.PrimaryHDU(allamps).writeto('all_initial_spectra.fits', overwrite=True)
 if not op.exists('all_initial_mask.fits'):
-    fits.PrimaryHDU(allamps).writeto('all_initial_mask.fits', overwrite=True)
+    fits.PrimaryHDU(allmask).writeto('all_initial_mask.fits', overwrite=True)
 if not op.exists('all_initial_skies.fits'):
     fits.PrimaryHDU(allskies).writeto('all_initial_skies.fits', overwrite=True)
 
