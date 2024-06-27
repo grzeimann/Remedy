@@ -160,6 +160,10 @@ for j, filename in enumerate(filenames):
 # Build the residual
 # Sub the average residual (scaled? No) 
 
+if not op.exists('all_initial_spectra.fits'):
+    fits.PrimaryHDU(allamps).writeto('all_initial_spectra.fits', overwrite=True)
+if not op.exists('all_initial_mask.fits'):
+    fits.PrimaryHDU(allamps).writeto('all_initial_mask.fits', overwrite=True)
 
 wave = np.linspace(3470, 5540, 1036)
 li = np.searchsorted(wave, 3580)
