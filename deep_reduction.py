@@ -20,6 +20,8 @@ from astropy.convolution import convolve, Gaussian1DKernel
 from astropy.table import Table
 from astropy.modeling.models import Moffat2D
 from input_utils import setup_logging
+from astrometry import Astrometry
+from extract import Extract
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -114,6 +116,8 @@ allra = np.ones((len(filenames) * 3, len(unique_amps), 112)) * np.nan
 alldec = np.ones((len(filenames) * 3, len(unique_amps), 112)) * np.nan
 guider = np.ones((len(filenames)*3)) * np.nan
 offsets = np.ones((len(filenames)*3)) * np.nan
+raoff = np.ones((len(filenames)*3, 1036)) * np.nan
+decoff = np.ones((len(filenames)*3, 1036)) * np.nan
 
 # Grab the data and put it into the arrays
 for j, filename in enumerate(filenames):
@@ -151,6 +155,24 @@ for j, filename in enumerate(filenames):
             alldec[ind, i, :] = dec[sel][li:hi]
             guider[ind] = fwhm[k]
             offsets[ind] = offset[k]
+    # Open the file and load relevant information
+    R = h5file.root.Survey.cols.ra[0]
+    D = h5file.root.Survey.cols.dec[0]
+    pa = h5file.root.Survey.cols.pa[0]
+    rot = h5file.root.Survey.cols.rot[0]
+    seeing = h5file.root.Survey.cols.fwhm[0]
+    
+    # Build the astrometry for the 
+    A = Astrometry(R, D, pa, 0., 0., fplane_file='/work/03730/gregz/maverick/fplaneall.txt')
+    A.tp = A.setup_TP(R, D, rot, A.x0,  A.y0)
+    
+    # Setup extract for extraction
+    E = Extract()
+    E.get_ADR_RAdec(A)
+    for k in np.arange(3):
+        i = j * 3 + k
+        raoff[i] = E.ADRra
+        decoff[i] = E.ADRdec
     h5file.close()
 
 
@@ -163,6 +185,7 @@ for j, filename in enumerate(filenames):
 fits.PrimaryHDU(allamps).writeto('all_initial_spectra.fits', overwrite=True)
 fits.PrimaryHDU(np.array(allmask, dtype='float32')).writeto('all_initial_mask.fits', overwrite=True)
 fits.PrimaryHDU(allskies).writeto('all_initial_skies.fits', overwrite=True)
+fits.HDUList([fits.PrimaryHDU(raoff), fits.ImageHDU(decoff)]).writeto('all_initial_dar.fits', overwrite=True)
 
 wave = np.linspace(3470, 5540, 1036)
 li = np.searchsorted(wave, 3580)
