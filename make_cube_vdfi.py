@@ -11,6 +11,9 @@ from astropy.io import fits
 from astrometry import Astrometry
 from input_utils import setup_logging
 import os.path as op
+import warnings
+
+warnings.filterwarnings("ignore")
 
 
 # Load the star normalizations and the Moffat seeing for each exposure
