@@ -99,8 +99,9 @@ for i in np.arange(len(def_wave)):
         yc = np.interp(y, yg, np.arange(len(yg)), left=0., right=len(yg))
         xc = np.array(np.round(xc), dtype=int)
         yc = np.array(np.round(yc), dtype=int)
-        image_all[exposure, yc, xc] = spectra[exposure, :, :, i].ravel() 
-        image_all_error[exposure, yc, xc] = error[exposure, :, :, i].ravel() 
+        gsel = np.where((xc>1) * (xc<len(xg)-1) * (yc>1) * (yc<len(yg)-1))[0]
+        image_all[exposure, yc[gsel], xc[gsel]] = spectra[exposure, :, :, i].ravel()[gsel] 
+        image_all_error[exposure, yc[gsel], xc[gsel]] = error[exposure, :, :, i].ravel()[gsel] 
     image = np.nanmedian(image_all, axis=0)
     errorimage = np.sqrt(np.nansum(image_all_error**2, axis=0))
     cube[i, :, :] = image
