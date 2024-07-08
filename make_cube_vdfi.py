@@ -12,6 +12,7 @@ from astrometry import Astrometry
 from input_utils import setup_logging
 import os.path as op
 import warnings
+from multiprocessing import Pool
 
 warnings.filterwarnings("ignore")
 
@@ -84,7 +85,7 @@ header = tp.to_header()
 surname = 'VDFI_EGS'
 
     
-for i in np.arange(len(def_wave)):
+def get_cube_image(i):
     log.info('Working on wavelength %0.0f' % def_wave[i])
     image_all = np.ones((nexp,) + xgrid.shape) * np.nan
     image_all_error = np.ones((nexp,) + xgrid.shape) * np.nan
@@ -103,8 +104,15 @@ for i in np.arange(len(def_wave)):
         image_all_error[exposure, yc[gsel], xc[gsel]] = error[exposure, :, :, i].ravel()[gsel] 
     image = np.nanmedian(image_all, axis=0)
     errorimage = np.sqrt(np.nansum(image_all_error**2, axis=0))
-    cube[i, :, :] = image
-    ecube[i, :, :] = errorimage
+    return image, errorimage
+
+    
+P = Pool(16)
+res = P.map(get_cube_image, np.arange(len(def_wave)))
+P.close()
+for i, return_list in enumerate(res):
+    cube[i] = return_list[0]
+    ecube[i] = return_list[1]
 
 name = op.basename('%s_cube.fits' % surname)
 header['CRPIX1'] = (N+1) / 2
