@@ -89,7 +89,7 @@ for i in np.arange(len(def_wave)):
         log.info('Working on setting up exposure %i' % (exposure + 1))
         ra = (RA[exposure] -  
               dar_ra[exposure, i] / 3600. / np.cos(np.deg2rad(A.dec0)))
-        dec = (DEC[exposure] - dar[exposure, i] / 3600.)
+        dec = (DEC[exposure] - dar_dec[exposure, i] / 3600.)
         x, y = tp.wcs_world2pix(ra, dec, 1)
         x, y = [j.ravel() for j in [x, y]]
         xc = np.interp(x, xg, np.arange(len(xg)), left=0., right=len(xg))
