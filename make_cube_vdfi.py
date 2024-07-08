@@ -103,7 +103,8 @@ def get_cube_image(i):
         image_all[exposure, yc[gsel], xc[gsel]] = spectra[exposure, :, :, i].ravel()[gsel] 
         image_all_error[exposure, yc[gsel], xc[gsel]] = error[exposure, :, :, i].ravel()[gsel] 
     image = np.nanmedian(image_all, axis=0)
-    errorimage = np.sqrt(np.nansum(image_all_error**2, axis=0))
+    N = np.sum(np.isfinite(image_all_error), axis=0)
+    errorimage = np.sqrt(np.nansum(image_all_error**2, axis=0) / N) 
     return image, errorimage
 
     
