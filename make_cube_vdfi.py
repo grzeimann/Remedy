@@ -107,7 +107,7 @@ def get_cube_image(i):
     return image, errorimage
 
     
-P = Pool(16)
+P = Pool(8)
 res = P.map(get_cube_image, np.arange(len(def_wave)))
 P.close()
 for i, return_list in enumerate(res):
