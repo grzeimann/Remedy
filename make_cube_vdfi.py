@@ -107,7 +107,7 @@ def get_cube_image(i):
     return image, errorimage
 
     
-for i in np.arange(def_wave):
+for i in np.arange(len(def_wave)):
     image, errorimage = get_cube_image(i)
     cube[i] = image
     ecube[i] = errorimage
