@@ -107,12 +107,10 @@ def get_cube_image(i):
     return image, errorimage
 
     
-P = Pool(8)
-res = P.map(get_cube_image, np.arange(len(def_wave)))
-P.close()
-for i, return_list in enumerate(res):
-    cube[i] = return_list[0]
-    ecube[i] = return_list[1]
+for i in np.arange(def_wave):
+    image, errorimage = get_cube_image(i)
+    cube[i] = image
+    ecube[i] = errorimage
 
 name = op.basename('%s_cube.fits' % surname)
 header['CRPIX1'] = (N+1) / 2
