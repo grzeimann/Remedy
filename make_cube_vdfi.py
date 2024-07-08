@@ -59,7 +59,7 @@ masked_amp_ids = np.array([40, 48, 49, 50, 51, 55, 56, 57, 58, 59, 106, 122,
                            123, 131, 135, 146, 172, 173, 174, 175, 201, 227, 
                            280, 281, 282, 283, 299, 301], dtype=int)
 
-bounding_box = [field_ra, field_dec, 10.0]
+bounding_box = [field_ra, field_dec, 20.0]
 
 pixel_scale = 1.0
 
