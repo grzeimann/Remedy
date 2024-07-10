@@ -195,7 +195,7 @@ hi = np.searchsorted(wave, 5450)
 if op.exists('all_flux.fits'):
     allamps = fits.open('all_flux.fits')[0].data
 else:
-    ResidualMaps = np.ones((allamps.shape[1], allamps.shape[2], allamps.shape[3])) * np.nan
+    ResidualMaps = np.ones((3, allamps.shape[1], allamps.shape[2], allamps.shape[3])) * np.nan
     for I in np.arange(allamps.shape[1]):
         log.info('Working on amplifier: %s' % unique_amps[I])
     
@@ -257,10 +257,21 @@ else:
         # Calculate the biweight residual again
         K = AmpImages * 1.
         K[newmask] = np.nan
-        avgResidual = biweight(K, axis=0, ignore_nan=True)
-        ResidualMaps[I, :, :] = avgResidual
-        for X in np.arange(allamps.shape[0]):
-            AmpImages[X] -= avgResidual
+        expind1 = np.array(np.arange(0, allamps.shape[0], 3), dtype=int)
+        expind2 = np.array(np.arange(1, allamps.shape[0], 3), dtype=int)
+        expind3 = np.array(np.arange(2, allamps.shape[0], 3), dtype=int)
+        avgResidual1 = biweight(K[expind1], axis=0, ignore_nan=True)
+        avgResidual2 = biweight(K[expind2], axis=0, ignore_nan=True)
+        avgResidual3 = biweight(K[expind3], axis=0, ignore_nan=True)
+        ResidualMaps[0, I, :, :] = avgResidual1
+        ResidualMaps[1, I, :, :] = avgResidual2
+        ResidualMaps[2, I, :, :] = avgResidual3
+        for X in expind1:
+            AmpImages[X] -= avgResidual1
+        for X in expind2:
+            AmpImages[X] -= avgResidual2
+        for X in expind3:
+            AmpImages[X] -= avgResidual3
     
         allamps[:, I, :, :] = AmpImages
     
