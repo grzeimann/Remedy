@@ -19,7 +19,38 @@ from astropy.wcs import WCS
 from astropy.nddata import Cutout2D
 from astropy.coordinates import SkyCoord
 import astropy.units as u
-from fiber_utils import get_continuum
+from astropy.stats import biweight_location as biweight
+from scipy.interpolate import interp1d
+
+def get_continuum(spectra, nbins=25):
+    '''
+    Get continuum from sky-subtracted spectra
+
+    Parameters
+    ----------
+    spectra : 2d numpy array
+        sky-subtracted spectra for each fiber
+
+    Returns
+    -------
+    cont : 2d numpy array
+        continuum normalization
+    '''
+    a = np.array([biweight(f, axis=1, ignore_nan=True) 
+                  for f in np.array_split(spectra, nbins, axis=1)]).swapaxes(0, 1)
+    x = np.array([np.mean(xi) 
+                  for xi in np.array_split(np.arange(spectra.shape[1]), nbins)])
+    cont = np.zeros(spectra.shape)
+    X = np.arange(spectra.shape[1])
+    for i, ai in enumerate(a):
+        sel = np.isfinite(ai)
+        if np.sum(sel)>nbins/2.:
+            I = interp1d(x[sel], ai[sel], kind='quadratic',
+                         fill_value=np.nan, bounds_error=False)
+            cont[i] = I(X)
+        else:
+            cont[i] = 0.0
+    return cont
 
 warnings.filterwarnings("ignore")
 
@@ -96,6 +127,13 @@ for exposure in np.arange(nexp):
         spectra[exposure, amplifier] = spectra[exposure, amplifier] - cont
         
 fits.PrimaryHDU(spectra).writeto('/work/03730/gregz/maverick/VDFI/all_flux_final.fits', overwrite=True)
+
+
+
+# Loading DAR
+dar = fits.open('/work/03730/gregz/maverick/VDFI/all_initial_dar.fits')
+dar_ra = dar[0].data
+dar_dec = dar[1].data
 
 # Need astrometry for the field to conver a grid of points and get the ra and dec
 
