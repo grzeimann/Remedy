@@ -768,7 +768,7 @@ def get_continuum(spectra, nbins=25):
     cont : 2d numpy array
         continuum normalization
     '''
-    a = np.array([biweight(f, axis=1) 
+    a = np.array([biweight(f, axis=1, ignore_nan=True) 
                   for f in np.array_split(spectra, nbins, axis=1)]).swapaxes(0, 1)
     x = np.array([np.mean(xi) 
                   for xi in np.array_split(np.arange(spectra.shape[1]), nbins)])
