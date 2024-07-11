@@ -104,6 +104,8 @@ for exposure in np.arange(nexp):
         
         mra = np.mean(ra)
         mdec = np.mean(dec)
+        if np.isna(mra):
+            continue
         position = SkyCoord(mra * u.deg, mdec * u.deg)
         cutout = Cutout2D(Image, position, (320, 320), wcs=wcs_out)
         cutout.data = convolve(cutout.data, kernel, boundary='wrap')
