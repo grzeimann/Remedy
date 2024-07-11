@@ -12,10 +12,18 @@ from astrometry import Astrometry
 from input_utils import setup_logging
 import os.path as op
 import warnings
-from multiprocessing import Pool
+from astropy.convolution import convolve, Moffat2DKernel, Gaussian2DKernel
+from photutils.aperture import CircularAperture
+from photutils.aperture import aperture_photometry
+from astropy.wcs import WCS
+from astropy.nddata import Cutout2D
+from astropy.coordinates import SkyCoord
+import astropy.units as u
+from fiber_utils import get_continuum
 
 warnings.filterwarnings("ignore")
 
+log = setup_logging('vdfi')
 
 # Load the star normalizations and the Moffat seeing for each exposure
 f = fits.open('/work/03730/gregz/maverick/VDFI/all_info.fits')
@@ -23,6 +31,7 @@ f = fits.open('/work/03730/gregz/maverick/VDFI/all_info.fits')
 RA = f[1].data * 1.
 DEC = f[2].data * 1.
 nexp = f[1].data.shape[0]
+namp = f[1].data.shape[1]
 
 star_average = np.nanmedian(f[6].data, axis=0)
 star_sel = np.abs(star_average - np.nanmedian(star_average)) < 0.15
@@ -40,12 +49,53 @@ error = e[0].data * 1.
 for exposure in np.arange(nexp):
     spectra[exposure] = spectra[exposure] / shot_average[exposure]
     error[exposure] = error[exposure] / shot_average[exposure]
+    
+d = fits.open('/work/03730/gregz/maverick/VDFI/CFHTLS_D-85_g_141927+524056_T0007_MEDIAN.fits')
 
 
-# Loading DAR
-dar = fits.open('/work/03730/gregz/maverick/VDFI/all_initial_dar.fits')
-dar_ra = dar[0].data
-dar_dec = dar[1].data
+# Get the photometry in fiber apertures from the HST F475W data
+Image = d[0].data
+wcs_out = WCS(d[0].header)
+pixscale = (np.sqrt(np.abs(wcs_out.pixel_scale_matrix[0, 0] * 
+                           wcs_out.pixel_scale_matrix[1, 1])) * 3600.)
+
+
+for exposure in np.arange(nexp):
+    log.info('Working on exposure: %i' % (exposure+1))
+    for amplifier in np.arange(namp):
+        alpha = 3.5
+        seeing = f[5].data[exposure]
+        gamma = 0.5 * seeing / np.sqrt(2**(1./ alpha) - 1.)
+        kernel = Moffat2DKernel(gamma=gamma, alpha=alpha)
+        
+        ra = f[1].data[exposure, amplifier]
+        dec = f[2].data[exposure, amplifier]
+        
+        mra = np.mean(ra)
+        mdec = np.mean(dec)
+        position = SkyCoord(mra * u.deg, mdec * u.deg)
+        cutout = Cutout2D(Image, position, (320, 320), wcs=wcs_out)
+        cutout.data = convolve(cutout.data, kernel, boundary='wrap')
+        
+        spec = spectra[exposure, amplifier] * 1.
+        
+        positions = []
+        for r, d in zip(ra, dec):
+            positions.append(cutout.wcs.wcs_world2pix(r, d, 1))
+        aperture = CircularAperture(positions, r=0.75/pixscale)
+        phot_table = aperture_photometry(cutout.data, aperture)
+
+        z = phot_table['aperture_sum'] * 10**(0.4 * (23.9 - 30))
+        z = z *  1e-29 * 3e18 / 4700**2 * 1e17
+        sel = z > 0.003
+        newspec = spec * 1.
+        G = Gaussian2DKernel(3.)
+        cont = get_continuum(newspec, nbins=25)
+        cont[sel] = np.nan
+        cont = convolve(cont, G, boundary='wrap')
+        spectra[exposure, amplifier] = spectra[exposure, amplifier] - cont
+        
+fits.PrimaryHDU(spectra).writeto('/work/03730/gregz/maverick/VDFI/all_flux_final.fits', overwrite=True)
 
 # Need astrometry for the field to conver a grid of points and get the ra and dec
 
@@ -54,7 +104,6 @@ field_dec = 52.88
 
 def_wave = np.linspace(3470, 5540, 1036)
 
-log = setup_logging('vdfi')
 
 masked_amp_ids = np.array([40, 48, 49, 50, 51, 55, 56, 57, 58, 59, 106, 122, 
                            123, 131, 135, 146, 172, 173, 174, 175, 201, 227, 
@@ -114,8 +163,8 @@ for i in np.arange(len(def_wave)):
     ecube[i] = errorimage
 
 name = op.basename('%s_cube.fits' % surname)
-header['CRPIX1'] = (N+1) / 2
-header['CRPIX2'] = (N+1) / 2
+header['CRPIX1'] = (N+1) / 2.
+header['CRPIX2'] = (N+1) / 2.
 header['CDELT3'] = 2.
 header['CRPIX3'] = 1.
 header['CRVAL3'] = 3470.
@@ -129,8 +178,8 @@ header['SPECSYS'] = 'TOPOCENT'
 F = fits.PrimaryHDU(np.array(cube, 'float32'), header=header)
 F.writeto(name, overwrite=True)
 name = op.basename('%s_errorcube.fits' % surname)
-header['CRPIX1'] = (N+1) / 2
-header['CRPIX2'] = (N+1) / 2
+header['CRPIX1'] = (N+1) / 2.
+header['CRPIX2'] = (N+1) / 2.
 header['CDELT3'] = 2.
 header['CRPIX3'] = 1.
 header['CRVAL3'] = 3470.
