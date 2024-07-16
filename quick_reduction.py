@@ -1221,7 +1221,7 @@ def make_cube(xloc, yloc, data, error, Dx, Dy, scale, ran,
     area = np.pi * 0.75**2
     G = Gaussian2DKernel(seeing / 2.35)
     S = np.zeros((data.shape[0], 2))
-    Gp = Gaussian1DKernel(5.)
+    Gp = Gaussian1DKernel(0.1)
     c = data * 0.
     for i in np.arange(data.shape[0]):
         c[i] = interpolate_replace_nans(data[i], Gp)
