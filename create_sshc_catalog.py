@@ -234,7 +234,7 @@ for niter in np.arange(2):
         num = np.nansum(filtg[np.newaxis, :] * mask * (spectra / error), axis=1) 
         denom = np.nansum(filtg[np.newaxis, :] * mask, axis=1)
         sn = num / denom
-        goodspec = (mask.sum(axis=1) > 0.8) * (sn > 1.) * clean
+        goodspec = (mask.sum(axis=1) > 0.8) * clean
         N = goodspec.sum()
         if N < 1:
             continue
