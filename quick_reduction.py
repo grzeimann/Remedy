@@ -1179,7 +1179,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
 
 
 def make_cube(xloc, yloc, data, error, Dx, Dy, scale, ran,
-              seeing_fac=1.8, radius=1.5):
+              seeing_fac=0.6, radius=1.5):
     '''
     Make data cube for a given ifuslot
     
