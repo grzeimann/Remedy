@@ -316,7 +316,7 @@ T2 = Table([ralist, declist, exptimelist, goodlist, nstarslist, raofflist,
             decofflist, rastdlist, decstdlist], 
            names=['RA', 'Dec', 'exptime', 'good', 'nstars', 'raoff', 'decoff',
                   'rastd', 'decstd'])
-T2.write('survey_info.dat', format='ascii.fixed_width_two_line')
+T2.write('survey_info.dat', format='ascii.fixed_width_two_line', overwrite=True)
 fits.HDUList([fits.PrimaryHDU(), fits.BinTableHDU(T), fits.ImageHDU(SPEC),
               fits.ImageHDU(ERROR), fits.ImageHDU(WEIGHT)]).writeto(outname, overwrite=True)
 fits.HDUList([fits.PrimaryHDU(EA), fits.ImageHDU(SS)]).writeto('shot_error_sky.fits', overwrite=True)
