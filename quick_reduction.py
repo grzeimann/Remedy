@@ -1219,7 +1219,7 @@ def make_cube(xloc, yloc, data, error, Dx, Dy, scale, ran,
     Dcube = np.zeros((b,)+xgrid.shape)
     Ecube = Dcube * 0.
     area = np.pi * 0.75**2
-    G = Gaussian2DKernel(seeing / 2.35)
+    G = Gaussian2DKernel(seeing / 2.35 / scale)
     S = np.zeros((data.shape[0], 2))
     Gp = Gaussian1DKernel(0.1)
     c = data * 0.
@@ -2763,7 +2763,7 @@ for i in np.arange(len(E.coords)):
 E.coords = SkyCoord(R*units.deg, D*units.deg, frame='fk5')
 allspec_list = []
 log.info('Extracting %i Pan-STARRS Sources' % len(R))
-for i in np.arange(5):#np.arange(len(E.coords)):
+for i in np.arange(len(E.coords)):
     specinfo = E.get_spectrum_by_coord_index(i)
     if len(specinfo[0]) == 0:
         continue
