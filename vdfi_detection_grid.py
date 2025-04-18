@@ -279,6 +279,7 @@ for xi, xj in zip(xs, ys):
     buffer = 4.5
     S = np.zeros((nexp, len(wave)))
     E = np.zeros_like(S)
+    log.info('Making cutout for %i, %i' % (xi, xj))
     
     shortspec = np.zeros((spectra.shape[0], 448, 1036))
     shorterr = np.zeros((spectra.shape[0], 448, 1036))
@@ -301,10 +302,11 @@ for xi, xj in zip(xs, ys):
             shortra[exposure, :N] = RA[exposure, fiber_sel]
             shortdec[exposure, :N] = DEC[exposure, fiber_sel]
     
-    log.info('Finished making cutout')
     if npix < 10:
         log.info('Not enough spectra in region ... moving to next grid point')
         continue
+    
+    log.info('Running Extraction for %i, %i' % (xi, xj))
     S = np.zeros((nexp, len(wave)))
     E = np.zeros_like(S)
     
@@ -351,7 +353,7 @@ for xi, xj in zip(xs, ys):
             FL[i, j] = Spec2
             EL[i, j] = e
     
-    log.info('Finished extraction for ')
+    log.info('Fitting PCA for %i, %i' % (xi, xj))
     
     mywcs = WCS(cfht[0].header)
     x, y = mywcs.wcs_world2pix(ra_center, dec_center, 1)
@@ -381,7 +383,8 @@ for xi, xj in zip(xs, ys):
                 res[i, j, 20:-20] = (np.dot(sol, H.T) * EL[i, j, 20:-20] +
                                      avg_back[20:-20])
                 image[i, j] = sol
-    
+                
+    log.info('Getting S/N map for %i, %i' % (xi, xj))
     SN1 = np.zeros((len(dr), len(dd), 3001))
     FL1 = FL - res
     avgratio = mad_std(FL1[mask] / EL[mask], axis=(0,), ignore_nan=True)
@@ -407,4 +410,5 @@ for xi, xj in zip(xs, ys):
             V = I(xn)
             SN1[i, j] = V
             
+    log.info('Getting detections for %i, %i' % (xi, xj))
     locs = find_detections(SN1, threshold=5.)
