@@ -261,6 +261,8 @@ xgrid, ygrid = np.meshgrid(xg, xg)
 grid_ra, grid_dec = wcs.all_pix2world(xgrid + 1., ygrid + 1., 1)
 xs = [15, 16]
 ys = [4, 4]
+log.info('Starting Detections')
+
 for xi, xj in zip(xs, ys):
     ra_center = grid_ra[xi, xj]
     dec_center = grid_dec[xi, xj]
@@ -308,8 +310,8 @@ for xi, xj in zip(xs, ys):
     
     dd = np.arange(-(size+step/2.), (size+step), step)
     dr = np.arange(-(size+step/2.), (size+step), step)
-    FL = np.zeros((len(dr), len(dd), 1036))
-    EL = np.zeros((len(dr), len(dd), 1036))
+    FL = np.zeros((len(dd), len(dr), 1036))
+    EL = np.zeros((len(dd), len(dr), 1036))
     
     iratios = np.zeros((len(dr), len(dd)))
     for i in np.arange(len(dd)):
