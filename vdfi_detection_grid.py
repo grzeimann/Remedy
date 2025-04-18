@@ -262,14 +262,15 @@ grid_ra, grid_dec = wcs.all_pix2world(xgrid + 1., ygrid + 1., 1)
 xs = [15, 16]
 ys = [4, 4]
 for xi, xj in zip(xs, ys):
-    dec_center = grid_ra[xi, xj]
-    ra_center = grid_dec[xi, xj]
+    ra_center = grid_ra[xi, xj]
+    dec_center = grid_dec[xi, xj]
     plt.figure(figsize=(8, 7.5))
     yl = int(ygrid[xi, xj]-30.5)
     yh = yl + 60
     xl = int(xgrid[xi, xj]-30.5)
     xh = xl + 60
-    plt.imshow(vdfi[0].data[yl:yh, xl:xh], origin='lower')
+    plt.imshow(vdfi[0].data[yl:yh, xl:xh], origin='lower', vmin=-0.2, vmax=0.2,
+               cmap=plt.get_cmap('coolwarm'))
     plt.savefig('Cutout_%i_%i.png' % (xi, xj))
     size = 30.
     step = 1.
