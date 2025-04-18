@@ -8,8 +8,9 @@ Created on Thu Apr 17 19:58:46 2025
 
 import matplotlib.pyplot as plt
 import numpy as np
-import time
 import warnings
+import os
+import psutil
 
 from astropy.nddata import Cutout2D
 from astropy.convolution import Gaussian2DKernel
@@ -264,6 +265,8 @@ ys = [4, 4]
 log.info('Starting Detections')
 
 for xi, xj in zip(xs, ys):
+    process = psutil.Process(os.getpid())
+    log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
     ra_center = grid_ra[xi, xj]
     dec_center = grid_dec[xi, xj]
     plt.figure(figsize=(8, 7.5))
@@ -331,7 +334,7 @@ for xi, xj in zip(xs, ys):
                 dra = (shortra[exposure]-ra_center1)* np.cos(np.pi/180.*dec_center1) * 3600.
                 ddec = (shortdec[exposure] - dec_center1) * 3600.
                 mask = np.isfinite(shortspec[exposure, :, 405])
-                fiber_sel = np.sqrt(dra**2 + ddec**2) <= radius * mask
+                fiber_sel = (np.sqrt(dra**2 + ddec**2) <= radius) * mask
                 seeing = f[5].data[exposure]
                 newdra = dra[fiber_sel][:, np.newaxis] - dar_ra[exposure][np.newaxis, :]
                 newddec = ddec[fiber_sel][:, np.newaxis] - dar_dec[exposure][np.newaxis, :]
