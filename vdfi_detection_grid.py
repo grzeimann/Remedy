@@ -269,8 +269,8 @@ for xi, xj in zip(xs, ys):
     yh = yl + 60
     xl = int(xgrid[xi, xj]-30.5)
     xh = xl + 60
-    plt.imshow(vdfi[0].data[yl:yh, xl:xh], origin='lower', vmin=-0.2, vmax=0.2,
-               cmap=plt.get_cmap('coolwarm'))
+    plt.imshow(vdfi[0].data[yl:yh, xl:xh], origin='lower', 
+               vmin=-0.03, vmax=0.05, cmap=plt.get_cmap('coolwarm'))
     plt.savefig('Cutout_%i_%i.png' % (xi, xj))
     size = 30.
     step = 1.
