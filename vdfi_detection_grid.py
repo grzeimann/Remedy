@@ -264,7 +264,13 @@ ys = [4, 4]
 for xi, xj in zip(xs, ys):
     dec_center = grid_ra[xi, xj]
     ra_center = grid_dec[xi, xj]
-    
+    plt.figure(figsize=(8, 7.5))
+    yl = int(ygrid[xi, xj]-30.5)
+    yh = yl + 60
+    xl = int(xgrid[xi, xj]-30.5)
+    xh = xl + 60
+    plt.imshow(vdfi[0].data[yl:yh, xl:xh], origin='lower')
+    plt.savefig('Cutout_%i_%i.png' % (xi, xj))
     size = 30.
     step = 1.
     buffer = 4.5
