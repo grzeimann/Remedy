@@ -442,7 +442,7 @@ for xi, xj in zip(xs, ys):
         # measure flux and chi2
         spec = FL1[loc[0], loc[1]] * 1e17
         G = Gaussian1D(mean=w, stddev=5.4/2.35)
-        G.stddev.bounds = (5.0, 15.)
+        G.stddev.bounds = (5.0/2.35, 15.0/2.35)
         G.mean.bounds = (w[-1]-2., w[-1]+2.)
         wsel = np.abs(wave - w[-1]) < 10.
         cont = get_continuum(spec[np.newaxis, :], nbins=25)[0]
@@ -457,7 +457,7 @@ for xi, xj in zip(xs, ys):
         positions.append(wcs.wcs_world2pix(r[-1], d[-1], 1))
         aperture = CircularAperture(positions, r=3.)
         phot_table = aperture_photometry(cfht[0].data, aperture)
-        gmag.append(-2.5 * np.log10(phot_table['aperture_sum']) + 30.)
+        gmag.append(-2.5 * np.log10(phot_table['aperture_sum']*1/0.186**2) + 30.)
     T = Table([r, d, flux, chi2norm, gmag, sn], names=['RA', 'Dec', 'Flux',
                                                        'Chi2', 'gmag', 'sn'])
     spectra = FL1[locs[:, 0], locs[:, 1]]
