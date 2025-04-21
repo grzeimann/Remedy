@@ -16,7 +16,9 @@ from astropy.nddata import Cutout2D
 from astropy.convolution import Gaussian2DKernel
 from astropy.convolution import convolve, Gaussian1DKernel
 from astropy.io import fits
-from astropy.modeling.models import Moffat2D
+from astropy.modeling.models import Moffat2D, Gaussian1D
+from astropy.modeling.fitting import TRFLSQFitter
+from astropy.table import Table
 from scipy.ndimage import maximum_filter
 from astropy.stats import mad_std
 from astropy.stats import biweight_location as biweight
@@ -24,6 +26,8 @@ from astropy.wcs import WCS
 from input_utils import setup_logging
 from scipy.interpolate import LinearNDInterpolator, interp1d
 from sklearn.decomposition import PCA
+from photutils.aperture import aperture_photometry, CircularAperture
+
 import seaborn as sns
 
 warnings.filterwarnings("ignore")
@@ -211,6 +215,22 @@ def get_spectrum_exposure(spectra, error, dra, ddec, seeing, PSF, wave,
         spectrum = np.nan
         spectrum_error = np.nan
     return spectrum, spectrum_error, summed_weights, pfit
+
+def write_output(input):
+    '''
+    
+
+    Parameters
+    ----------
+    input : TYPE
+        DESCRIPTION.
+
+    Returns
+    -------
+    None.
+
+    '''
+    
     
 log = setup_logging('vdfi')
 
@@ -262,6 +282,8 @@ xgrid, ygrid = np.meshgrid(xg, xg)
 grid_ra, grid_dec = wcs.all_pix2world(xgrid + 1., ygrid + 1., 1)
 xs = np.arange(20)
 ys = np.ones((20,), dtype=int) * 4
+
+fitter = TRFLSQFitter()
 log.info('Starting Detections')
 
 for xi, xj in zip(xs, ys):
@@ -272,6 +294,8 @@ for xi, xj in zip(xs, ys):
     size = 30.
     step = 1.
     buffer = 4.5
+    cx = xgrid[xi, xj]
+    cy = ygrid[xi, xj]
     S = np.zeros((nexp, len(wave)))
     E = np.zeros_like(S)
     log.info('Making cutout for %i, %i' % (xi, xj))
@@ -306,7 +330,7 @@ for xi, xj in zip(xs, ys):
     E = np.zeros_like(S)
     
     dd = np.arange(-(size+step/2.), (size+step), step)
-    dr = np.arange(-(size+step/2.), (size+step), step)
+    dr = np.arange(-(size+step/2.), (size+step), step)[::-1]
     FL = np.zeros((len(dd), len(dr), 1036))
     EL = np.zeros((len(dd), len(dr), 1036))
     
@@ -350,12 +374,11 @@ for xi, xj in zip(xs, ys):
     
     log.info('Fitting PCA for %i, %i' % (xi, xj))
     
-    mywcs = WCS(cfht[0].header)
-    x, y = mywcs.wcs_world2pix(ra_center, dec_center, 1)
+    x, y = wcs.wcs_world2pix(ra_center, dec_center, 1)
     position = (x-1, y-1)
     size_cut = (FL.shape[0], FL.shape[1])     # pixels
     cutout = Cutout2D(cfht[0].data, position, size_cut)
-    mask = convolve(cutout.data[:, ::-1] > 0.2, Gaussian2DKernel(2.5/2.35)) < 0.1
+    mask = convolve(cutout.data[:, :] > 0.2, Gaussian2DKernel(2.5/2.35)) < 0.1
     mask = mask * (np.isnan(FL[:, :, 20:-20]).sum(axis=2) < 1)
     avg_back = np.nanmean(FL[mask], axis=(0,))
     data = (FL[mask] - avg_back[np.newaxis, :]) / EL[mask]
@@ -404,6 +427,45 @@ for xi, xj in zip(xs, ys):
             xn = np.linspace(3560, 5480, 3001)
             V = I(xn)
             SN1[i, j] = V
-            
+    DR, DD = np.meshgrid(dr, dd)
+
     log.info('Getting detections for %i, %i' % (xi, xj))
     locs = find_detections(SN1, threshold=5.)
+    # Collect ra, dec, wave, flux, S/N, chi2, continuum mag
+    r, d, flux, chi2norm, gmag, sn = ([], [], [], [], [], [])
+    for loc in locs:
+        # convert x, y into an ra and dec
+        r.append(ra_center + DR[loc[0], loc[1]] / 3600. / np.cos(np.deg2rad(dec_center)))
+        d.append(dec_center + DD[loc[0], loc[1]] / 3600.)
+        # convert z into wave
+        w.append(np.interp(loc[2], np.arange(len(xn)), xn))
+        # measure flux and chi2
+        spec = FL1[loc[0], loc[1]] * 1e17
+        G = Gaussian1D(mean=w, stddev=5.4/2.35)
+        G.stddev.bounds = (5.0, 15.)
+        G.mean.bounds = (w[-1]-2., w[-1]+2.)
+        wsel = np.abs(wave - w[-1]) < 10.
+        cont = get_continuum(spec[np.newaxis, :], nbins=25)[0]
+        fit = fitter(G, wave[wsel], (spec-cont)[wsel])
+        num = ((spec-cont)[wsel] - fit(wave[wsel])) / EL[loc[0], loc[1]][wsel]
+        chi2norm.append(np.sum(num**2) / (len(num) - 3.))
+        flux.append(np.sum(fit(wave[wsel]) * 2.))
+        # get S/N
+        sn.append(SN1[loc[0], loc[1], loc[2]])
+        # measure continuum mag
+        positions = []
+        positions.append(wcs.wcs_world2pix(r[-1], d[-1], 1))
+        aperture = CircularAperture(positions, r=3.)
+        phot_table = aperture_photometry(cfht[0].data, aperture)
+        gmag.append(-2.5 * np.log10(phot_table['aperture_sum']) + 30.)
+    T = Table([r, d, flux, chi2norm, gmag, sn], names=['RA', 'Dec', 'Flux',
+                                                       'Chi2', 'gmag', 'sn'])
+    spectra = FL1[locs[:, 0], locs[:, 1]]
+    serror = EL[locs[:, 0], locs[:, 1]]
+    sres = res[locs[:, 0], locs[:, 1]]
+    L = fits.HDUList([fits.PrimaryHDU(spectra), fits.ImageHDU(serror),
+                      fits.ImageHDU(sres), fits.BinTableHDU(T),
+                      fits.ImageHDU(FL1), fits.ImageHDU(EL), 
+                      fits.ImageHDU(SN1)])
+    L.writeto('detect_output_%02d_%02d.fits' % xi, xj)
+    
