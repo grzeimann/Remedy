@@ -432,7 +432,7 @@ for xi, xj in zip(xs, ys):
     log.info('Getting detections for %i, %i' % (xi, xj))
     locs = find_detections(SN1, threshold=5.)
     # Collect ra, dec, wave, flux, S/N, chi2, continuum mag
-    r, d, flux, chi2norm, gmag, sn = ([], [], [], [], [], [])
+    r, d, w, flux, chi2norm, gmag, sn = ([], [], [], [], [], [], [])
     for loc in locs:
         # convert x, y into an ra and dec
         r.append(ra_center + DR[loc[0], loc[1]] / 3600. / np.cos(np.deg2rad(dec_center)))
