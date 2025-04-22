@@ -440,7 +440,7 @@ for xi, xj in zip(xs, ys):
         # convert z into wave
         w.append(np.interp(loc[2], np.arange(len(xn)), xn))
         # measure flux and chi2
-        spec = FL1[loc[0], loc[1]] * 1e17
+        spec = FL1[loc[0], loc[1]]
         G = Gaussian1D(mean=w, stddev=5.4/2.35)
         G.stddev.bounds = (5.0/2.35, 15.0/2.35)
         G.mean.bounds = (w[-1]-2., w[-1]+2.)
