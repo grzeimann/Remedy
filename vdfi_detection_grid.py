@@ -460,10 +460,10 @@ for xi, xj in zip(xs, ys):
         gmag.append(-2.5 * np.log10(phot_table['aperture_sum']*1/0.186**2) + 30.)
     T = Table([r, d, flux, chi2norm, gmag, sn], names=['RA', 'Dec', 'Flux',
                                                        'Chi2', 'gmag', 'sn'])
-    spectra = FL1[locs[:, 0], locs[:, 1]]
+    sspectra = FL1[locs[:, 0], locs[:, 1]]
     serror = EL[locs[:, 0], locs[:, 1]]
     sres = res[locs[:, 0], locs[:, 1]]
-    L = fits.HDUList([fits.PrimaryHDU(spectra), fits.ImageHDU(serror),
+    L = fits.HDUList([fits.PrimaryHDU(sspectra), fits.ImageHDU(serror),
                       fits.ImageHDU(sres), fits.BinTableHDU(T),
                       fits.ImageHDU(FL1), fits.ImageHDU(EL), 
                       fits.ImageHDU(SN1)])
