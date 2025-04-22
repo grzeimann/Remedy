@@ -11,6 +11,7 @@ import numpy as np
 import warnings
 import os
 import psutil
+import argparse as ap
 
 from astropy.nddata import Cutout2D
 from astropy.convolution import Gaussian2DKernel
@@ -30,8 +31,15 @@ from photutils.aperture import aperture_photometry, CircularAperture
 
 import seaborn as sns
 
+# Turn off annoying warnings (even though some deserve attention)
 warnings.filterwarnings("ignore")
 
+parser = ap.ArgumentParser(add_help=True)
+
+parser.add_argument("row", help='''detect row''', type=int)
+
+argv = None
+args = parser.parse_args(args=argv)
 
 sns.set_context('talk')
 sns.set_style('ticks')
@@ -281,7 +289,7 @@ xg = np.arange(30.5, 1230.5, 60)
 xgrid, ygrid = np.meshgrid(xg, xg)
 grid_ra, grid_dec = wcs.all_pix2world(xgrid + 1., ygrid + 1., 1)
 xs = np.arange(20)
-ys = np.ones((20,), dtype=int) * 4
+ys = np.ones((20,), dtype=int) * args.row
 
 fitter = TRFLSQFitter()
 log.info('Starting Detections')
