@@ -467,6 +467,6 @@ for xi, xj in zip(xs, ys):
                       fits.ImageHDU(sres), fits.BinTableHDU(T),
                       fits.ImageHDU(FL1), fits.ImageHDU(EL), 
                       fits.ImageHDU(SN1)])
-    L.writeto('detect_output_%02d_%02d.fits' % (xi, xj))
+    L.writeto('detect_output_%02d_%02d.fits' % (xi, xj), overwrite=True)
     del SN1, FL1, EL, FL 
     
