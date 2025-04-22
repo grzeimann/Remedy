@@ -296,7 +296,8 @@ log.info('Starting Detections')
 
 for xi, xj in zip(xs, ys):
     process = psutil.Process(os.getpid())
-    log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
+    log.info('Memory Used for  %i, %i: %0.2f GB' % 
+             (xi, xj, process.memory_info()[0] / 1e9))
     ra_center = grid_ra[xi, xj]
     dec_center = grid_dec[xi, xj]
     size = 30.
