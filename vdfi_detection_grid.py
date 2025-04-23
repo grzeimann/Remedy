@@ -467,8 +467,9 @@ for xi, xj in zip(xs, ys):
         aperture = CircularAperture(positions, r=3.)
         phot_table = aperture_photometry(cfht[0].data, aperture)
         gmag.append(-2.5 * np.log10(phot_table['aperture_sum'][0]*1/0.186**2) + 30.)
-    T = Table([r, d, flux, chi2norm, gmag, sn], names=['RA', 'Dec', 'Flux',
-                                                       'Chi2', 'gmag', 'sn'])
+    T = Table([r, d, w, sn, flux, chi2norm, gmag], names=['RA', 'Dec', 'wave',
+                                                          'sn', 'Flux',
+                                                          'Chi2', 'gmag'])
     sspectra = FL1[locs[:, 0], locs[:, 1]]
     serror = EL[locs[:, 0], locs[:, 1]]
     sres = res[locs[:, 0], locs[:, 1]]
