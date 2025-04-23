@@ -244,15 +244,15 @@ log = setup_logging('vdfi')
 
 wave = np.linspace(3470, 5540, 1036)
 
-f = fits.open('/work/03730/gregz/maverick/VDFI/all_info.fits')
+f = fits.open('/work/03730/gregz/maverick/VDFI/all_info.fits', memmap=True)
 
 RA = f[1].data * 1.
 DEC = f[2].data * 1.
 RA, DEC = [x.reshape((x.shape[0], x.shape[1] * x.shape[2])) for x in [RA, DEC]]
 nexp = RA.shape[0]
 
-g = fits.open('/work/03730/gregz/maverick/VDFI/all_flux_final.fits')
-e = fits.open('/work/03730/gregz/maverick/VDFI/all_error.fits')
+g = fits.open('/work/03730/gregz/maverick/VDFI/all_flux_final.fits', memmap=True)
+e = fits.open('/work/03730/gregz/maverick/VDFI/all_error.fits', memmap=True)
 
 spectra = g[0].data
 spectra = spectra.reshape((spectra.shape[0], 
@@ -274,8 +274,8 @@ r = np.linspace(0, radius, 101)
 seeing = np.linspace(np.min(f[5].data)-0.05, np.max(f[5].data)+0.05, 51)
 PSF, R, S, V = moffat_psf_integration(r, seeing)
 
-cfht = fits.open('/work/03730/gregz/ls6/PHATTER-VIRUS/CFHT_EGS_image.fits')
-vdfi = fits.open('/work/03730/gregz/ls6/PHATTER-VIRUS/VDFI_EGS_image.fits')
+cfht = fits.open('/work/03730/gregz/ls6/PHATTER-VIRUS/CFHT_EGS_image.fits', memmap=True)
+vdfi = fits.open('/work/03730/gregz/ls6/PHATTER-VIRUS/VDFI_EGS_image.fits', memmap=True)
 
 header = cfht[0].header
 
