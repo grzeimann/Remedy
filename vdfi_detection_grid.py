@@ -366,10 +366,10 @@ for xi, xj in zip(xs, ys):
     # ===============================
     # Spectral Cutout Initialization
     # ===============================
-    shortspec = np.zeros((spectra.shape[0], 448, 1036))
-    shorterr = np.zeros((spectra.shape[0], 448, 1036))
-    shortra = np.zeros((spectra.shape[0], 448))
-    shortdec = np.zeros((spectra.shape[0], 448))
+    shortspec = np.zeros((spectra.shape[0], 448, 1036), dtype=np.float32)
+    shorterr = np.zeros((spectra.shape[0], 448, 1036), dtype=np.float32)
+    shortra = np.zeros((spectra.shape[0], 448), dtype=np.float32)
+    shortdec = np.zeros((spectra.shape[0], 448), dtype=np.float32)
     npix = 0
 
     # ===============================
@@ -444,7 +444,8 @@ for xi, xj in zip(xs, ys):
             # Stack Spectra and Compute Initial Extraction
             # ===============================
             Spec = biweight(S, axis=0, ignore_nan=True)
-            ratio = mad_std(((S - Spec[np.newaxis]) / E)[:, 40:-25], ignore_nan=True, axis=1)
+            ratio = mad_std(((S - Spec[np.newaxis]) / E)[:, 40:-25], 
+                            ignore_nan=True, axis=1)
             iratios[i, j] = biweight(ratio, ignore_nan=True)
             E *= ratio[:, np.newaxis]
             W = 1. / E**2
@@ -463,7 +464,12 @@ for xi, xj in zip(xs, ys):
     position = (x-1, y-1)
     size_cut = (FL.shape[0], FL.shape[1])
     cutout = Cutout2D(cfht[0].data, position, size_cut)
-    mask = convolve(cutout.data[:, :] > 0.2, Gaussian2DKernel(2.5/2.35)) < 0.1
+    cfht_image = cutout.data * 1.
+    if cfht_image.shape[1] < FL.shape[1]:
+        chft_image = np.zeros((FL.shape[0], FL.shape[1]))
+        chft_image[:, :-1] = cutout.data
+    
+    mask = convolve(chft_image > 0.2, Gaussian2DKernel(2.5/2.35)) < 0.1
     mask *= (np.isnan(FL[:, :, 20:-20]).sum(axis=2) < 1)
 
     avg_back = np.nanmean(FL[mask], axis=(0,))
