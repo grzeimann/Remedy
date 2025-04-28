@@ -466,10 +466,10 @@ for xi, xj in zip(xs, ys):
     cutout = Cutout2D(cfht[0].data, position, size_cut)
     cfht_image = cutout.data * 1.
     if cfht_image.shape[1] < FL.shape[1]:
-        chft_image = np.zeros((FL.shape[0], FL.shape[1]))
-        chft_image[:, :-1] = cutout.data
+        cfht_image = np.zeros((FL.shape[0], FL.shape[1]))
+        cfht_image[:, :-1] = cutout.data
     
-    mask = convolve(chft_image > 0.2, Gaussian2DKernel(2.5/2.35)) < 0.1
+    mask = convolve(cfht_image > 0.2, Gaussian2DKernel(2.5/2.35)) < 0.1
     mask *= (np.isnan(FL[:, :, 20:-20]).sum(axis=2) < 1)
 
     avg_back = np.nanmean(FL[mask], axis=(0,))
