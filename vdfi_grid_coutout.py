@@ -6,12 +6,11 @@ Created on Tue Apr 29 08:37:38 2025
 @author: grz85
 """
 
-import matplotlib.pyplot as plt
 import numpy as np
 import warnings
 import os
 import psutil
-import argparse as ap
+import os.path as op
 
 from astropy.io import fits
 from astropy.modeling.models import Moffat2D
@@ -322,11 +321,15 @@ log.info('Starting Detections')
 # ===============================
 for xi in xs:
     for xj in ys:
+        
         # Log memory usage for current grid point
         process = psutil.Process(os.getpid())
         log.info('Memory Used for  %i, %i: %0.2f GB' % 
                  (xi, xj, process.memory_info()[0] / 1e9))
         
+        filename = 'short_%02d_%02d.fits' % (xi, xj)
+        if op.exists(filename):
+            continue
         # Extract RA/Dec center from input grids
         ra_center = grid_ra[xi, xj]
         dec_center = grid_dec[xi, xj]
