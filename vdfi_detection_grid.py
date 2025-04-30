@@ -528,4 +528,4 @@ def run_detection(xi, xj):
         L.writeto('detect_output_%02d_%02d.fits' % (xi, xj), overwrite=True)
         return None
 
-run_detection(14, 6)
+run_detection(10, 14)
