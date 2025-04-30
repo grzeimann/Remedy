@@ -307,14 +307,7 @@ log.info('Starting Detections')
 # Main Loop Over Grid Positions
 # ===============================
 def run_detection(xi, xj):
-    
-    
-    # Log memory usage for current grid point
-    process = psutil.Process(os.getpid())
-    log.info('Memory Used for  %i, %i: %0.2f GB' % 
-             (xi, xj, process.memory_info()[0] / 1e9))
-    
-    
+        
     filename = 'short_%02d_%02d.fits' % (xi, xj)
 
     # Extract RA/Dec center from input grids
@@ -329,7 +322,7 @@ def run_detection(xi, xj):
     S = np.zeros((nexp, len(wave)))
     E = np.zeros_like(S)
     
-    log.info('Making cutout for %i, %i' % (xi, xj))
+    log.info('Getting cutout for %i, %i' % (xi, xj))
 
     # ===============================
     # Spectral Cutout Initialization
@@ -346,7 +339,11 @@ def run_detection(xi, xj):
         if npix < 10:
             log.info('Not enough spectra in region ... moving to next grid point')
             return None
-    
+        
+        # Log memory usage for current grid point
+        process = psutil.Process(os.getpid())
+        log.info('Memory Used for  %i, %i: %0.2f GB' % 
+                 (xi, xj, process.memory_info()[0] / 1e9))
         # ===============================
         # Begin Spectral Extraction
         # ===============================
