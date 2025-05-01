@@ -9,6 +9,7 @@ Created on Thu Apr 17 19:58:46 2025
 import numpy as np
 import warnings
 import os
+import os.path as op
 import psutil
 import multiprocessing
 
@@ -311,7 +312,11 @@ def run_detection(counter):
     
     xi, xj = (int(counter / 20), counter % 20)
     filename = 'short_%02d_%02d.fits' % (xi, xj)
+    outname = 'detect_output_%02d_%02d.fits' % (xi, xj)
+    if op.exists(outname):
+        log.info('Detection exists for %i, %i' % (xi, xj))
 
+        return None
     # Extract RA/Dec center from input grids
     ra_center = grid_ra[xi, xj]
     dec_center = grid_dec[xi, xj]
@@ -426,32 +431,34 @@ def run_detection(counter):
         avg_back = np.nanmean(FL[mask], axis=(0,))
         data = (FL[mask] - avg_back[np.newaxis, :]) / EL[mask]
         data = data[:, 20:-20]
-        
-        # Run PCA on masked, background-subtracted data
-        pca = PCA(n_components=5)
-        H = pca.fit_transform(data.T)
-    
-        # ===============================
-        # Project PCA to Calculate Residuals
-        # ===============================
-        image = np.zeros((mask.shape[0], mask.shape[1], H.shape[1]))
         res = np.zeros_like(FL) + avg_back[np.newaxis, np.newaxis, :]
-        for i in np.arange(len(dd)):
-            for j in np.arange(len(dr)):
-                data = (FL[i, j] - avg_back) / EL[i, j]
-                cont = get_continuum(data[np.newaxis, :], nbins=25)[0]
-                if np.isnan(data[20:-20]).sum() < 100:
-                    sel = np.isfinite((data-cont)[20:-20])
-                    sol = np.linalg.lstsq(H[sel], (data-cont)[20:-20][sel])[0]
-                    res[i, j, 20:-20] = (np.dot(sol, H.T) * EL[i, j, 20:-20] + avg_back[20:-20])
-                    image[i, j] = sol
+
+        if data.shape[0] > 10:
+            # Run PCA on masked, background-subtracted data
+            pca = PCA(n_components=5)
+            H = pca.fit_transform(data.T)
+        
+            # ===============================
+            # Project PCA to Calculate Residuals
+            # ===============================
+            image = np.zeros((mask.shape[0], mask.shape[1], H.shape[1]))
+            for i in np.arange(len(dd)):
+                for j in np.arange(len(dr)):
+                    data = (FL[i, j] - avg_back) / EL[i, j]
+                    cont = get_continuum(data[np.newaxis, :], nbins=25)[0]
+                    if np.isnan(data[20:-20]).sum() < 100:
+                        sel = np.isfinite((data-cont)[20:-20])
+                        sol = np.linalg.lstsq(H[sel], (data-cont)[20:-20][sel])[0]
+                        res[i, j, 20:-20] = (np.dot(sol, H.T) * EL[i, j, 20:-20] + avg_back[20:-20])
+                        image[i, j] = sol
     
+        FL1 = FL - res
+
         # ===============================
         # Construct S/N Maps
         # ===============================
         log.info('Getting S/N map for %i, %i' % (xi, xj))
         SN1 = np.zeros((len(dr), len(dd), 3001))
-        FL1 = FL - res
         avgratio = mad_std(FL1[mask] / EL[mask], axis=(0,), ignore_nan=True)
         avgratio = get_continuum(avgratio[np.newaxis, :], nbins=11)[0]
     
@@ -529,7 +536,7 @@ def run_detection(counter):
                           fits.ImageHDU(sres), fits.BinTableHDU(T),
                           fits.ImageHDU(FL1), fits.ImageHDU(EL), 
                           fits.ImageHDU(SN1)])
-        L.writeto('detect_output_%02d_%02d.fits' % (xi, xj), overwrite=True)
+        L.writeto(outname, overwrite=True)
         return None
 
 TOTAL_TASKS = 400
