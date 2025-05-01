@@ -424,6 +424,9 @@ def run_detection(counter):
         if cfht_image.shape[1] < FL.shape[1]:
             cfht_image = np.zeros((FL.shape[0], FL.shape[1]))
             cfht_image[:, :-1] = cutout.data
+        if cfht_image.shape[0] < FL.shape[0]:
+            cfht_image = np.zeros((FL.shape[0], FL.shape[1]))
+            cfht_image[::-1, :] = cutout.data
         
         mask = convolve(cfht_image > 0.2, Gaussian2DKernel(2.5/2.35)) < 0.1
         mask *= (np.isnan(FL[:, :, 20:-20]).sum(axis=2) < 1)
