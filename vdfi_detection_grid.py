@@ -471,7 +471,12 @@ def run_detection(counter):
                 SN1[i, j] = I(xn)
         
         DR, DD = np.meshgrid(dr, dd)
-    
+        
+        # Log memory usage for current grid point
+        process = psutil.Process(os.getpid())
+        log.info('Memory Used for  %i, %i: %0.2f GB' % 
+                 (xi, xj, process.memory_info()[0] / 1e9))
+        
         # ===============================
         # Detection Emission Lines
         # ===============================
