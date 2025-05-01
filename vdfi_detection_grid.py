@@ -532,8 +532,8 @@ def run_detection(counter):
         L.writeto('detect_output_%02d_%02d.fits' % (xi, xj), overwrite=True)
         return None
 
-TOTAL_TASKS = 12
-NUM_WORKERS = 16  # adjust depending on CPU/memory
+TOTAL_TASKS = 400
+NUM_WORKERS = 32  # adjust depending on CPU/memory
 
 with multiprocessing.Pool(processes=NUM_WORKERS) as pool:
-    results = pool.map(run_detection, range(42,42+NUM_WORKERS))
+    results = pool.map(run_detection, range(TOTAL_TASKS))
