@@ -510,7 +510,7 @@ def run_detection(counter):
             G = Gaussian1D(mean=w[-1], stddev=5.4/2.35)
             G.stddev.bounds = (5.0/2.35, 15.0/2.35)
             G.mean.bounds = (w[-1]-2., w[-1]+2.)
-            wsel = np.abs(wave - w[-1]) < 20.
+            wsel = (np.abs(wave - w[-1]) < 20.) * np.isfinite(spec)
             cont = get_continuum(spec[np.newaxis, :], nbins=25)[0]
             fit = fitter(G, wave[wsel], (spec-cont)[wsel])
             num = ((spec-cont)[wsel] - fit(wave[wsel])) / EL[loc[0], loc[1]][wsel]
