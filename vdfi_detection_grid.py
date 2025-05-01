@@ -10,6 +10,7 @@ import numpy as np
 import warnings
 import os
 import psutil
+import multiprocessing
 
 from astropy.nddata import Cutout2D
 from astropy.convolution import Gaussian2DKernel
@@ -306,8 +307,9 @@ log.info('Starting Detections')
 # ===============================
 # Main Loop Over Grid Positions
 # ===============================
-def run_detection(xi, xj):
-        
+def run_detection(counter):
+    
+    xi, xj = (int(counter / 20), counter % 20)
     filename = 'short_%02d_%02d.fits' % (xi, xj)
 
     # Extract RA/Dec center from input grids
@@ -525,4 +527,8 @@ def run_detection(xi, xj):
         L.writeto('detect_output_%02d_%02d.fits' % (xi, xj), overwrite=True)
         return None
 
-run_detection(10, 14)
+TOTAL_TASKS = 12
+NUM_WORKERS = 12  # adjust depending on CPU/memory
+
+with multiprocessing.Pool(processes=NUM_WORKERS) as pool:
+    results = pool.map(run_detection, range(TOTAL_TASKS))
