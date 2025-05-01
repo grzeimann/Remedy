@@ -533,7 +533,7 @@ def run_detection(counter):
         return None
 
 TOTAL_TASKS = 400
-NUM_WORKERS = 32  # adjust depending on CPU/memory
+NUM_WORKERS = 64  # adjust depending on CPU/memory
 
 with multiprocessing.Pool(processes=NUM_WORKERS) as pool:
     results = pool.map(run_detection, range(TOTAL_TASKS))
