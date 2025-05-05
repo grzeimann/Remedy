@@ -41,7 +41,7 @@ vdfi_sn = np.zeros((N, N, 3001), dtype=np.float32)
 tables = []
 for filename in filenames:
     n = op.basename(filename)
-    xi, xj = (int(n.split('_')[2]), int(n.split('_')[3]))
+    xi, xj = (int(n.split('_')[2]), int(n.split('_')[3][:2]))
     with fits.open(filename, memmap=True) as hdulist:
         log.info('Loaded %02d, %02d' % (xi, xj))
         # Extract RA/Dec center from input grids
