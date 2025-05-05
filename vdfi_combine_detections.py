@@ -74,7 +74,7 @@ header['CUNIT1'] = 'deg'
 header['CUNIT2'] = 'deg'
 header['CUNIT3'] = 'Angstrom'
 header['SPECSYS'] = 'TOPOCENT'
-F = fits.PrimaryHDU(vdfi_cube, header=header)
+F = fits.PrimaryHDU(np.moveaxis(vdfi_cube, -1, 0), header=header)
 F.writeto(name, overwrite=True)
 name = op.basename('%s_errorcube.fits' % surname)
 header['CRPIX1'] = (N+1) / 2.
@@ -89,7 +89,7 @@ header['CUNIT1'] = 'deg'
 header['CUNIT2'] = 'deg'
 header['CUNIT3'] = 'Angstrom'
 header['SPECSYS'] = 'TOPOCENT'
-F = fits.PrimaryHDU(vdfi_error, header=header)
+F = fits.PrimaryHDU(np.moveaxis(vdfi_error, -1, 0), header=header)
 F.writeto(name, overwrite=True)
 name = op.basename('%s_sncube.fits' % surname)
 header['CRPIX1'] = (N+1) / 2.
@@ -104,5 +104,5 @@ header['CUNIT1'] = 'deg'
 header['CUNIT2'] = 'deg'
 header['CUNIT3'] = 'Angstrom'
 header['SPECSYS'] = 'TOPOCENT'
-F = fits.PrimaryHDU(vdfi_sn, header=header)
+F = fits.PrimaryHDU(np.moveaxis(vdfi_sn, -1, 0), header=header)
 F.writeto(name, overwrite=True)
