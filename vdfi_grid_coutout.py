@@ -272,12 +272,16 @@ nexp = RA.shape[0]  # Number of exposures
 # Load spectral data (flux and error)
 g = fits.open('/work/03730/gregz/maverick/VDFI/all_flux_final.fits', memmap=True)
 e = fits.open('/work/03730/gregz/maverick/VDFI/all_error.fits', memmap=True)
+
+mask_amps = [106, 122, 123, 131, 135, 146, 256, 264, 286, 287, 299, 301]
 spectra = g[0].data
+spectra[:, mask_amps, :, :] = np.nan
 # Reshape to (exposure, fibers, wavelength)
 spectra = spectra.reshape((spectra.shape[0], 
                            spectra.shape[1] * spectra.shape[2], 
                            spectra.shape[3]))
 error = e[0].data
+error[:, mask_amps, :, :] = np.nan
 error = error.reshape((error.shape[0], error.shape[1] * error.shape[2], 
                        error.shape[3]))
 
@@ -366,6 +370,8 @@ for xi in xs:
             if fiber_sel.sum():
                 mask = (np.isfinite(spectra[exposure, :, 400:500]).sum(axis=1) > 50.)
                 fiber_sel = fiber_sel * mask
+                if fiber_sel.sum() == 0:
+                    continue
                 npix += 1
                 N = fiber_sel.sum()
                 shortspec[exposure, :N] = spectra[exposure, fiber_sel]
