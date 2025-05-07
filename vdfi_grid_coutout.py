@@ -274,6 +274,7 @@ g = fits.open('/work/03730/gregz/maverick/VDFI/all_flux_final.fits', memmap=True
 e = fits.open('/work/03730/gregz/maverick/VDFI/all_error.fits', memmap=True)
 
 mask_amps = [106, 122, 123, 131, 135, 146, 256, 264, 286, 287, 299, 301]
+
 spectra = g[0].data
 spectra[:, mask_amps, :, :] = np.nan
 # Reshape to (exposure, fibers, wavelength)
