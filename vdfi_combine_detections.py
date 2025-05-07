@@ -47,9 +47,9 @@ for filename in filenames:
         # Extract RA/Dec center from input grids
         x = int(xgrid[xi, xj] - 29.5)
         y = int(ygrid[xi, xj] - 29.5)
-        vdfi_cube[y:y+60,x:x+60] = hdulist[4].data[1:-1,1:-1] * 1.
+        vdfi_cube[y:y+60,x:x+60] = hdulist[4].data[1:-1,1:-1] + hdulist[5].data[1:-1,1:-1]
         vdfi_error[y:y+60,x:x+60] = hdulist[5].data[1:-1,1:-1] * 1.
-        vdfi_sn[y:y+60,x:x+60] = hdulist[6].data[1:-1,1:-1] * 1.
+        vdfi_sn[y:y+60,x:x+60] = hdulist[7].data[1:-1,1:-1] * 1.
         tables.append(Table(hdulist[3].data))
 
 combined_table = vstack(tables)
