@@ -537,7 +537,7 @@ def run_detection(counter):
         sres = res[locs[:, 0], locs[:, 1]]
         L = fits.HDUList([fits.PrimaryHDU(sspectra), fits.ImageHDU(serror),
                           fits.ImageHDU(sres), fits.BinTableHDU(T),
-                          fits.ImageHDU(FL1), fits.ImageHDU(EL), 
+                          fits.ImageHDU(FL1), fits.ImageHDU(EL), fits.ImageHDU(res),
                           fits.ImageHDU(SN1)])
         L.writeto(outname, overwrite=True)
         return None

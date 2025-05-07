@@ -294,7 +294,6 @@ PSF, R, S, V = moffat_psf_integration(r, seeing)
 
 # Load reference images
 cfht = fits.open('/work/03730/gregz/ls6/PHATTER-VIRUS/CFHT_EGS_image.fits', memmap=True)
-vdfi = fits.open('/work/03730/gregz/ls6/PHATTER-VIRUS/VDFI_EGS_image.fits', memmap=True)
 header = cfht[0].header
 
 # Get world coordinates (RA, Dec)
