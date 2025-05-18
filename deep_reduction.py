@@ -9,7 +9,6 @@ Created on Fri Jun 14 09:14:46 2024
 import tables
 import glob
 import numpy as np
-import matplotlib.pyplot as plt
 import os.path as op
 from astroquery.mast import Catalogs
 from astropy.stats import biweight_location as biweight
@@ -68,14 +67,34 @@ def moffat_psf_integration(xloc, yloc, seeing, boxsize=14.,
             cnt += 1
         return V
 
+# =============================================================================
+# EGS
+# =============================================================================
 field_ra = 214.91
 field_dec = 52.88
+radius = 11. / 60.
+catname = '/work/03730/gregz/maverick/VDFI/CFHTLS_D-85_g_141927+524056_T0007_MEDIAN.cat'
+pnstars_out = 'PanSTARRS_egs_stars.cat'
 
-Pan = Catalogs.query_region("%s %s" % (field_ra, field_dec), radius=11./60., 
+
+# =============================================================================
+# COSMOS
+# =============================================================================
+field_ra = 150.1375
+field_dec = 2.2920
+radius = 17. / 60.
+catname = '/work/03730/gregz/maverick/VDFI/CFHTLS_D-85_g_100028+021230_T0007_MEDIAN.cat'
+pnstars_out = 'PanSTARRS_cosmos_stars.cat'
+
+Pan = Catalogs.query_region("%s %s" % (field_ra, field_dec), radius=radius, 
                                        catalog="Panstarrs", data_release="dr2",
                                        table="stack")
 # 299 need to be masked
 
+t = Table.read(catname, format='ascii')
+sel = (t['MAG_AUTO'].value < 25.5)
+rac = t['ALPHA_J2000'].value[sel]
+decc = t['DELTA_J2000'].value[sel]
 
 log = setup_logging('deep_reduction')
 
@@ -106,6 +125,8 @@ D = np.array(Pan['decStack'])
 sel = (g < 23.) * (g > 14.) * (qf < 64) * (pd > 0) * (np.abs(D) < 90)
 pra = np.array(Pan['raStack'][sel])
 pdec = np.array(Pan['decStack'][sel])
+pra = rac
+pdec = decc
 pcoord = SkyCoord(pra*u.deg, pdec*u.deg)
 
 # Build empty arrays
@@ -361,7 +382,7 @@ L = fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(allra),
 
 L.writeto('all_info.fits', overwrite=True)
 
-Pan[sel].write('PanSTARRS_egs_stars.cat', format='ascii.fixed_width_two_line',
+Pan[sel].write(pnstars_out, format='ascii.fixed_width_two_line',
                overwrite=True)
 
 star_average = np.nanmedian(norm, axis=0)
