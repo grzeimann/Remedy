@@ -97,8 +97,9 @@ def get_res_map(amp_spec, amp_sky, amp_error, mask_small, li, hi):
     x = np.arange(res.shape[0])
     for j in range(Y.shape[1]):
         sel = res[:, j] != 0.0
-        res[:, j] = np.interp(x, x[sel], res[sel, j])
-        res[:, j] = convolve(res[:, j], Gaussian1DKernel(3.))
+        if sel.sum() > 20:
+            res[:, j] = np.interp(x, x[sel], res[sel, j])
+            res[:, j] = convolve(res[:, j], Gaussian1DKernel(3.))
 
     # Add back average structure
     res += res1
@@ -392,7 +393,7 @@ def subtract_sky(counter):
             newspec[k, i] = amp_spec[li:hi] - res
             newerror[k, i] = amp_error[li: hi]
             z = amp_spec[li:hi] - res
-            sigma[k, i] = mad_std(z, ignore_nan=True)
+            sigma[k, i] = mad_std(z / amp_error[li:hi], ignore_nan=True)
             allra[k, i, :] = ra[sel][li:hi]
             alldec[k, i, :] = dec[sel][li:hi]
             guider[k] = fwhm[k]
