@@ -431,15 +431,15 @@ NUM_WORKERS = 16  # adjust depending on CPU/memory
 with multiprocessing.Pool(processes=NUM_WORKERS) as pool:
     results = pool.map(subtract_sky, range(TOTAL_TASKS))
 
-allra = np.vstack([result[1] for result in results])
-alldec = np.vstack([result[2] for result in results])
-raoff = np.vstack([result[3] for result in results])
-decoff = np.vstack([result[4] for result in results])
-sigma = np.vstack([result[5] for result in results])
-guider = np.vstack([result[6] for result in results])
-offsets = np.vstack([result[7] for result in results])
-norm = np.vstack([result[8] for result in results])
-exposure_seeing = np.vstack([result[9] for result in results])
+allra = np.vstack([result[0] for result in results])
+alldec = np.vstack([result[1] for result in results])
+raoff = np.vstack([result[2] for result in results])
+decoff = np.vstack([result[3] for result in results])
+sigma = np.vstack([result[4] for result in results])
+guider = np.vstack([result[5] for result in results])
+offsets = np.vstack([result[6] for result in results])
+norm = np.vstack([result[7] for result in results])
+exposure_seeing = np.vstack([result[8] for result in results])
 
 fits.HDUList([fits.PrimaryHDU(raoff), fits.ImageHDU(decoff)]).writeto('all_initial_dar.fits', overwrite=True)
  
