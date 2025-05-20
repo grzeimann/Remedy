@@ -68,9 +68,9 @@ def shift_wavelength(amp_spec, amp_sky, mask_small):
 
     Y = (amp_spec + amp_sky)
     Y[mask_small] = np.nan
-    current_observation[0] = np.nanmedian(Y[:112])
-    current_observation[1] = np.nanmedian(Y[112:224])
-    current_observation[2] = np.nanmedian(Y[224:])
+    current_observation[0] = np.nanmedian(Y[:112], axis=0)
+    current_observation[1] = np.nanmedian(Y[112:224], axis=0)
+    current_observation[2] = np.nanmedian(Y[224:], axis=0)
     monthly_average[0] = amp_sky[0] * 1.
     monthly_average[1] = amp_sky[112] * 1.
     monthly_average[2] = amp_sky[224] * 1.
@@ -84,8 +84,7 @@ def shift_wavelength(amp_spec, amp_sky, mask_small):
     FFT = phase_cross_correlation(current_observation[:, 50:-50],
                                   monthly_average[:, 50:-50],
                                   normalization=None, upsample_factor=100)
-    print(FFT)
-    sys.exit(1)
+
     if np.abs(FFT[0][1]) < 1.0:
         # Use the median valid shift (in pixels), scaled by 2.0 (empirical correction)
         shift = FFT[0][1] * 2.0
