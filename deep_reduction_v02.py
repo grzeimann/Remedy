@@ -94,14 +94,13 @@ def shift_wavelength(amp_spec, amp_sky, mask_small, li, hi):
     def_wave = np.linspace(3470, 5540, 1036)  # Default wavelength grid
 
     for i in np.arange(scispectra.shape[0]):
-        scirect[i] = np.interp(
-            def_wave, def_wave + shift, scispectra[i], left=np.nan, right=np.nan
-        )
+        scirect[i] = np.interp(def_wave, def_wave + shift, 
+                               scispectra[i], left=np.nan, right=np.nan)
 
     # Subtract the sky to yield the final science-only spectrum
     scirect -= amp_sky[li:hi]
 
-    return scirect, shift
+    return amp_spec[li:hi], shift
 
 
 def masked_median_filter(data, shape=(5, 51), ignore_value=0.0):
