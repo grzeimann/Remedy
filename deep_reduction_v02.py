@@ -36,7 +36,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 
-def shift_wavelength(amp_spec, amp_sky, mask_small, li, hi):
+def shift_wavelength(amp_spec, amp_sky, mask_small):
     """
     Estimate and apply a wavelength shift to science spectra using cross-correlation with 
     sky spectra.
@@ -59,48 +59,53 @@ def shift_wavelength(amp_spec, amp_sky, mask_small, li, hi):
     shift : float
         Estimated median shift (in pixels) applied to align the spectra.
     """
-    if np.isfinite(amp_spec[li:hi]).sum() < 1:
-        return amp_spec[li:hi], 0.0  # Return original if all data is invalid
+    
+    if np.isfinite(amp_spec).sum() < 1:
+        return amp_spec, 0.0  # Return original if all data is invalid
+    
+    current_observation = np.zeros((3, 1036))
+    monthly_average = np.zeros((3, 1036))
 
-    # Combine science and sky spectra, then extract the region of interest
-    current_observation = (amp_spec + amp_sky)[li:hi]
-    current_observation[mask_small[li:hi]] = np.nan
-    current_observation = np.nanmedian(current_observation, axis=0)
-    # Subtract continuum from the combined observation
-    continuum = get_continuum(current_observation[np.newaxis, :], nbins=11)[0]
-    current_observation -= continuum
+    Y = (amp_spec + amp_sky)
+    Y[mask_small] = np.nan
+    current_observation[0] = np.nanmedian(Y[:112])
+    current_observation[1] = np.nanmedian(Y[112:224])
+    current_observation[2] = np.nanmedian(Y[224:])
+    monthly_average[0] = amp_sky[0] * 1.
+    monthly_average[1] = amp_sky[112] * 1.
+    monthly_average[2] = amp_sky[224] * 1.
+    cont = get_continuum(current_observation, nbins=11)
+    current_observation -= cont
+    cont = get_continuum(monthly_average, nbins=11)
+    monthly_average -= cont
     current_observation[np.isnan(current_observation)] = 0.0
-
-    # Construct a model sky spectrum over the same region
-    monthly_average = amp_sky[li]
-
-    # Subtract continuum from the sky model
-    continuum = get_continuum(monthly_average[np.newaxis, :], nbins=11)[0]
-    monthly_average -= continuum
     monthly_average[np.isnan(monthly_average)] = 0.0
 
-    FFT = phase_cross_correlation(current_observation[50:-50][np.newaxis, :],
-                                  monthly_average[50:-50][np.newaxis, :],
+    FFT = phase_cross_correlation(current_observation[:, 50:-50],
+                                  monthly_average[:, 50:-50],
                                   normalization=None, upsample_factor=100)
     if np.abs(FFT[0][1]) < 1.0:
         # Use the median valid shift (in pixels), scaled by 2.0 (empirical correction)
         shift = FFT[0][1] * 2.0
     else:
         shift = 0.0
-
+    
     # Apply the shift to the combined science+sky spectra
-    scispectra = (amp_spec + amp_sky)[li:hi]
-    scirect = amp_spec[li:hi] * np.nan  # Initialize output array
+    scispectra = (amp_spec + amp_sky)
+    scirect = np.zeros_like(scispectra)
     def_wave = np.linspace(3470, 5540, 1036)  # Default wavelength grid
 
     for i in np.arange(scispectra.shape[0]):
-        scirect[i] = np.interp(def_wave, def_wave + shift, 
-                               scispectra[i], left=np.nan, right=np.nan)
-
+        good = np.isfinite(scispectra[i])
+        if good.sum() > 50:
+            scirect[i][good] = np.interp(def_wave[good], def_wave[good] + shift, 
+                                   scispectra[i][good], left=np.nan, 
+                                   right=np.nan)
+    
     # Subtract the sky to yield the final science-only spectrum
-    scirect -= amp_sky[li:hi]
+    scirect -= amp_sky
 
-    return amp_spec[li:hi], shift
+    return scirect, shift
 
 
 def masked_median_filter(data, shape=(5, 51), ignore_value=0.0):
@@ -469,14 +474,12 @@ def subtract_sky(counter):
         amp_error = error[sel]
         amp_sky = sky[sel]
         mask_small = mask[sel]
+        amp_spec, shift = shift_wavelength(amp_spec, amp_sky, mask_small)
         nexp = int(sel.sum() / 112)
         for k in np.arange(nexp):
             li = k * 112
             hi = (k+1) * 112
-            #amp_spec[li:hi], shift = shift_wavelength(amp_spec, amp_sky, 
-            #                                          mask_small, li, hi)
-            shifts[k, i] = 0.0
-            #log.info('Shift for %s_%s: %0.2f A' % (op.basename(filename), combo, shift))
+            shifts[k, i] = shift
             res = get_res_map(amp_spec, amp_sky, amp_error, mask_small, li, hi)
             newspec[k, i] = amp_spec[li:hi] - res
             newerror[k, i] = amp_error[li: hi]
