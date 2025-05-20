@@ -100,7 +100,7 @@ def shift_wavelength(amp_spec, amp_sky, li, hi):
 
     # Apply the shift to the combined science+sky spectra
     scispectra = (amp_spec + amp_sky)[li:hi]
-    scirect = amp_spec * np.nan  # Initialize output array
+    scirect = amp_spec[li:hi] * np.nan  # Initialize output array
     def_wave = np.linspace(3470, 5540, 1036)  # Default wavelength grid
 
     for i in np.arange(scispectra.shape[0]):
