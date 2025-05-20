@@ -473,9 +473,9 @@ def subtract_sky(counter):
         for k in np.arange(nexp):
             li = k * 112
             hi = (k+1) * 112
-            amp_spec[li:hi], shift = shift_wavelength(amp_spec, amp_sky, 
-                                                      mask_small, li, hi)
-            shifts[k, i] = shift
+            #amp_spec[li:hi], shift = shift_wavelength(amp_spec, amp_sky, 
+            #                                          mask_small, li, hi)
+            shifts[k, i] = 0.0
             #log.info('Shift for %s_%s: %0.2f A' % (op.basename(filename), combo, shift))
             res = get_res_map(amp_spec, amp_sky, amp_error, mask_small, li, hi)
             newspec[k, i] = amp_spec[li:hi] - res
