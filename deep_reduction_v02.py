@@ -25,6 +25,7 @@ from astrometry import Astrometry
 from sklearn.decomposition import PCA
 from extract import Extract
 from scipy.interpolate import interp1d
+from scipy.ndimage import generic_filter
 import os
 import psutil
 import multiprocessing
@@ -32,6 +33,31 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
+
+def masked_median_filter(data, shape=(5, 50), ignore_value=0.0, mode='reflect'):
+    """
+    Median filter that ignores specified values.
+
+    Parameters:
+        data (ndarray): 2D input array.
+        shape (tuple): Filter window shape (rows, cols), default (3, 3).
+        ignore_value (float or int): Value to ignore in median, default -999.
+        mode (str): Border mode ('reflect', 'constant', etc.), default 'reflect'.
+
+    Returns:
+        ndarray: Filtered array with the same shape as input.
+    """
+    def masked_median(values):
+        v = values[values != ignore_value]
+        return np.median(v) if v.size > 0 else ignore_value
+
+    return generic_filter(
+        data,
+        function=masked_median,
+        footprint=np.ones(shape, dtype=bool),
+        mode=mode,
+        cval=ignore_value
+    )
 
 def get_res_map(amp_spec, amp_sky, amp_error, mask_small, li, hi):
     '''
@@ -67,17 +93,8 @@ def get_res_map(amp_spec, amp_sky, amp_error, mask_small, li, hi):
     Z[Z == 0.0] = np.nan
 
     # Estimate and subtract average large-scale structure along rows (biweight across fibers)
-    avg_w = biweight(Z, axis=0, ignore_nan=True)
-    avg_w = get_continuum(avg_w[np.newaxis, :])[0]
-    Y -= avg_w[np.newaxis, :]
-    Y[is_zero] = 0.0
-
-    # Estimate and subtract average feature profile across wavelength (biweight across pixels)
-    Z = Y.copy()
-    Z[Z == 0.0] = np.nan
-    avg_f = biweight(Z, axis=1, ignore_nan=True)
-    avg_f = get_continuum(avg_f[np.newaxis, :], nbins=7)[0]
-    Y -= avg_f[:, np.newaxis]
+    back = masked_median_filter(Z, shape=(5, 50))
+    Y -= back
     Y[is_zero] = 0.0
 
     # Perform PCA on the transposed residual matrix
@@ -85,7 +102,7 @@ def get_res_map(amp_spec, amp_sky, amp_error, mask_small, li, hi):
     H = pca.fit_transform(Y.T)
 
     # Initial residual model: add back average trends
-    res1 = avg_w[np.newaxis, :] + avg_f[:, np.newaxis]
+    res1 = back
 
     # Reconstruct modeled features from PCA components
     res = np.zeros_like(Y)
