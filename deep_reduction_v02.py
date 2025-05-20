@@ -25,7 +25,8 @@ from astrometry import Astrometry
 from sklearn.decomposition import PCA
 from extract import Extract
 from scipy.interpolate import interp1d
-from scipy.ndimage import generic_filter
+from scipy import ndimage
+from scipy.ndimage import median_filter
 import os
 import psutil
 import multiprocessing
@@ -34,7 +35,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 
-def masked_median_filter(data, shape=(5, 50), ignore_value=0.0, mode='reflect'):
+def masked_median_filter(data, shape=(5, 51), ignore_value=0.0, mode='reflect'):
     """
     Median filter that ignores specified values.
 
@@ -47,17 +48,15 @@ def masked_median_filter(data, shape=(5, 50), ignore_value=0.0, mode='reflect'):
     Returns:
         ndarray: Filtered array with the same shape as input.
     """
-    def masked_median(values):
-        v = values[values != ignore_value]
-        return np.median(v) if v.size > 0 else ignore_value
+    mask = data == ignore_value
 
-    return generic_filter(
-        data,
-        function=masked_median,
-        footprint=np.ones(shape, dtype=bool),
-        mode=mode,
-        cval=ignore_value
-    )
+    # Distance transform to find nearest valid pixel
+    distance, indices = ndimage.distance_transform_edt(mask, return_indices=True)
+
+    # Use indices to fill masked points
+    filled_data = data[tuple(indices)]
+    
+    return median_filter(filled_data, size=shape)
 
 def get_res_map(amp_spec, amp_sky, amp_error, mask_small, li, hi):
     '''
@@ -90,7 +89,6 @@ def get_res_map(amp_spec, amp_sky, amp_error, mask_small, li, hi):
 
     # Prepare for biweight estimation by replacing zeros with NaNs
     Z = Y.copy()
-    Z[Z == 0.0] = np.nan
 
     # Estimate and subtract average large-scale structure along rows (biweight across fibers)
     back = masked_median_filter(Z, shape=(5, 50))
