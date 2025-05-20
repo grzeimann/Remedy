@@ -464,6 +464,8 @@ for j, filename in enumerate(filenames):
     ind = j * 3
     allspec[ind:ind+3] = f[0].data
     allerror[ind:ind+3] = f[1].data
+fits.PrimaryHDU(allerror).writeto('all_error.fits', overwrite=True)
+del allerror
 
 for amp in np.arange(allspec.shape[1]):
     log.info('Making Residual for %s' % unique_amps[amp])
@@ -471,6 +473,4 @@ for amp in np.arange(allspec.shape[1]):
     avgres = biweight(s, axis=0, ignore_nan=True)
     ResidualMaps[amp] = avgres
 fits.PrimaryHDU(ResidualMaps).writeto('residual_maps.fits', overwrite=True)
-
-fits.PrimaryHDU(allerror).writeto('all_error.fits', overwrite=True)
 fits.PrimaryHDU(allspec).writeto('all_flux_final.fits', overwrite=True)
