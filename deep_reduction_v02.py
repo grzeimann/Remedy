@@ -460,6 +460,7 @@ def subtract_sky(counter):
     error = h5file.root.Fibers.cols.error[:]
     sky = h5file.root.Fibers.cols.skyspectrum[:]
     sigma = np.zeros((3, len(unique_amps)))
+    shifts = np.zeros((3, len(unique_amps)))
     allra = np.zeros((3, len(unique_amps), 112))
     alldec = np.zeros((3, len(unique_amps), 112))
     newspec = np.zeros((3, len(unique_amps), 112, 1036), dtype=np.float32)
@@ -484,7 +485,8 @@ def subtract_sky(counter):
             li = k * 112
             hi = (k+1) * 112
             amp_spec[li:hi], shift = shift_wavelength(amp_spec, amp_sky, li, hi)
-            log.info('Shift for %s_%s: %0.2f A' % (op.basename(filename), combo, shift))
+            shifts[k, i] = shift
+            #log.info('Shift for %s_%s: %0.2f A' % (op.basename(filename), combo, shift))
             res = get_res_map(amp_spec, amp_sky, amp_error, mask_small, li, hi)
             newspec[k, i] = amp_spec[li:hi] - res
             newerror[k, i] = amp_error[li: hi]
@@ -518,7 +520,7 @@ def subtract_sky(counter):
     fits.HDUList([f1, f2]).writeto(op.join(folder, 'temp_%i.fits' % j), 
                                    overwrite=True)
     return (allra, alldec, raoff, decoff, 
-            sigma, guider, offsets, norms, exposure_seeing)
+            sigma, guider, offsets, norms, exposure_seeing, shifts)
 
 
 TOTAL_TASKS = len(filenames)
@@ -536,13 +538,15 @@ guider = np.vstack([result[5] for result in results])
 offsets = np.vstack([result[6] for result in results])
 norm = np.vstack([result[7] for result in results])
 exposure_seeing = np.vstack([result[8] for result in results])
+shifts = np.vstack([result[9] for result in results])
+
 
 fits.HDUList([fits.PrimaryHDU(raoff), fits.ImageHDU(decoff)]).writeto('all_initial_dar.fits', overwrite=True)
  
 L = fits.HDUList([fits.PrimaryHDU(), fits.ImageHDU(allra), 
                  fits.ImageHDU(alldec), fits.ImageHDU(guider), fits.ImageHDU(offsets),
                  fits.ImageHDU(exposure_seeing), fits.ImageHDU(norm), 
-                 fits.ImageHDU(sigma)])
+                 fits.ImageHDU(sigma), fits.ImageHDU(shifts)])
 
 L.writeto('all_info.fits', overwrite=True)
 
