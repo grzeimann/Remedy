@@ -504,7 +504,13 @@ def subtract_sky(counter):
         i = j * 3 + k
         raoff[k] = E.ADRra
         decoff[k] = E.ADRdec
-    norms, exposure_seeing = get_photometry_info(allra, alldec, newspec)
+    try:
+        norms, exposure_seeing = get_photometry_info(allra, alldec, newspec)
+    except:
+        log.warning('Photometry failed for: %s_%s' % (op.basename(filename), combo))
+        photometry = np.zeros((allra.shape[0], len(T), 25))
+        norms = np.ones((photometry.shape[0], photometry.shape[1])) * np.nan
+        exposure_seeing = np.ones((photometry.shape[0],)) *  np.nan
     h5file.close()
     f1 = fits.PrimaryHDU(newspec)
     f2 = fits.ImageHDU(newerror)
