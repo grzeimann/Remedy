@@ -84,6 +84,8 @@ def shift_wavelength(amp_spec, amp_sky, mask_small):
     FFT = phase_cross_correlation(current_observation[:, 50:-50],
                                   monthly_average[:, 50:-50],
                                   normalization=None, upsample_factor=100)
+    print(FFT)
+    sys.exit(1)
     if np.abs(FFT[0][1]) < 1.0:
         # Use the median valid shift (in pixels), scaled by 2.0 (empirical correction)
         shift = FFT[0][1] * 2.0
