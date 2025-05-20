@@ -466,6 +466,7 @@ for j, filename in enumerate(filenames):
     allerror[ind:ind+3] = f[1].data
 
 for amp in np.arange(allspec.shape[1]):
+    log.info('Making Residual for %s' % unique_amps[amp])
     s = allspec[:, amp]
     avgres = biweight(s, axis=0, ignore_nan=True)
     ResidualMaps[amp] = avgres
