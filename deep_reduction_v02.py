@@ -36,7 +36,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 
-def shift_wavelength(amp_spec, amp_sky, li, hi):
+def shift_wavelength(amp_spec, amp_sky, mask_small, li, hi):
     """
     Estimate and apply a wavelength shift to science spectra using cross-correlation with 
     sky spectra.
@@ -64,39 +64,29 @@ def shift_wavelength(amp_spec, amp_sky, li, hi):
 
     # Combine science and sky spectra, then extract the region of interest
     current_observation = (amp_spec + amp_sky)[li:hi]
-
+    current_observation[mask_small[li:hi]] = np.nan
+    current_observation = np.nanmedian(current_observation, axis=0)
     # Subtract continuum from the combined observation
-    continuum = get_continuum(current_observation, nbins=11)
+    continuum = get_continuum(current_observation[np.newaxis, :], nbins=11)[0]
     current_observation -= continuum
     current_observation[np.isnan(current_observation)] = 0.0
 
     # Construct a model sky spectrum over the same region
-    monthly_average = np.zeros_like(current_observation)
-    monthly_average[:] = amp_sky[li][np.newaxis, :]
+    monthly_average = amp_sky[li]
 
     # Subtract continuum from the sky model
-    continuum = get_continuum(monthly_average, nbins=11)
+    continuum = get_continuum(monthly_average[np.newaxis, :], nbins=11)[0]
     monthly_average -= continuum
     monthly_average[np.isnan(monthly_average)] = 0.0
 
-    # Define wavelength regions for shift estimation
-    Nwave = 1
-    waveranges = np.array_split(np.arange(50, current_observation.shape[1] - 50), Nwave)
-
-    # Compute per-fiber shifts using phase cross-correlation
-    shifts = np.ones((current_observation.shape[0], len(waveranges))) * np.nan
-    for fiber in np.arange(current_observation.shape[0]):
-        for j, waverange in enumerate(waveranges):
-            FFT = phase_cross_correlation(
-                current_observation[fiber, waverange][np.newaxis, :],
-                monthly_average[fiber, waverange][np.newaxis, :],
-                normalization=None, upsample_factor=100
-            )
-            if np.abs(FFT[0][1]) < 1.0:
-                shifts[fiber, j] = FFT[0][1]
-
-    # Use the median valid shift (in pixels), scaled by 2.0 (empirical correction)
-    shift = np.nanmedian(shifts) * 2.0
+    FFT = phase_cross_correlation(current_observation[50:-50][np.newaxis, :],
+                                  monthly_average[50:-50][np.newaxis, :],
+                                  normalization=None, upsample_factor=100)
+    if np.abs(FFT[0][1]) < 1.0:
+        # Use the median valid shift (in pixels), scaled by 2.0 (empirical correction)
+        shift = FFT[0][1] * 2.0
+    else:
+        shift = 0.0
 
     # Apply the shift to the combined science+sky spectra
     scispectra = (amp_spec + amp_sky)[li:hi]
@@ -484,7 +474,8 @@ def subtract_sky(counter):
         for k in np.arange(nexp):
             li = k * 112
             hi = (k+1) * 112
-            amp_spec[li:hi], shift = shift_wavelength(amp_spec, amp_sky, li, hi)
+            amp_spec[li:hi], shift = shift_wavelength(amp_spec, amp_sky, 
+                                                      mask_small, li, hi)
             shifts[k, i] = shift
             #log.info('Shift for %s_%s: %0.2f A' % (op.basename(filename), combo, shift))
             res = get_res_map(amp_spec, amp_sky, amp_error, mask_small, li, hi)
