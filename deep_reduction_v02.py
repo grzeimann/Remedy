@@ -59,8 +59,8 @@ def shift_wavelength(amp_spec, amp_sky, mask_small, li, hi):
     shift : float
         Estimated median shift (in pixels) applied to align the spectra.
     """
-    if np.isfinite(amp_spec).sum() < 1:
-        return amp_spec, 0.0  # Return original if all data is invalid
+    if np.isfinite(amp_spec[li:hi]).sum() < 1:
+        return amp_spec[li:hi], 0.0  # Return original if all data is invalid
 
     # Combine science and sky spectra, then extract the region of interest
     current_observation = (amp_spec + amp_sky)[li:hi]
