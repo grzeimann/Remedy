@@ -51,7 +51,8 @@ def masked_median_filter(data, shape=(5, 51), ignore_value=0.0, mode='reflect'):
     mask = data == ignore_value
 
     # Distance transform to find nearest valid pixel
-    distance, indices = ndimage.distance_transform_edt(mask, return_indices=True)
+    distance, indices = ndimage.distance_transform_edt(mask, 
+                                                       return_indices=True)
 
     # Use indices to fill masked points
     filled_data = data[tuple(indices)]
@@ -91,7 +92,7 @@ def get_res_map(amp_spec, amp_sky, amp_error, mask_small, li, hi):
     Z = Y.copy()
 
     # Estimate and subtract average large-scale structure along rows (biweight across fibers)
-    back = masked_median_filter(Z, shape=(5, 50))
+    back = masked_median_filter(Z, shape=(5, 51))
     Y -= back
     Y[is_zero] = 0.0
 
@@ -487,5 +488,6 @@ for amp in np.arange(allspec.shape[1]):
     s = allspec[:, amp]
     avgres = biweight(s, axis=0, ignore_nan=True)
     ResidualMaps[amp] = avgres
+    allspec[:, amp] -= avgres[np.newaxis, :, :]
 fits.PrimaryHDU(ResidualMaps).writeto('residual_maps.fits', overwrite=True)
 fits.PrimaryHDU(allspec).writeto('all_flux_final.fits', overwrite=True)
