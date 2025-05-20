@@ -419,7 +419,7 @@ def subtract_sky(counter):
     h5file.close()
     f1 = fits.PrimaryHDU(newspec)
     f2 = fits.ImageHDU(newerror)
-    fits.HDUList([f1, f2]).writeto(op.join(folder, 'temp_%i.fits'), 
+    fits.HDUList([f1, f2]).writeto(op.join(folder, 'temp_%i.fits' % j), 
                                    overwrite=True)
     return (allra, alldec, raoff, decoff, 
             sigma, guider, offsets, norms, exposure_seeing)
