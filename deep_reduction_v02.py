@@ -503,16 +503,17 @@ def subtract_sky(counter):
     # Setup extract for extraction
     E = Extract()
     E.get_ADR_RAdec(A)
-    photometry = np.zeros((allra.shape[0], len(T), 25))
-    norms = np.ones((3, photometry.shape[0], photometry.shape[1])) * np.nan
-    exposure_seeing = np.ones((3, photometry.shape[0],)) *  np.nan
     for k in np.arange(3):
         i = j * 3 + k
         raoff[k] = E.ADRra
         decoff[k] = E.ADRdec
-        norms[k], exposure_seeing[k] = get_photometry_info(allra[k], alldec[k],
-                                                           newspec[k])
-
+        try:
+            norms, exposure_seeing = get_photometry_info(allra, alldec, newspec)
+        except:
+            log.warning('Photometry failed for: %s_%s' % (op.basename(filename), combo))
+            photometry = np.zeros((allra.shape[0], len(T), 25))
+            norms = np.ones((photometry.shape[0], photometry.shape[1])) * np.nan
+            exposure_seeing = np.ones((photometry.shape[0],)) *  np.nan
         h5file.close()
     f1 = fits.PrimaryHDU(newspec)
     f2 = fits.ImageHDU(newerror)
@@ -532,9 +533,9 @@ allra = np.vstack([result[0] for result in results])
 alldec = np.vstack([result[1] for result in results])
 raoff = np.vstack([result[2] for result in results])
 decoff = np.vstack([result[3] for result in results])
-sigma = np.vstack([result[4] for result in results])
-guider = np.vstack([result[5] for result in results])
-offsets = np.vstack([result[6] for result in results])
+sigma = np.hstack([result[4] for result in results])
+guider = np.hstack([result[5] for result in results])
+offsets = np.hstack([result[6] for result in results])
 norm = np.vstack([result[7] for result in results])
 exposure_seeing = np.vstack([result[8] for result in results])
 shifts = np.vstack([result[9] for result in results])
