@@ -536,7 +536,7 @@ sigma = np.hstack([result[4] for result in results])
 guider = np.hstack([result[5] for result in results])
 offsets = np.hstack([result[6] for result in results])
 norm = np.vstack([result[7] for result in results])
-exposure_seeing = np.vstack([result[8] for result in results])
+exposure_seeing = np.hstack([result[8] for result in results])
 shifts = np.vstack([result[9] for result in results])
 
 
