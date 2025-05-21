@@ -390,7 +390,7 @@ log = setup_logging('deep_reduction')
 
 # Folder with the initial Remedy reductions
 folder = '/work/03730/gregz/maverick/VDFI'
-filenames = sorted(glob.glob(op.join(folder, '2*.h5')))[:16]
+filenames = sorted(glob.glob(op.join(folder, '2*.h5')))
 
 # Grabbing the unique names
 unique_amps = []
