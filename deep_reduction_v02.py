@@ -298,8 +298,7 @@ def get_photometry_info(allra, alldec, allamps):
     norm = np.ones((photometry.shape[0], photometry.shape[1])) * np.nan
     exposure_seeing = np.ones((photometry.shape[0],)) *  np.nan
     for k in np.arange(allra.shape[0]):
-        name = op.basename(filenames[int(k/3)])[:-3] + '_exp' + ('%02d' % ((k % 3) + 1))
-        log.info('Working on photometry for %s' % name)
+
         nstars = 0
         
         fibsel = np.isfinite(allra[k])
@@ -507,13 +506,13 @@ def subtract_sky(counter):
         i = j * 3 + k
         raoff[k] = E.ADRra
         decoff[k] = E.ADRdec
-        try:
-            norms, exposure_seeing = get_photometry_info(allra, alldec, newspec)
-        except:
-            log.warning('Photometry failed for: %s_%s' % (op.basename(filename), combo))
-            photometry = np.zeros((allra.shape[0], len(T), 25))
-            norms = np.ones((photometry.shape[0], photometry.shape[1])) * np.nan
-            exposure_seeing = np.ones((photometry.shape[0],)) *  np.nan
+    try:
+        norms, exposure_seeing = get_photometry_info(allra, alldec, newspec)
+    except:
+        log.warning('Photometry failed for: %s_%s' % (op.basename(filename), combo))
+        photometry = np.zeros((allra.shape[0], len(T), 25))
+        norms = np.ones((photometry.shape[0], photometry.shape[1])) * np.nan
+        exposure_seeing = np.ones((photometry.shape[0],)) *  np.nan
         h5file.close()
     f1 = fits.PrimaryHDU(newspec)
     f2 = fits.ImageHDU(newerror)
