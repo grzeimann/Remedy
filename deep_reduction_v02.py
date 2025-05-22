@@ -175,20 +175,17 @@ def get_res_map(amp_spec, amp_sky, amp_error, mask_small, li, hi):
 
     # Initial residual model: add back average trends
     res1 = back
-
+    res1[np.isnan(Y_orig)] = np.nan
+    
+    Y_orig -= back
+    cont = get_continuum(Y_orig)
+    Z = Y_orig - cont
+    Z[np.isnan(Z)] = 0.0
     # Reconstruct modeled features from PCA components
     res = np.zeros_like(Y)
     for i in range(Y.shape[0]):
-        sol = np.linalg.lstsq(H, Y[i], rcond=None)[0]
+        sol = np.linalg.lstsq(H, Z[i], rcond=None)[0]
         res[i] = np.dot(sol, H.T)
-
-    # Smooth each wavelength column with interpolation and Gaussian convolution
-    x = np.arange(res.shape[0])
-    for j in range(Y.shape[1]):
-        sel = res[:, j] != 0.0
-        if sel.sum() > 20:
-            res[:, j] = np.interp(x, x[sel], res[sel, j])
-            res[:, j] = convolve(res[:, j], Gaussian1DKernel(3.))
 
     # Add back average structure
     res += res1
