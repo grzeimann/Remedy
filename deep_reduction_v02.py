@@ -99,7 +99,7 @@ def shift_wavelength(amp_spec, amp_sky, mask_small):
     for i in np.arange(scispectra.shape[0]):
         good = np.isfinite(scispectra[i])
         if good.sum() > 50:
-            scirect[i][good] = np.interp(def_wave[good], def_wave[good] - shift, 
+            scirect[i][good] = np.interp(def_wave[good], def_wave[good] + shift, 
                                    scispectra[i][good], left=np.nan, 
                                    right=np.nan)
     
