@@ -547,7 +547,7 @@ def run_detection(counter):
         L.writeto(outname, overwrite=True)
         return None
 
-TOTAL_TASKS = 400
+TOTAL_TASKS = 900
 NUM_WORKERS = 64  # adjust depending on CPU/memory
 
 with multiprocessing.Pool(processes=NUM_WORKERS) as pool:
