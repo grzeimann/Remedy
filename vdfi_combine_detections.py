@@ -21,8 +21,11 @@ warnings.filterwarnings("ignore")
 # Set up logging for tracking progress and issues
 log = setup_logging('vdfi')
 
+path = '/work/03946/hetdex/vdfi/cosmos'
+imagename = 'CFHT_COSMOS_image.fits'
+
 # Load reference images
-cfht = fits.open('/work/03730/gregz/ls6/PHATTER-VIRUS/CFHT_EGS_image.fits', memmap=True)
+cfht = fits.open(op.join(path, imagename), memmap=True)
 header = cfht[0].header
 
 # Get world coordinates (RA, Dec)
@@ -33,7 +36,7 @@ xg = np.arange(30.5, 1230.5, 60)
 xgrid, ygrid = np.meshgrid(xg, xg)
 grid_ra, grid_dec = wcs.all_pix2world(xgrid + 1., ygrid + 1., 1)
 
-filenames = glob.glob('/work/03730/gregz/ls6/PHATTER-VIRUS/detections/detect*.fits')
+filenames = glob.glob(op.join(path, 'detect*.fits'))
 N = cfht[0].data.shape[0]
 vdfi_cube = np.zeros((N, N, 1036), dtype=np.float32)
 vdfi_error = np.zeros((N, N, 1036), dtype=np.float32)

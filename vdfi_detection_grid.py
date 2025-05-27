@@ -267,13 +267,17 @@ log = setup_logging('vdfi')
 
 # Define the wavelength solution (e.g., for spectral axis)
 wave = np.linspace(3470, 5540, 1036)
+path = '/work/03946/hetdex/vdfi/cosmos'
+imagename = 'CFHT_COSMOS_image.fits'
+
+
 
 # Load spatial coordinate data (RA, DEC) from FITS file
-f = fits.open('/work/03730/gregz/maverick/VDFI/all_info.fits', memmap=True)
+f = fits.open(op.join(path, 'all_info.fits'), memmap=True)
 
 
 # Load Differential Atmospheric Refraction (DAR) corrections
-dar = fits.open('/work/03730/gregz/maverick/VDFI/all_initial_dar.fits')
+dar = fits.open(op.join(path, 'all_initial_dar.fits'))
 dar_ra = dar[0].data
 dar_dec = dar[1].data
 
@@ -286,14 +290,14 @@ seeing = np.linspace(np.min(f[5].data)-0.05, np.max(f[5].data)+0.05, 51)
 PSF, R, S, V = moffat_psf_integration(r, seeing)
 
 # Load reference images
-cfht = fits.open('/work/03730/gregz/ls6/PHATTER-VIRUS/CFHT_EGS_image.fits', memmap=True)
+cfht = fits.open(op.join(path, imagename), memmap=True)
 header = cfht[0].header
 
 # Get world coordinates (RA, Dec)
 wcs = WCS(header)
 
 # Set up a coarse grid in pixel space and convert to world coordinates
-xg = np.arange(30.5, 1230.5, 60)
+xg = np.arange(30.5, 1830.5, 60)
 xgrid, ygrid = np.meshgrid(xg, xg)
 grid_ra, grid_dec = wcs.all_pix2world(xgrid + 1., ygrid + 1., 1)
 
@@ -432,6 +436,7 @@ def run_detection(counter):
         mask *= (np.isnan(FL[:, :, 20:-20]).sum(axis=2) < 1)
     
         avg_back = np.nanmean(FL[mask], axis=(0,))
+        avg_back = get_continuum(avg_back[np.newaxis, :])[0]
         data = (FL[mask] - avg_back[np.newaxis, :]) / EL[mask]
         data = data[:, 20:-20]
         res = np.zeros_like(FL) + avg_back[np.newaxis, np.newaxis, :]

@@ -261,8 +261,11 @@ log = setup_logging('vdfi')
 # Define the wavelength solution (e.g., for spectral axis)
 wave = np.linspace(3470, 5540, 1036)
 
+path = '/work/03946/hetdex/vdfi/cosmos'
+imagename = 'CFHT_COSMOS_image.fits'
+
 # Load spatial coordinate data (RA, DEC) from FITS file
-f = fits.open('/work/03730/gregz/maverick/VDFI/all_info.fits', memmap=True)
+f = fits.open(op.join(path, 'all_info.fits'), memmap=True)
 RA = f[1].data * 1.
 DEC = f[2].data * 1.
 # Flatten spatial dimensions into a 2D array: (exposure, spaxels)
@@ -270,8 +273,8 @@ RA, DEC = [x.reshape((x.shape[0], x.shape[1] * x.shape[2])) for x in [RA, DEC]]
 nexp = RA.shape[0]  # Number of exposures
 
 # Load spectral data (flux and error)
-g = fits.open('/work/03730/gregz/maverick/VDFI/all_flux_final.fits', memmap=True)
-e = fits.open('/work/03730/gregz/maverick/VDFI/all_error.fits', memmap=True)
+g = fits.open(op.join(path, 'all_flux_final.fits'), memmap=True)
+e = fits.open(op.join(path, 'all_error.fits'), memmap=True)
 
 mask_amps = [106, 122, 123, 131, 135, 146, 256, 264, 286, 287, 299, 301]
 
@@ -287,7 +290,7 @@ error = error.reshape((error.shape[0], error.shape[1] * error.shape[2],
                        error.shape[3]))
 
 # Load Differential Atmospheric Refraction (DAR) corrections
-dar = fits.open('/work/03730/gregz/maverick/VDFI/all_initial_dar.fits')
+dar = fits.open(op.join(path, 'all_initial_dar.fits'))
 dar_ra = dar[0].data
 dar_dec = dar[1].data
 
@@ -298,20 +301,20 @@ seeing = np.linspace(np.min(f[5].data)-0.05, np.max(f[5].data)+0.05, 51)
 PSF, R, S, V = moffat_psf_integration(r, seeing)
 
 # Load reference images
-cfht = fits.open('/work/03730/gregz/ls6/PHATTER-VIRUS/CFHT_EGS_image.fits', memmap=True)
+cfht = fits.open(op.join(path, imagename), memmap=True)
 header = cfht[0].header
 
 # Get world coordinates (RA, Dec)
 wcs = WCS(header)
 
 # Set up a coarse grid in pixel space and convert to world coordinates
-xg = np.arange(30.5, 1230.5, 60)
+xg = np.arange(30.5, 1830.5, 60)
 xgrid, ygrid = np.meshgrid(xg, xg)
 grid_ra, grid_dec = wcs.all_pix2world(xgrid + 1., ygrid + 1., 1)
 
 # We are running detections over one full column of 20 rows
-xs = np.arange(20)
-ys = np.arange(20)
+xs = np.arange(30)
+ys = np.arange(30)
 
 # Set up a least-squares fitter for later use
 fitter = TRFLSQFitter()
