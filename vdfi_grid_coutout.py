@@ -268,6 +268,7 @@ imagename = 'CFHT_COSMOS_image.fits'
 f = fits.open(op.join(path, 'all_info.fits'), memmap=True)
 RA = f[1].data * 1.
 DEC = f[2].data * 1.
+Sig = f[7].data * 1.
 # Flatten spatial dimensions into a 2D array: (exposure, spaxels)
 RA, DEC = [x.reshape((x.shape[0], x.shape[1] * x.shape[2])) for x in [RA, DEC]]
 nexp = RA.shape[0]  # Number of exposures
@@ -280,12 +281,14 @@ mask_amps = [106, 122, 123, 131, 135, 146, 256, 264, 286, 287, 299, 301]
 
 spectra = g[0].data
 spectra[:, mask_amps, :, :] = np.nan
+spectra[Sig>1.2] = np.nan
 # Reshape to (exposure, fibers, wavelength)
 spectra = spectra.reshape((spectra.shape[0], 
                            spectra.shape[1] * spectra.shape[2], 
                            spectra.shape[3]))
 error = e[0].data
 error[:, mask_amps, :, :] = np.nan
+error[Sig>1.2] = np.nan
 error = error.reshape((error.shape[0], error.shape[1] * error.shape[2], 
                        error.shape[3]))
 
