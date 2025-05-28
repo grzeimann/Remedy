@@ -38,9 +38,9 @@ grid_ra, grid_dec = wcs.all_pix2world(xgrid + 1., ygrid + 1., 1)
 
 filenames = glob.glob(op.join(path, 'detect*.fits'))
 N = cfht[0].data.shape[0]
-vdfi_cube = np.zeros((N, N, 1036), dtype=np.float32)
-vdfi_error = np.zeros((N, N, 1036), dtype=np.float32)
-vdfi_sn = np.zeros((N, N, 3001), dtype=np.float32)
+vdfi_cube = np.ones((N, N, 1036), dtype=np.float32) * np.nan
+vdfi_error = np.ones((N, N, 1036), dtype=np.float32) * np.nan
+vdfi_sn = np.ones((N, N, 3001), dtype=np.float32) * np.nan
 tables = []
 for filename in filenames:
     n = op.basename(filename)
