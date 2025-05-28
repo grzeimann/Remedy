@@ -62,7 +62,7 @@ combined_table.write('all_detections.txt', format='ascii.fixed_width_two_line',
 header = wcs.to_header()
 
 
-surname = 'VDFI_EGS'
+surname = 'VDFI_COSMOS'
 
 name = op.basename('%s_cube.fits' % surname)
 header['CRPIX1'] = (N+1) / 2.

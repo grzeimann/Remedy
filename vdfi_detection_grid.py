@@ -314,7 +314,7 @@ log.info('Starting Detections')
 # ===============================
 def run_detection(counter):
     
-    xi, xj = (int(counter / 20), counter % 20)
+    xi, xj = (int(counter / 30), counter % 30)
     filename = 'short_%02d_%02d.fits' % (xi, xj)
     outname = 'detect_output_%02d_%02d.fits' % (xi, xj)
     if op.exists(outname):
