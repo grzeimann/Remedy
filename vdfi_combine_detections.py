@@ -32,7 +32,7 @@ header = cfht[0].header
 wcs = WCS(header)
 
 # Set up a coarse grid in pixel space and convert to world coordinates
-xg = np.arange(30.5, 1230.5, 60)
+xg = np.arange(30.5, 1830.5, 60)
 xgrid, ygrid = np.meshgrid(xg, xg)
 grid_ra, grid_dec = wcs.all_pix2world(xgrid + 1., ygrid + 1., 1)
 
