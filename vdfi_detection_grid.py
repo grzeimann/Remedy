@@ -441,24 +441,24 @@ def run_detection(counter):
         data = data[:, 20:-20]
         res = np.zeros_like(FL) + avg_back[np.newaxis, np.newaxis, :]
 
-        if data.shape[0] > 10:
-            # Run PCA on masked, background-subtracted data
-            pca = PCA(n_components=5)
-            H = pca.fit_transform(data.T)
+        # if data.shape[0] > 10:
+        #     # Run PCA on masked, background-subtracted data
+        #     pca = PCA(n_components=5)
+        #     H = pca.fit_transform(data.T)
         
-            # ===============================
-            # Project PCA to Calculate Residuals
-            # ===============================
-            image = np.zeros((mask.shape[0], mask.shape[1], H.shape[1]))
-            for i in np.arange(len(dd)):
-                for j in np.arange(len(dr)):
-                    data = (FL[i, j] - avg_back) / EL[i, j]
-                    cont = get_continuum(data[np.newaxis, :], nbins=25)[0]
-                    if np.isnan(data[20:-20]).sum() < 100:
-                        sel = np.isfinite((data-cont)[20:-20])
-                        sol = np.linalg.lstsq(H[sel], (data-cont)[20:-20][sel])[0]
-                        res[i, j, 20:-20] = (np.dot(sol, H.T) * EL[i, j, 20:-20] + avg_back[20:-20])
-                        image[i, j] = sol
+        #     # ===============================
+        #     # Project PCA to Calculate Residuals
+        #     # ===============================
+        #     image = np.zeros((mask.shape[0], mask.shape[1], H.shape[1]))
+        #     for i in np.arange(len(dd)):
+        #         for j in np.arange(len(dr)):
+        #             data = (FL[i, j] - avg_back) / EL[i, j]
+        #             cont = get_continuum(data[np.newaxis, :], nbins=25)[0]
+        #             if np.isnan(data[20:-20]).sum() < 100:
+        #                 sel = np.isfinite((data-cont)[20:-20])
+        #                 sol = np.linalg.lstsq(H[sel], (data-cont)[20:-20][sel])[0]
+        #                 res[i, j, 20:-20] = (np.dot(sol, H.T) * EL[i, j, 20:-20] + avg_back[20:-20])
+        #                 image[i, j] = sol
     
         FL1 = FL - res
 
