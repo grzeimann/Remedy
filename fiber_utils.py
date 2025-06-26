@@ -16,6 +16,7 @@ from astropy.io import fits
 from math_utils import biweight
 from datetime import datetime
 from scipy.interpolate import interp2d, interp1d, LinearNDInterpolator, griddata
+from scipy.signal import medfilt
 
 from astropy.modeling.models import Gaussian1D, Polynomial2D
 from astropy.modeling.fitting import LevMarLSQFitter
@@ -658,6 +659,30 @@ def get_pixelmask(dark):
         if yi + 2 < mask.shape[0]:
             if mask[yi+1, xi]:
                 mask[:, xi] = True
+    return np.array(mask, dtype=int)
+
+def get_pixelmask_flt(image):
+    # Initialize a boolean mask with the same shape as the input image
+    mask = np.zeros(image.shape, dtype=bool)
+    
+    for i in np.arange(image.shape[0]):
+        # Apply a median filter to each row
+        row = medfilt(image[i], 17)
+        
+        # Flag pixels that deviate >10% from the median-filtered row
+        mask[i] = np.abs((image[i] - row) / row) > 0.1
+        
+        # Ignore deviations where the median is low (likely between fibers)
+        mask[i][row < 200] = False
+
+    # Ignore edges: first and last 8 columns
+    mask[:, :8] = False
+    mask[:, -8:] = False
+
+    # Flag entire columns if more than 300 pixels are already flagged
+    mask[:, np.sum(mask, axis=0) > 300] = True
+
+    # Return the mask as an integer array (0 or 1)
     return np.array(mask, dtype=int)
 
 def measure_fiber_profile(image, spec, trace, wave, xmin=400,

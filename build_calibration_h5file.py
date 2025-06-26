@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from distutils.dir_util import mkpath
 from fiber_utils import base_reduction, get_trace, get_spectra, get_spectra_error
 from fiber_utils import get_powerlaw, get_ifucenfile, get_wave, get_pixelmask
+from fiber_utils import get_pixelmask_flt
 from fiber_utils import measure_contrast, get_bigW, get_bigF
 from input_utils import setup_parser, set_daterange, setup_logging
 from math_utils import biweight
@@ -422,10 +423,6 @@ daterange = list(args.daterange)
 objectdict, filename_list = get_objects(daterange)
 for kind in kinds:
     args.log.info('Getting file names for %s' % kind)
-    if kind == 'sci':
-        filename_dict[kind] = get_scifilenames(args, daterange, kind)
-    else:
-        filename_dict[kind] = get_filenames(args, daterange, kind)
     filename_dict[kind] = [fn[:-14] for fn in filename_list if kind in fn]
     tarname_dict[kind] = get_tarfiles(filename_dict[kind])
     tarinfo_dict[kind] = get_tarinfo(tarname_dict[kind], filename_dict[kind])
@@ -448,6 +445,7 @@ for ifuslot_key in ifuslots:
     ifuslot, specid, ifuid, contid = ifuslot_key.split('_')
     for amp in ['LL', 'LU', 'RL', 'RU']:
         row = imagetable.row
+        ifupos = get_ifucenfile(dirname, ifuid, amp)
         masterdark = np.zeros((1032, 1032))
         masterflt = np.zeros((1032, 1032))
         mastertwi = np.zeros((1032, 1032))
@@ -455,6 +453,7 @@ for ifuslot_key in ifuslots:
         masterbias = np.zeros((1032, 1032))
         wave = np.zeros((112, 1032))
         trace = np.zeros((112, 1032))
+        _cmp = np.zeros((112, 1032))
         spec = np.zeros((112, 1032))
         maskspec = np.zeros((112, 1032))
         readnoise = 3.
@@ -488,9 +487,9 @@ for ifuslot_key in ifuslots:
                               (int(ifuslot), amp))
                 pixelmask = get_pixelmask(masterdark)
             if kind == 'flt':
-                ifupos = get_ifucenfile(dirname, ifuid, amp)
                 masterflt = _info[0] * 1.
-
+                pixelmask2 = get_pixelmask_flt(masterflt)
+                pixelmask = np.array(pixelmask2 + pixelmask > 0, dtype=int)
                 args.log.info('Getting trace for %s %s' %
                               (ifuslot_key, amp))
                 try:
@@ -512,10 +511,10 @@ for ifuslot_key in ifuslots:
             if kind == 'cmp':
                 args.log.info('Getting wavelength for %03d %s' %
                               (int(ifuslot), amp))
-                cmp = get_spectra(_info[0], trace)
+                _cmp = get_spectra(_info[0], trace)
                 mastercmp = _info[0] * 1.
                 try:
-                    wave = get_wave(cmp, trace, T_array)
+                    wave = get_wave(_cmp, trace, T_array)
                     if wave is None:
                         wave = np.zeros((112, 1032))
                         args.log.error('Wavelength Failed for %s %s.' %
@@ -529,7 +528,7 @@ for ifuslot_key in ifuslots:
                                          ifuid, specid, amp, readnoise,
                                          pixelmask, masterdark, masterflt,
                                          mastertwi, mastercmp, mastersci,
-                                         masterbias, spec, cmp, maskspec,
+                                         masterbias, spec, _cmp, maskspec,
                                          contid)
         if success:
             imagetable.flush()
