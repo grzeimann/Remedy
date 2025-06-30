@@ -40,6 +40,7 @@ from extract import Extract
 from fiber_utils import identify_sky_pixels, measure_fiber_profile, get_trace
 from fiber_utils import build_model_image, detect_sources, get_powerlaw
 from fiber_utils import get_spectra, get_spectra_error, get_spectra_chi2
+from fiber_utils import clean_data
 from input_utils import setup_logging
 from math_utils import biweight
 from photutils.detection import DAOStarFinder
@@ -1112,6 +1113,8 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         for j, fn in enumerate(filenames):
             sciimage, scierror, header = base_reduction(fn, tfile=scitarfile,
                                                 rdnoise=readnoise, get_header=True)
+            sciimage = clean_data(sciimage, pixelmask)
+            scierror = clean_data(scierror, pixelmask)
             # Check here that it is the same unit
             facexp = header['EXPTIME'] / 360.
             if facexp < 0.:
@@ -1128,7 +1131,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             spec = get_spectra(sciimage, trace) / dw
             espec = get_spectra_error(scierror, trace) / dw
             chi21 = get_spectra_chi2(masterflt, sciimage, scierror, trace)
-            mask1 = get_spectra(pixelmask, trace)
+            mask1 = spec * 0. # get_spectra(pixelmask, trace)
             mspec = get_spectra(mastersci, trace) / dw
             #mask1 = mask1 + maskspec
             for arr in [spec, espec, flt, twi, mspec]:

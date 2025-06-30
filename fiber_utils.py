@@ -661,6 +661,14 @@ def get_pixelmask(dark):
                 mask[:, xi] = True
     return np.array(mask, dtype=int)
 
+def clean_data(image, mask):
+    x = np.arange(image.shape[1])
+    for j in np.arange(image.shape[0]):
+        sel = mask[j] < 1
+        image[j, :] = np.interp(x, x[sel], image[j][sel])
+    return image
+    
+
 def get_pixelmask_flt(image):
     # Initialize a boolean mask with the same shape as the input image
     mask = np.zeros(image.shape, dtype=bool)
