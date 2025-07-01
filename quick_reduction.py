@@ -1087,6 +1087,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         log.info('Getting powerlaw for mastertwi for %s%s' % (ifuslot, amp))
         masterdark[:] = masterdark - masterbias
         masterflt[:] = masterflt - masterbias
+        masterflt = clean_data(masterflt, pixelmask)
         try:
             plaw = get_powerlaw(masterflt, trace)
         except:
@@ -1099,7 +1100,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         except:
             plaw = 0.
         mastertwi[:] = mastertwi - plaw
-        
+        mastertwi = clean_data(mastertwi, pixelmask)
         mastersci[:] = mastersci - masterdark - masterbias
         try:
             plaw2 = get_powerlaw(mastersci, trace)
@@ -1115,6 +1116,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
                                                 rdnoise=readnoise, get_header=True)
             sciimage = clean_data(sciimage, pixelmask)
             scierror = clean_data(scierror, pixelmask)
+            
             # Check here that it is the same unit
             facexp = header['EXPTIME'] / 360.
             if facexp < 0.:
