@@ -17,7 +17,7 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 from astropy.wcs import WCS
 from astropy.io import fits
-from astropy.convolution import convolve, Gaussian1DKernel, Gaussian2DKernel
+from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.table import Table
 from astropy.modeling.models import Moffat2D
 from input_utils import setup_logging
@@ -29,12 +29,19 @@ from scipy import ndimage
 from scipy.ndimage import median_filter
 from skimage.registration import phase_cross_correlation
 import os
+import sys
 import psutil
 import multiprocessing
 import warnings
 
 warnings.filterwarnings("ignore")
 
+
+def get_script_path():
+    '''
+    Get script path, aka, where does Remedy live?
+    '''
+    return op.dirname(op.realpath(sys.argv[0]))
 
 def shift_wavelength(amp_spec, amp_sky, mask_small):
     """
@@ -385,7 +392,7 @@ pcoord = SkyCoord(grid_ra[mask]*u.deg, grid_dec[mask]*u.deg)
 log = setup_logging('deep_reduction')
 
 # Folder with the initial Remedy reductions
-folder = '/work/03730/gregz/maverick/VDFI'
+folder = '/work/03946/hetdex/vdfi/cosmos'
 filenames = sorted(glob.glob(op.join(folder, '2*.h5')))
 
 # Grabbing the unique names
