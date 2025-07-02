@@ -965,8 +965,7 @@ def get_pixelmask_camera(specid, amp):
     fname = op.join(DIRNAME, 'lib_pflat', 
                     'pixelflat_cam%s_%s.fits' % (specid, amp))
     f = fits.open(fname)
-    log.info('Trying to open %s' % fname)
-    return np.abs(f[0].data - 1.) > 0.1
+    return np.array(np.abs(f[0].data - 1.) > 0.1, dtype=int)
 
 def get_sci_twi_files(kind='twi'):
     '''
