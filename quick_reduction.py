@@ -1087,7 +1087,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             # pixelmask = h5table[ind]['pixelmask']
             pixelmask = get_pixelmask_camera(specid, amp)
         except:
-            log.warning("Can't open masterdark, pixelmask")
+            log.warning("Can't open masterdark, pixelmask for %s %s" % (specid, amp))
             masterdark = np.zeros((1032, 1032))
             pixelmask = np.zeros((1032, 1032), dtype=int)
         
