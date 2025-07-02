@@ -963,7 +963,7 @@ def get_powerlaw_ydir(trace, spec, amp, col):
 
 def get_pixelmask_camera(specid, amp):
     fname = op.join(DIRNAME, 'lib_pflat', 
-                    'pixelflat_cam%s%s.fits' % (specid, amp))
+                    'pixelflat_cam%s_%s.fits' % (specid, amp))
     f = fits.open(fname)
     return np.abs(f[0].data - 1.) > 0.1
 
