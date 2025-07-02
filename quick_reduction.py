@@ -961,6 +961,11 @@ def get_powerlaw_ydir(trace, spec, amp, col):
                               power_law(d, 1.4e-5, c3=2., c4=1.0,  sig=1.5)))
     return yz, np.array(plaw)   
 
+def get_pixelmask_camera(specid, amp):
+    fname = op.join(DIRNAME, 'lib_pflat', 
+                    'pixelflat_cam%s%s.fits' % (specid, amp))
+    f = fits.open(fname)
+    return np.abs(f[0].data - 1.) > 0.1
 
 def get_sci_twi_files(kind='twi'):
     '''
@@ -1079,6 +1084,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         try:
             masterdark = h5table[ind]['masterdark']
             pixelmask = h5table[ind]['pixelmask']
+            pixelmask = get_pixelmask_camera(specid, amp)
         except:
             log.warning("Can't open masterdark, pixelmask")
             masterdark = np.zeros((1032, 1032))
