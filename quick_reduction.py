@@ -964,8 +964,8 @@ def get_powerlaw_ydir(trace, spec, amp, col):
 def get_pixelmask_camera(specid, amp):
     fname = op.join(DIRNAME, 'lib_pflat', 
                     'pixelflat_cam%s_%s.fits' % (specid, amp))
-    log.info('Trying to open %s' % fname)
     f = fits.open(fname)
+    log.info('Trying to open %s' % fname)
     return np.abs(f[0].data - 1.) > 0.1
 
 def get_sci_twi_files(kind='twi'):
