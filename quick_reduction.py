@@ -966,7 +966,6 @@ def get_pixelmask_camera(specid, amp):
                     'pixelflat_cam%s_%s.fits' % (specid, amp))
     f = fits.open(fname)
     mask = np.array(np.abs(f[0].data - 1.) > 0.1, dtype=int)
-    mask = orient_image(image, amp, None)
     return mask
 
 def get_sci_twi_files(kind='twi'):
@@ -1085,8 +1084,8 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         masterbias = h5table[ind]['masterbias']
         try:
             masterdark = h5table[ind]['masterdark']
-            # pixelmask = h5table[ind]['pixelmask']
-            pixelmask = get_pixelmask_camera(specid, amp)
+            pixelmask = h5table[ind]['pixelmask'] * 1.
+            pixelmask = pixelmask + get_pixelmask_camera(specid, amp)
         except:
             log.warning("Can't open masterdark, pixelmask for %s %s" % (specid, amp))
             masterdark = np.zeros((1032, 1032))
