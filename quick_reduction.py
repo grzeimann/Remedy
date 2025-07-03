@@ -966,6 +966,7 @@ def get_pixelmask_camera(specid, amp):
                     'pixelflat_cam%s_%s.fits' % (specid, amp))
     f = fits.open(fname)
     mask = np.array(np.abs(f[0].data - 1.) > 0.1, dtype=int)
+    mask = orient_image(image, amp, None)
     return mask
 
 def get_sci_twi_files(kind='twi'):
