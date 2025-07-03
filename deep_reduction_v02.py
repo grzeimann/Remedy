@@ -412,8 +412,10 @@ for filename in filenames:
 # =============================================================================
 # PanSTARRS
 # =============================================================================
-
-Pan = Catalogs.query_region("%s %s" % (field_ra, field_dec), radius=radius, 
+if op.exists(pnstars_out):
+    Pan = Table.read(pnstars_out, format='ascii.fixed_width_two_line')
+else:
+    Pan = Catalogs.query_region("%s %s" % (field_ra, field_dec), radius=radius, 
                                        catalog="Panstarrs", data_release="dr2",
                                        table="stack")
 
