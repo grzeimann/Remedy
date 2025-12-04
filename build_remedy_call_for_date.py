@@ -1,75 +1,159 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Thu Aug  1 14:47:05 2019
+Build Remedy quick_reduction call file for a date range and program ID.
 
-@author: gregz
+Updates original script to:
+- take start-date and end-date (YYYYMMDD) and a program-id (matches FITS header QPROG)
+- automatically compute the calibration H5 path based on the date range:
+  /work/03946/hetdex/maverick/het_code/Remedy/output/{start}_{end}.h5
+- search all virus tar files in the date range and include those whose QPROG matches
+- batch the calls into ncalls lines
 """
 
+import argparse
 import glob
+import os
 import os.path as op
-import sys
 import tarfile
+from datetime import datetime, timedelta
 import numpy as np
 
 from astropy.io import fits
 
 rootdir = '/work/03946/hetdex/maverick'
-
 inst = 'virus'
 
-date = sys.argv[1]
+CALL_TEMPLATE = (
+    'python3 /work/03730/gregz/maverick/Remedy/quick_reduction.py %s %i '
+    '82 %s -nd 8 -fp /work/03730/gregz/maverick/fplaneall.txt -nD'
+)
 
-cal = sys.argv[2]
 
-target = sys.argv[3]
+def parse_args():
+    p = argparse.ArgumentParser(
+        description='Build quick_reduction call list for a date range and QPROG program ID.'
+    )
+    p.add_argument('start_date', help='Start date YYYYMMDD (inclusive)')
+    p.add_argument('end_date', help='End date YYYYMMDD (exclusive)')
+    p.add_argument('program_id', help='Program ID to match against FITS header QPROG')
+    p.add_argument('--ncalls', type=int, default=10, help='Number of batches (lines) in output file')
+    return p.parse_args()
 
-ncalls = int(sys.argv[4])
 
-tarfolders = sorted(glob.glob(op.join(rootdir, date, inst,
-                                      '%s0000*.tar' % inst)))
+def daterange(start: str, end: str):
+    """Yield YYYYMMDD strings from start (inclusive) to end (exclusive)."""
+    ds = datetime.strptime(start, '%Y%m%d')
+    de = datetime.strptime(end, '%Y%m%d')
+    d = ds
+    while d < de:
+        yield d.strftime('%Y%m%d')
+        d += timedelta(days=1)
 
-call = ('python3 /work/03730/gregz/maverick/Remedy/quick_reduction.py %s %i '
-        '47 %s -nd 8 -fp '
-        '/work/03730/gregz/maverick/fplaneall.txt -nD')
-tarlist = []
-dates = [op.basename(op.dirname(op.dirname(tarf))) for tarf in tarfolders]
-for date, tarfolder in zip(dates, tarfolders):
-    T = tarfile.open(tarfolder, 'r')
-    flag = True
-    while flag:
-        try:
-            a = T.next()
-        except:
-            print('This file had an issue: %s' % tarfolder)
-            flag = False
-            break
-        try:
-            name = a.name
-        except:
-            flag = False
-        if name[-5:] == '.fits':
+
+def build_cal_path(start: str, end: str):
+    return f'/work/03946/hetdex/maverick/het_code/Remedy/output/{start}_{end}.h5'
+
+
+def collect_matching_obs(start: str, end: str, program_id: str):
+    tarlist = []  # list of (obs, date)
+    for date in daterange(start, end):
+        pattern = op.join(rootdir, date, inst, f'{inst}0000*.tar')
+        tarfolders = sorted(glob.glob(pattern))
+        for tarfolder in tarfolders:
             try:
-                b = fits.open(T.extractfile(a))
-                Target = b[0].header['OBJECT']
-            except:
-                print('Failed to open fits file from %s' % tarfolder)
+                T = tarfile.open(tarfolder, 'r')
+            except Exception as e:
+                print(f'Failed to open tar {tarfolder}: {e}')
+                continue
             try:
-                exptime = b[0].header['EXPTIME']
-            except:
-                exptime = 0.0
-            try:
-                prog = b[0].header['QPROG']
-            except:
-                prog = 'None'
-            obs = int(op.basename(tarfolder)[-11:-4])
-            if name[-8:-5] == 'sci':
-                if target in Target:
-                    tarlist.append([obs, name[-8:-5], Target, prog, exptime, date])
-            flag = False
-print('Number of calls: %i' % len(tarlist))
-with open('%s_calls' % tarlist[0][-1], 'w') as out_file:       
-    for chunk in np.array_split(tarlist, ncalls):
-        calls = [call % (ch[-1], int(ch[0]), cal) for ch in chunk]
-        call_str = '; '.join(calls)
-        out_file.write(call_str + '\n')
+                # iterate members until we find a FITS sci file
+                for a in T:
+                    try:
+                        name = a.name
+                    except Exception:
+                        continue
+                    if not hasattr(a, 'name'):
+                        continue
+                    if not name.endswith('.fits'):
+                        continue
+                    if name[-8:-5] != 'sci':
+                        continue
+                    try:
+                        with fits.open(T.extractfile(a)) as b:
+                            qprog = b[0].header.get('QPROG', 'None')
+                    except Exception:
+                        print(f'Failed to open FITS from {tarfolder}')
+                        break  # move to next tar; keep behavior similar to original
+                    if str(qprog) == str(program_id):
+                        try:
+                            obs = int(op.basename(tarfolder)[-11:-4])
+                        except Exception:
+                            # fallback: attempt to parse any 7-digit sequence
+                            obs = None
+                            base = op.basename(tarfolder)
+                            for i in range(len(base) - 6):
+                                chunk = base[i:i+7]
+                                if chunk.isdigit():
+                                    obs = int(chunk)
+                                    break
+                            if obs is None:
+                                print(f'Could not parse OBS number from {tarfolder}')
+                                break
+                        tarlist.append((obs, date))
+                    break  # only consider first sci FITS per tar (as in original)
+            finally:
+                try:
+                    T.close()
+                except Exception:
+                    pass
+    return tarlist
+
+
+def main():
+    args = parse_args()
+
+    # Validate dates
+    try:
+        _ = datetime.strptime(args.start_date, '%Y%m%d')
+        _ = datetime.strptime(args.end_date, '%Y%m%d')
+    except ValueError:
+        print('Dates must be in YYYYMMDD format')
+        return 1
+    if args.start_date >= args.end_date:
+        print('start_date must be earlier than end_date')
+        return 1
+
+    cal_path = build_cal_path(args.start_date, args.end_date)
+    os.makedirs(op.dirname(cal_path), exist_ok=True)
+
+    matches = collect_matching_obs(args.start_date, args.end_date, args.program_id)
+    if len(matches) == 0:
+        print('No matching observations found for given range and program ID.')
+        # still write an empty calls file for consistency
+        out_name = f'{args.start_date}_{args.end_date}_calls'
+        open(out_name, 'w').close()
+        print(f'Wrote empty call file: {out_name}')
+        return 0
+
+    # Sort and batch
+    matches = sorted(matches, key=lambda x: (x[1], x[0]))  # by date then obs
+    ncalls = max(1, int(args.ncalls))
+    chunks = np.array_split(np.array(matches, dtype=object), ncalls)
+
+    out_name = f'{args.start_date}_{args.end_date}_calls'
+    with open(out_name, 'w') as out_file:
+        for chunk in chunks:
+            if len(chunk) == 0:
+                continue
+            calls = [CALL_TEMPLATE % (date, int(obs), cal_path) for (obs, date) in chunk]
+            out_file.write('; '.join(calls) + '\n')
+
+    print(f'Number of calls: {len(matches)}')
+    print(f'Wrote call file: {out_name}')
+    print(f'Calibration H5 will be: {cal_path}')
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())
