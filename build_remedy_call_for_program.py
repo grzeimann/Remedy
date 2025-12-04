@@ -3,6 +3,11 @@
 """
 Build Remedy quick_reduction call file for a date range and program ID.
 
+Notes:
+- The calibration H5 path is now computed per observation date. For each date D (YYYYMMDD),
+  we use month_start = YYYYMM01 and month_end = first day of the next month, so the path is
+  /work/03946/hetdex/maverick/het_code/Remedy/output/{month_start}_{month_end}.h5.
+- Example: for D=20250807, month_start=20250801 and month_end=20250901.
 """
 
 import argparse
@@ -46,6 +51,24 @@ def daterange(start: str, end: str):
 
 
 def build_cal_path(start: str, end: str):
+    return f'/work/03946/hetdex/maverick/het_code/Remedy/output/{start}_{end}.h5'
+
+
+def month_bounds(date_str: str):
+    """Given YYYYMMDD, return (month_start, next_month_start) as YYYYMMDD strings.
+    Example: 20250807 -> (20250801, 20250901)
+    """
+    d = datetime.strptime(date_str, '%Y%m%d')
+    month_start_dt = d.replace(day=1)
+    if d.month == 12:
+        next_month_dt = datetime(d.year + 1, 1, 1)
+    else:
+        next_month_dt = datetime(d.year, d.month + 1, 1)
+    return month_start_dt.strftime('%Y%m%d'), next_month_dt.strftime('%Y%m%d')
+
+
+def build_cal_path_for_date(date_str: str):
+    start, end = month_bounds(date_str)
     return f'/work/03946/hetdex/maverick/het_code/Remedy/output/{start}_{end}.h5'
 
 
@@ -119,8 +142,9 @@ def main():
         print('start_date must be earlier than end_date')
         return 1
 
-    cal_path = build_cal_path(args.start_date, args.end_date)
-    os.makedirs(op.dirname(cal_path), exist_ok=True)
+    # Ensure output directory for calibration files exists (same parent for all months)
+    out_dir = op.dirname(build_cal_path_for_date(args.start_date))
+    os.makedirs(out_dir, exist_ok=True)
 
     matches = collect_matching_obs(args.start_date, args.end_date, args.program_id)
     if len(matches) == 0:
@@ -141,12 +165,17 @@ def main():
         for chunk in chunks:
             if len(chunk) == 0:
                 continue
-            calls = [CALL_TEMPLATE % (date, int(obs), cal_path) for (obs, date) in chunk]
+            calls = [
+                CALL_TEMPLATE % (date, int(obs), build_cal_path_for_date(date))
+                for (obs, date) in chunk
+            ]
             out_file.write('; '.join(calls) + '\n')
 
     print(f'Number of calls: {len(matches)}')
     print(f'Wrote call file: {out_name}')
-    print(f'Calibration H5 will be: {cal_path}')
+    # Inform that calibration path is date-dependent now
+    unique_months = sorted({month_bounds(date)[0] for (_, date) in matches})
+    print(f'Calibration H5 files are month-dependent; months covered: {", ".join(unique_months)}')
     return 0
 
 
