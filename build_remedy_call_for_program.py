@@ -17,6 +17,7 @@ import os.path as op
 import tarfile
 from datetime import datetime, timedelta
 import numpy as np
+import io
 
 from astropy.io import fits
 
@@ -72,6 +73,55 @@ def build_cal_path_for_date(date_str: str):
     return f'/work/03946/hetdex/maverick/het_code/Remedy/output/{start}_{end}.h5'
 
 
+def _read_qprog_fast(tarfile_obj: tarfile.TarFile, tarinfo: tarfile.TarInfo, max_bytes: int = 28800):
+    """Attempt to read QPROG from a FITS header inside a tar member quickly.
+
+    Strategy:
+    - Read up to max_bytes (default 28,800 = 10 FITS blocks) from the member.
+    - Try parsing a FITS header from this partial content using Header.fromfile on a BytesIO buffer.
+    - If parsing fails (e.g., END card not within buffer), fall back to a full header parse.
+    """
+    qprog = 'None'
+    # First attempt: limited bytes
+    try:
+        fobj = tarfile_obj.extractfile(tarinfo)
+        if fobj is not None:
+            buf = fobj.read(max_bytes)
+            try:
+                bio = io.BytesIO(buf)
+                hdr = fits.Header.fromfile(bio, endcard=True, padding=False)
+                qprog = hdr.get('QPROG', 'None')
+                fobj.close()
+                return qprog
+            except Exception:
+                # Fall through to full read fallback
+                pass
+            finally:
+                try:
+                    fobj.close()
+                except Exception:
+                    pass
+    except Exception:
+        # proceed to fallback
+        pass
+
+    # Fallback: let astropy parse from the file-like object fully
+    try:
+        fobj2 = tarfile_obj.extractfile(tarinfo)
+        if fobj2 is not None:
+            try:
+                hdr = fits.Header.fromfile(fobj2, endcard=True, padding=False)
+                qprog = hdr.get('QPROG', 'None')
+            finally:
+                try:
+                    fobj2.close()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return qprog
+
+
 def collect_matching_obs(start: str, end: str, program_id: str):
     tarlist = []  # list of (obs, date)
     for date in daterange(start, end):
@@ -103,24 +153,13 @@ def collect_matching_obs(start: str, end: str, program_id: str):
                         continue
                     if name[-8:-5] != 'sci':
                         continue
-                    # Read only the header for speed
-                    qprog = 'None'
-                    fobj = None
+                    # Read only the header for speed (fast path with fallback)
                     try:
-                        fobj = T.extractfile(a)
-                        if fobj is not None:
-                            hdr = fits.Header.fromfile(fobj, endcard=True, padding=False)
-                            qprog = hdr.get('QPROG', 'None')
+                        qprog = _read_qprog_fast(T, a)
                     except Exception:
                         print(f'Failed to read FITS header from {tarfolder}')
                         # move to next tar; keep behavior similar to original
                         break
-                    finally:
-                        try:
-                            if fobj is not None:
-                                fobj.close()
-                        except Exception:
-                            pass
                     if str(qprog) == str(program_id):
                         try:
                             base = op.basename(tarfolder)
