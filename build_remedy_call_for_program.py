@@ -17,9 +17,39 @@ import os.path as op
 import tarfile
 from datetime import datetime, timedelta
 import numpy as np
-import io
 
 from astropy.io import fits
+
+import subprocess
+from io import BytesIO
+from astropy.io import fits
+
+def get_qprog_from_tar(tar_path, nbytes=28800):
+    """
+    Run `tar -Oxf tar_path`, read nbytes from the first member,
+    parse as FITS header, and return the QPROG keyword (or None).
+    """
+    # Start tar streaming the first archive member to stdout
+    proc = subprocess.Popen(
+        ["tar", "-Oxf", tar_path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    try:
+        # Read only the first nbytes (like head -c nbytes)
+        raw = proc.stdout.read(nbytes)
+    finally:
+        # Make sure process is cleaned up
+        proc.stdout.close()
+        proc.terminate()
+
+    # Now interpret raw as a FITS file starting at byte 0
+    # (this assumes the first member is indeed a FITS file)
+    with fits.open(BytesIO(raw), mode="readonly", memmap=False) as hdul:
+        hdr = hdul[0].header
+        return hdr.get("QPROG")  # returns value or None if missing
+
 
 rootdir = '/work/03946/hetdex/maverick'
 inst = 'virus'
@@ -73,55 +103,6 @@ def build_cal_path_for_date(date_str: str):
     return f'/work/03946/hetdex/maverick/het_code/Remedy/output/{start}_{end}.h5'
 
 
-def _read_qprog_fast(tarfile_obj: tarfile.TarFile, tarinfo: tarfile.TarInfo, max_bytes: int = 28800):
-    """Attempt to read QPROG from a FITS header inside a tar member quickly.
-
-    Strategy:
-    - Read up to max_bytes (default 28,800 = 10 FITS blocks) from the member.
-    - Try parsing a FITS header from this partial content using Header.fromfile on a BytesIO buffer.
-    - If parsing fails (e.g., END card not within buffer), fall back to a full header parse.
-    """
-    qprog = 'None'
-    # First attempt: limited bytes
-    try:
-        fobj = tarfile_obj.extractfile(tarinfo)
-        if fobj is not None:
-            buf = fobj.read(max_bytes)
-            try:
-                bio = io.BytesIO(buf)
-                hdr = fits.Header.fromfile(bio, endcard=True, padding=False)
-                qprog = hdr.get('QPROG', 'None')
-                fobj.close()
-                return qprog
-            except Exception:
-                # Fall through to full read fallback
-                pass
-            finally:
-                try:
-                    fobj.close()
-                except Exception:
-                    pass
-    except Exception:
-        # proceed to fallback
-        pass
-
-    # Fallback: let astropy parse from the file-like object fully
-    try:
-        fobj2 = tarfile_obj.extractfile(tarinfo)
-        if fobj2 is not None:
-            try:
-                hdr = fits.Header.fromfile(fobj2, endcard=True, padding=False)
-                qprog = hdr.get('QPROG', 'None')
-            finally:
-                try:
-                    fobj2.close()
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    return qprog
-
-
 def collect_matching_obs(start: str, end: str, program_id: str):
     tarlist = []  # list of (obs, date)
     for date in daterange(start, end):
@@ -129,61 +110,30 @@ def collect_matching_obs(start: str, end: str, program_id: str):
         pattern = op.join(rootdir, date, inst, f'{inst}0000*.tar')
         tarfolders = sorted(glob.glob(pattern))
         for tarfolder in tarfolders:
+            # Use the new, centralized method to read QPROG from the tar
             try:
-                # Use explicit uncompressed tar mode to avoid autodetect overhead
-                T = tarfile.open(tarfolder, 'r:')
+                qprog = get_qprog_from_tar(tarfolder)
             except Exception as e:
-                # Fall back to default if explicit mode fails (e.g., compressed tar)
+                print(f'Failed to get QPROG from {tarfolder}: {e}')
+                continue
+
+            if str(qprog) == str(program_id):
                 try:
-                    T = tarfile.open(tarfolder, 'r')
-                except Exception as e2:
-                    print(f'Failed to open tar {tarfolder}: {e2}')
-                    continue
-            try:
-                # Stream through entries and stop at the first sci FITS
-                while True:
-                    try:
-                        a = T.next()
-                        if a is None:
-                            break
-                        name = a.name
-                    except Exception:
-                        break
-                    if not name.endswith('.fits'):
-                        continue
-                    if name[-8:-5] != 'sci':
-                        continue
-                    # Read only the header for speed (fast path with fallback)
-                    try:
-                        qprog = _read_qprog_fast(T, a)
-                    except Exception:
-                        print(f'Failed to read FITS header from {tarfolder}')
-                        # move to next tar; keep behavior similar to original
-                        break
-                    if str(qprog) == str(program_id):
-                        try:
-                            base = op.basename(tarfolder)
-                            obs = int(base[-11:-4])
-                        except Exception:
-                            # fallback: attempt to parse any 7-digit sequence
-                            obs = None
-                            base = op.basename(tarfolder)
-                            for i in range(len(base) - 6):
-                                chunk = base[i:i+7]
-                                if chunk.isdigit():
-                                    obs = int(chunk)
-                                    break
-                            if obs is None:
-                                print(f'Could not parse OBS number from {tarfolder}')
-                                break
-                        tarlist.append((obs, date))
-                    # only consider first sci FITS per tar (as in original)
-                    break
-            finally:
-                try:
-                    T.close()
+                    base = op.basename(tarfolder)
+                    obs = int(base[-11:-4])
                 except Exception:
-                    pass
+                    # fallback: attempt to parse any 7-digit sequence
+                    obs = None
+                    base = op.basename(tarfolder)
+                    for i in range(len(base) - 6):
+                        chunk = base[i:i+7]
+                        if chunk.isdigit():
+                            obs = int(chunk)
+                            break
+                    if obs is None:
+                        print(f'Could not parse OBS number from {tarfolder}')
+                        continue
+                tarlist.append((obs, date))
     return tarlist
 
 
