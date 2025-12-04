@@ -52,6 +52,7 @@ def build_cal_path(start: str, end: str):
 def collect_matching_obs(start: str, end: str, program_id: str):
     tarlist = []  # list of (obs, date)
     for date in daterange(start, end):
+        print(f'Processing {date}')
         pattern = op.join(rootdir, date, inst, f'{inst}0000*.tar')
         tarfolders = sorted(glob.glob(pattern))
         for tarfolder in tarfolders:
