@@ -44,11 +44,11 @@ def get_qprog_from_tar(tar_path, nbytes=28800):
         proc.stdout.close()
         proc.terminate()
 
-    # Now interpret raw as a FITS file starting at byte 0
-    # (this assumes the first member is indeed a FITS file)
-    with fits.open(BytesIO(raw), mode="readonly", memmap=False) as hdul:
-        hdr = hdul[0].header
-        return hdr.get("QPROG")  # returns value or None if missing
+    # Now parse only the FITS HEADER from the raw bytes to avoid astropy
+    # trying to read image data (which would raise a truncation warning).
+    bio = BytesIO(raw)
+    hdr = fits.Header.fromfile(bio, endcard=True, padding=False)
+    return hdr.get("QPROG")  # returns value or None if missing
 
 
 rootdir = '/work/03946/hetdex/maverick'
