@@ -80,32 +80,51 @@ def collect_matching_obs(start: str, end: str, program_id: str):
         tarfolders = sorted(glob.glob(pattern))
         for tarfolder in tarfolders:
             try:
-                T = tarfile.open(tarfolder, 'r')
+                # Use explicit uncompressed tar mode to avoid autodetect overhead
+                T = tarfile.open(tarfolder, 'r:')
             except Exception as e:
-                print(f'Failed to open tar {tarfolder}: {e}')
-                continue
+                # Fall back to default if explicit mode fails (e.g., compressed tar)
+                try:
+                    T = tarfile.open(tarfolder, 'r')
+                except Exception as e2:
+                    print(f'Failed to open tar {tarfolder}: {e2}')
+                    continue
             try:
-                # iterate members until we find a FITS sci file
-                for a in T:
+                # Stream through entries and stop at the first sci FITS
+                while True:
                     try:
+                        a = T.next()
+                        if a is None:
+                            break
                         name = a.name
                     except Exception:
-                        continue
-                    if not hasattr(a, 'name'):
-                        continue
+                        break
                     if not name.endswith('.fits'):
                         continue
                     if name[-8:-5] != 'sci':
                         continue
+                    # Read only the header for speed
+                    qprog = 'None'
+                    fobj = None
                     try:
-                        with fits.open(T.extractfile(a)) as b:
-                            qprog = b[0].header.get('QPROG', 'None')
+                        fobj = T.extractfile(a)
+                        if fobj is not None:
+                            hdr = fits.Header.fromfile(fobj, endcard=True, padding=False)
+                            qprog = hdr.get('QPROG', 'None')
                     except Exception:
-                        print(f'Failed to open FITS from {tarfolder}')
-                        break  # move to next tar; keep behavior similar to original
+                        print(f'Failed to read FITS header from {tarfolder}')
+                        # move to next tar; keep behavior similar to original
+                        break
+                    finally:
+                        try:
+                            if fobj is not None:
+                                fobj.close()
+                        except Exception:
+                            pass
                     if str(qprog) == str(program_id):
                         try:
-                            obs = int(op.basename(tarfolder)[-11:-4])
+                            base = op.basename(tarfolder)
+                            obs = int(base[-11:-4])
                         except Exception:
                             # fallback: attempt to parse any 7-digit sequence
                             obs = None
@@ -119,7 +138,8 @@ def collect_matching_obs(start: str, end: str, program_id: str):
                                 print(f'Could not parse OBS number from {tarfolder}')
                                 break
                         tarlist.append((obs, date))
-                    break  # only consider first sci FITS per tar (as in original)
+                    # only consider first sci FITS per tar (as in original)
+                    break
             finally:
                 try:
                     T.close()
