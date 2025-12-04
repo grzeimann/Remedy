@@ -3,12 +3,6 @@
 """
 Build Remedy quick_reduction call file for a date range and program ID.
 
-Updates original script to:
-- take start-date and end-date (YYYYMMDD) and a program-id (matches FITS header QPROG)
-- automatically compute the calibration H5 path based on the date range:
-  /work/03946/hetdex/maverick/het_code/Remedy/output/{start}_{end}.h5
-- search all virus tar files in the date range and include those whose QPROG matches
-- batch the calls into ncalls lines
 """
 
 import argparse
