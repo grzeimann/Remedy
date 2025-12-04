@@ -7,7 +7,10 @@ Notes:
 - The calibration H5 path is now computed per observation date. For each date D (YYYYMMDD),
   we use month_start = YYYYMM01 and month_end = first day of the next month, so the path is
   /work/03946/hetdex/maverick/het_code/Remedy/output/{month_start}_{month_end}.h5.
-- Example: for D=20250807, month_start=20250801 and month_end=20250901.
+  Example: for D=20250807, month_start=20250801 and month_end=20250901.
+- Optional cold-cache optimization for TACC/Lustre: pass --warm-cache to pre-read a small
+  chunk from each tar file (in parallel) before scanning headers; this significantly reduces
+  the first-touch latency observed when files are accessed for the first time in a session.
 """
 
 import argparse
@@ -17,11 +20,17 @@ import os.path as op
 import tarfile
 from datetime import datetime, timedelta
 import numpy as np
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from astropy.io import fits
 
 rootdir = '/work/03946/hetdex/maverick'
 inst = 'virus'
+
+# Cache warm-up controls (can be overridden by CLI)
+WARM_CACHE = False
+WARM_WORKERS = 32
+WARM_READ_BYTES = 65536  # 64 KB per file
 
 CALL_TEMPLATE = (
     'python3 /work/03730/gregz/maverick/Remedy/quick_reduction.py %s %i '
@@ -37,6 +46,8 @@ def parse_args():
     p.add_argument('end_date', help='End date YYYYMMDD (exclusive)')
     p.add_argument('program_id', help='Program ID to match against FITS header QPROG')
     p.add_argument('--ncalls', type=int, default=10, help='Number of batches (lines) in output file')
+    p.add_argument('--warm-cache', action='store_true', help='Pre-read a small chunk of each tar to warm the filesystem cache (TACC/Lustre).')
+    p.add_argument('--warm-workers', type=int, default=WARM_WORKERS, help='Number of threads used for cache warm-up when enabled.')
     return p.parse_args()
 
 
@@ -72,12 +83,39 @@ def build_cal_path_for_date(date_str: str):
     return f'/work/03946/hetdex/maverick/het_code/Remedy/output/{start}_{end}.h5'
 
 
+def _warm_read(path: str, nbytes: int) -> None:
+    try:
+        with open(path, 'rb', buffering=0) as f:
+            _ = f.read(nbytes)
+    except Exception:
+        pass  # ignore warm-up errors
+
+
+def prewarm_files(paths, workers: int, nbytes: int = WARM_READ_BYTES):
+    """Concurrently read a small chunk from each file to warm FS cache.
+    Designed for Lustre/GPFS-like systems (e.g., TACC) where first touch is slow.
+    """
+    if not paths:
+        return
+    try:
+        with ThreadPoolExecutor(max_workers=max(1, int(workers))) as ex:
+            futs = [ex.submit(_warm_read, p, nbytes) for p in paths]
+            for _ in as_completed(futs):
+                pass
+    except Exception:
+        # Warming is best-effort; never fail the main job due to warm-up
+        pass
+
+
 def collect_matching_obs(start: str, end: str, program_id: str):
     tarlist = []  # list of (obs, date)
     for date in daterange(start, end):
         print(f'Processing {date}')
         pattern = op.join(rootdir, date, inst, f'{inst}0000*.tar')
         tarfolders = sorted(glob.glob(pattern))
+        if WARM_CACHE and tarfolders:
+            print(f'  Warming cache for {len(tarfolders)} tar files...')
+            prewarm_files(tarfolders, WARM_WORKERS)
         for tarfolder in tarfolders:
             try:
                 # Use explicit uncompressed tar mode to avoid autodetect overhead
@@ -149,7 +187,14 @@ def collect_matching_obs(start: str, end: str, program_id: str):
 
 
 def main():
+    global WARM_CACHE, WARM_WORKERS
     args = parse_args()
+
+    # Apply warm-up options
+    WARM_CACHE = bool(getattr(args, 'warm_cache', False))
+    WARM_WORKERS = int(getattr(args, 'warm_workers', WARM_WORKERS))
+    if WARM_CACHE:
+        print(f'Cache warm-up enabled with {WARM_WORKERS} workers; reading ~{WARM_READ_BYTES} bytes per tar.')
 
     # Validate dates
     try:
