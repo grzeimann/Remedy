@@ -81,6 +81,11 @@ parser.add_argument("-ff", "--filter_file",
                     help='''Filter filename''',
                     default=None, type=str)
 
+# Optional: write individual sub-dither cubes
+parser.add_argument("--write-sub-dithers",
+                    help='''Also write individual cubes/errorcubes per input dither (sub_dither_N)''',
+                    action='store_true')
+
 def rebin(arr, new_shape):
     """Rebin 2D array arr to shape new_shape by averaging."""
     shape = (new_shape[0], arr.shape[0] // new_shape[0],
@@ -90,41 +95,82 @@ def rebin(arr, new_shape):
 def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
                       binsize=2):
     # Loop through shots, average images before convolution
-    # Make a +/- 1 pixel mask for places to keep
-    # Mask still needs work, need to grab bad pixels and block them out
+    # Build a PSF-aware fractional coverage map (0..1) using Gaussian smoothing
     G = Gaussian2DKernel(sigma)
-    image_all = np.ma.zeros((len(cnt_array),) + xgrid.shape)
+    nshots = len(cnt_array)
+    image_all = np.ma.zeros((nshots,) + xgrid.shape)
     image_all.mask = True
-    weightk = 0.0 * xgrid
+    coveragek = 0.0 * xgrid  # accumulate per-shot smoothed coverage, later normalized to 0..1
+    # grid for accumulating inverse-variance per pixel (pre-convolution)
+    ivar_grid = 0.0 * xgrid
+    # area scaling applied to flux; propagate to errors as well
+    area = (np.pi * 0.75**2)
+
     xc = np.interp(Pos[:, 0], xg, np.arange(len(xg)), left=0., right=len(xg))
     yc = np.interp(Pos[:, 1], yg, np.arange(len(yg)), left=0., right=len(yg))
     xc = np.array(np.round(xc), dtype=int)
     yc = np.array(np.round(yc), dtype=int)
     gsel = np.where((xc>1) * (xc<len(xg)-1) * (yc>1) * (yc<len(yg)-1))[0]
     for k, cnt in enumerate(cnt_array):
-        weight = 0.0 * xgrid
-        l1 = int(cnt[0])
-        l2 = int(cnt[1])
-        gi = gsel[(gsel>=l1) * (gsel<=l2)]
-        image_all.data[k, yc[gi], xc[gi]] = y[gi] / (np.pi * 0.75**2)
-        image_all.mask[k, yc[gi], xc[gi]] = False
-        bsel = np.where(np.isfinite(y[gi]))[0]
-        for i in np.arange(-1, 2):
-            for j in np.arange(-1, 2):
-                weight[yc[gi][bsel]+i, xc[gi][bsel]+j] = 1.
-        bsel = np.where(np.isnan(y[gi]))[0]
-        for i in np.arange(-1, 2):
-            for j in np.arange(-1, 2):
-                weight[yc[gi][bsel]+i, xc[gi][bsel]+j] = 0.0
-        weightk[:] += weight
+        # Support two formats for cnt: (start, stop) range, or explicit index array
+        if isinstance(cnt, (tuple, list)) and len(cnt) == 2:
+            l1 = int(cnt[0])
+            l2 = int(cnt[1])
+            sel_idx = gsel[(gsel >= l1) & (gsel < l2)]
+        else:
+            # assume numpy array of global indices
+            cnt_arr = np.array(cnt, dtype=int)
+            # intersect with valid selection
+            sel_idx = np.intersect1d(gsel, cnt_arr, assume_unique=False)
+        if sel_idx.size == 0:
+            continue
+        # place flux values (scaled by area)
+        image_all.data[k, yc[sel_idx], xc[sel_idx]] = y[sel_idx] / area
+        image_all.mask[k, yc[sel_idx], xc[sel_idx]] = False
+        # accumulate inverse variance at exact sample locations (propagate scaling)
+        if ye is not None:
+            ye_sel = ye[sel_idx]
+            valid_e = np.isfinite(ye_sel) & (ye_sel > 0)
+            if np.any(valid_e):
+                ivar_vals = np.zeros_like(ye_sel, dtype=float)
+                ivar_vals[valid_e] = 1.0 / (ye_sel[valid_e]**2) / (area**2)
+                # add to grid
+                ivar_grid[yc[sel_idx], xc[sel_idx]] += ivar_vals
+        # build per-shot binary sampling mask, then smooth with the same PSF kernel
+        valid_flux = np.isfinite(y[sel_idx])
+        if np.any(valid_flux):
+            mask_shot = 0.0 * xgrid
+            mask_shot[yc[sel_idx][valid_flux], xc[sel_idx][valid_flux]] = 1.0
+            # Convolution of binary mask (kernel is normalized to unit sum) yields 0..1 local coverage
+            mask_sm = convolve(mask_shot, G, preserve_nan=False, boundary='extend')
+            # Accumulate; we'll normalize by number of shots to map to 0..1 overall
+            coveragek += mask_sm
+    # form the image by median stacking shots then Gaussian smoothing
     image = np.ma.median(image_all, axis=0)
-    y = image.data * 1.
-    y[image.mask] = np.nan
-    image = convolve(y, G, preserve_nan=False, boundary='extend')
-    image[weightk == 0.] = np.nan
+    y_im = image.data * 1.
+    y_im[image.mask] = np.nan
+    image = convolve(y_im, G, preserve_nan=False, boundary='extend')
+    # normalize coverage to 0..1; avoid division by zero
+    nshots = max(1, nshots)
+    coveragek = np.clip(coveragek / float(nshots), 0.0, 1.0)
+    image[coveragek == 0.] = np.nan
     image[np.isnan(image)] = 0.0
 
-    return image, 0. * image, weight
+    # build an error image: start from per-pixel variance from inverse-variance sum
+    var0 = np.empty_like(xgrid, dtype=float)
+    var0[:] = np.nan
+    pos = ivar_grid > 0
+    if np.any(pos):
+        var0[pos] = 1.0 / ivar_grid[pos]
+    # propagate variance through Gaussian smoothing: convolve with kernel^2
+    kernel_sq = G.array**2
+    var_sm = convolve(var0, kernel_sq, normalize_kernel=False, boundary='extend')
+    var_sm[coveragek == 0.] = np.nan
+    # finalize error image
+    errorimage = np.sqrt(var_sm)
+    errorimage[np.isnan(errorimage)] = 0.0
+
+    return image, errorimage, coveragek
 
 def make_image(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
     image = xgrid * 0.
@@ -156,19 +202,6 @@ def make_image(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
         image[indy_array[j], indx_array[j]] += y[j] * G[j]
         error[indy_array[j], indx_array[j]] += ye[j]**2 * G[j]
         weight[indy_array[j], indx_array[j]] += G[j]
-#    for j in np.arange(len(cnt_array)):
-#        l1 = cnt_array[j, 0]
-#        l2 = cnt_array[j, 1]
-#        idy = indy_array[l1:l2]
-#        idx = indx_array[l1:l2]
-#        g = G[l1:l2]
-#        yi = y[l1:l2]
-#        yie = ye[l1:l2]
-#        indj = 336
-#        for i in np.arange(indj):
-#            image[idy[i::indj].ravel(), idx[i::indj].ravel()] += (yi[i::indj][:, np.newaxis] * g[i::indj]).ravel()
-#            error[idy[i::indj].ravel(), idx[i::indj].ravel()] += (yie[i::indj][:, np.newaxis]**2 * g[i::indj]).ravel()
-#            weight[idy[i::indj].ravel(), idx[i::indj].ravel()] += g[i::indj].ravel()
     weight[:] *= np.pi * 0.75**2
     return image, np.sqrt(error), weight
 
@@ -178,6 +211,7 @@ args.log = setup_logging('make_image_from_h5')
 def_wave = np.linspace(3470., 5540., 1036)
 
 h5files = sorted(glob.glob(args.h5files))
+args.log.info(f"Detected {len(h5files)} input file(s). Assuming each h5 contains 3 interleaved dithers by default.")
 
 bounding_box = [float(corner.replace(' ', ''))
                         for corner in args.image_center_size.split(',')]
@@ -187,31 +221,81 @@ bounding_box[2] = int(bounding_box[2]*60./args.pixel_scale/2.) * 2 * args.pixel_
 bb = int(bounding_box[2]/args.pixel_scale/2.)*args.pixel_scale
 N = int(bounding_box[2]/args.pixel_scale/2.) * 2 + 1
 args.log.info('Image size in pixels: %i' % N)
-xg = np.linspace(-bb, bb, N)
-yg = np.linspace(-bb, bb, N)
+xg = np.arange(N) + 1
+yg = np.arange(N) + 1
 xgrid, ygrid = np.meshgrid(xg, yg)
 
 cube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 ecube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
-#weightcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
+weightcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
+
+# Optional per-dither products (initialized later once shot_indices known)
+write_sub = args.write_sub_dithers or (len(h5files) == 3)
+sub_cubes = []
+sub_ecubes = []
 
 cnt = 0
 cnt_array = np.zeros((len(h5files), 2), dtype=int)
+# Build per-exposure (shot) index selections assuming 3 interleaved dithers per h5
+nexp_default = 3
+shot_indices = []  # list of numpy arrays of global indices for each exposure
 for i, h5file in enumerate(h5files):
     t = tables.open_file(h5file)
     ra = t.root.Info.cols.ra[:]
-    cnt += len(ra)
-    cnt_array[i, 0] = cnt - len(ra)
-    cnt_array[i, 1] = cnt
+    n_fib = len(ra)
+    # window for this file in the global arrays
+    start = cnt
+    end = cnt + n_fib
+    cnt_array[i, 0] = start
+    cnt_array[i, 1] = end
+    # Build local indices grouped by 112-fiber blocks, split into 3 exposures
+    inds_local = np.arange(n_fib)
+    block_ids = (inds_local // 112).astype(int)
+    for k in range(nexp_default):
+        sel_local = np.where((block_ids % nexp_default) == k)[0]
+        if sel_local.size > 0:
+            shot_indices.append(sel_local + start)
+    cnt = end
     t.close()
 args.log.info('Number of total fibers: %i' % cnt)
+args.log.info(f'Total shots (exposures) assumed: {len(shot_indices)} (3 per h5file).')
+
 raarray = np.zeros((cnt, len(def_wave)), dtype='float32')
 decarray = np.zeros((cnt, len(def_wave)), dtype='float32')
 specarray = np.zeros((cnt, len(def_wave)), dtype='float32')
 errarray = np.zeros((cnt, len(def_wave)), dtype='float32')
 
-A = Astrometry(bounding_box[0], bounding_box[1], 0., 0., 0.)
-tp = A.setup_TP(A.ra0, A.dec0, 0.)
+# Astrometry with CRPIX at image center (not lower-left)
+_x0 = (N + 1) / 2.0
+_y0 = (N + 1) / 2.0
+A = Astrometry(bounding_box[0], bounding_box[1], 0., _x0, _y0)
+# Ensure TP uses same centered CRPIX
+tp = A.setup_TP(A.ra0, A.dec0, 0., x0=_x0, y0=_y0)
+
+# Preflight coverage check: ensure some fibers land within requested region
+try:
+    xmin, xmax = xg.min(), xg.max()
+    ymin, ymax = yg.min(), yg.max()
+    in_region_total = 0
+    for h5file in h5files:
+        t = tables.open_file(h5file)
+        ra_chk = t.root.Info.cols.ra[:]
+        dec_chk = t.root.Info.cols.dec[:]
+        t.close()
+        x_chk, y_chk = tp.wcs_world2pix(ra_chk, dec_chk, 1)
+        mask_in = (x_chk >= xmin) & (x_chk <= xmax) & (y_chk >= ymin) & (y_chk <= ymax)
+        n_in = int(mask_in.sum())
+        args.log.info(f'Fibers in region for {op.basename(h5file)}: {n_in}')
+        in_region_total += n_in
+    if in_region_total == 0:
+        args.log.error('No fibers found within the requested cube region. '
+                       'The output would be all zeros. Aborting. '\
+                       f"Center=({bounding_box[0]:.5f},{bounding_box[1]:.5f}), size={bounding_box[2]:.2f} arcsec")
+        sys.exit(2)
+    if in_region_total < 10:
+        args.log.warning(f'Only {in_region_total} fibers fall within the region; output may be very noisy or near zero.')
+except Exception as e:
+    args.log.warning(f'Coverage precheck failed with {e}; proceeding anyway.')
 
 if args.filter_file is not None:
     R = Table.read(args.filter_file, format='ascii')
@@ -271,8 +355,13 @@ for jk, h5file in enumerate(h5files):
     Dec = t.root.Survey.cols.dec[0]
     pa = t.root.Survey.cols.pa[0]
     offset = t.root.Survey.cols.offset[0]
-    spectra = t.root.Fibers.cols.spectrum[:] / offset
-    error = t.root.Fibers.cols.error[:] / offset
+    # Log and ignore offset scaling for now per user request
+    if (not np.isfinite(offset)) or (offset == 0):
+        args.log.warning(f'Offset for {op.basename(h5file)} is invalid ({offset}); proceeding without offset scaling.')
+    else:
+        args.log.info(f'Offset for {op.basename(h5file)}: {offset} (ignored for now)')
+    spectra = t.root.Fibers.cols.spectrum[:]  # do not divide by offset
+    error = t.root.Fibers.cols.error[:]       # do not divide by offset
     for key in mask_dict.keys():
         date1 = int(key.split('-')[0])
         date2 = int(key.split('-')[1])
@@ -378,33 +467,79 @@ for jk, h5file in enumerate(h5files):
         h['CRPIX2'] = np.interp(0., xg, np.arange(len(xg)))+1.0
         fits.PrimaryHDU(np.array(image/norm_array[jk], dtype='float32'), header=h).writeto(name, overwrite=True)
     
-    specarray[cnt:cnt1, :] = spectra / norm_array[jk]
-    errarray[cnt:cnt1, :] = error / norm_array[jk]
+    # Use a safe per-file normalization; avoid NaN/zero scaling that can zero-out data
+    norm_j = norm_array[jk]
+    if (not np.isfinite(norm_j)) or (norm_j == 0.0):
+        args.log.warning(f'Per-file norm for {op.basename(h5file)} is invalid ({norm_j}); using 1.0 instead to avoid zeroing spectra.')
+        norm_j = 1.0
+    specarray[cnt:cnt1, :] = spectra / norm_j
+    errarray[cnt:cnt1, :] = error / norm_j
+    # Diagnostics for this chunk
+    chunk = specarray[cnt:cnt1, :]
+    finite_cnt = int(np.isfinite(chunk).sum())
+    nonzero_cnt = int(np.count_nonzero(np.nan_to_num(chunk)))
+    args.log.info(f'Chunk stats [{cnt}:{cnt1}]: finite={finite_cnt}/{chunk.size}, nonzero={nonzero_cnt}')
+    if nonzero_cnt == 0:
+        args.log.warning('This chunk of specarray is all zeros after normalization; check upstream masking/flagging and norms.')
     cnt = cnt + len(ra)
     t.close()
 
-specarray[:] *= biweight(norm_array)
-errarray[:] *= biweight(norm_array)
+# Apply global normalization safely
+_bi = biweight(norm_array)
+if (not np.isfinite(_bi)) or (_bi == 0.0):
+    args.log.warning(f'Global biweight(norm_array) invalid ({_bi}); skipping global scaling to avoid zeroing data.')
+else:
+    specarray[:] *= _bi
+    errarray[:] *= _bi
+# Report overall specarray stats before imaging
+_nonzero_total = int(np.count_nonzero(np.nan_to_num(specarray)))
+_finite_total = int(np.isfinite(specarray).sum())
+args.log.info(f'specarray global stats: finite={_finite_total}/{specarray.size}, nonzero={_nonzero_total}')
+if _nonzero_total == 0:
+    args.log.error('specarray is all zeros before imaging. Possible causes: filter response zero everywhere, norms zero/NaN, all spectra flagged.')
 
 Pos = np.zeros((len(raarray), 2))
 for i in np.arange(len(def_wave)):
     x, y = tp.wcs_world2pix(raarray[:, i], decarray[:, i], 1)
+    # Check how many positions fall within xgrid/ygrid bounds
+    xmin, xmax = xg.min(), xg.max()
+    ymin, ymax = yg.min(), yg.max()
+    in_bounds = (x >= xmin) & (x <= xmax) & (y >= ymin) & (y <= ymax)
+    n_in = int(np.sum(in_bounds))
+    n_tot = int(len(raarray))
+
     args.log.info('Working on wavelength %0.0f' % def_wave[i])
     Pos[:, 0], Pos[:, 1] = (x, y)
     data = specarray[:, i]
     edata = errarray[:, i]
+    # Full combination across all exposures (shots)
     image, errorimage, weight = make_image_interp(Pos, data, edata, xg, yg, 
                                                   xgrid, ygrid, 1.8 / 2.35,
-                                                  cnt_array)
+                                                  shot_indices)
     cube[i, :, :] += image
     ecube[i, :, :] += errorimage
-    #weightcube[i, :, :] += weight
+    weightcube[i, :, :] += weight
 
-#cube = np.where(weightcube > 0.4, cube / weightcube, 0.0)
-#ecube = np.where(weightcube > 0.4, ecube / weightcube, 0.0)
+    # Optional per-dither (per-exposure) planes
+    if write_sub:
+        # lazily initialize sub_cubes/ecubes once we know len(shot_indices)
+        if len(sub_cubes) == 0:
+            sub_cubes = [np.zeros_like(cube) for _ in range(len(shot_indices))]
+            sub_ecubes = [np.zeros_like(ecube) for _ in range(len(shot_indices))]
+        for jd in range(len(shot_indices)):
+            sub_window = [shot_indices[jd]]
+            simg, seimg, _swei = make_image_interp(Pos, data, edata, xg, yg,
+                                                   xgrid, ygrid, 1.8 / 2.35,
+                                                   sub_window)
+            sub_cubes[jd][i, :, :] += simg
+            sub_ecubes[jd][i, :, :] += seimg
+
 name = op.basename('%s_cube.fits' % args.surname)
 header['CRPIX1'] = (N+1) / 2
 header['CRPIX2'] = (N+1) / 2
+# Ensure DS9 recognizes 3D WCS
+header['WCSAXES'] = 3
+# Spectral axis definition (linear wavelength grid)
 header['CDELT3'] = 2.
 header['CRPIX3'] = 1.
 header['CRVAL3'] = 3470.
@@ -420,6 +555,9 @@ F.writeto(name, overwrite=True)
 name = op.basename('%s_errorcube.fits' % args.surname)
 header['CRPIX1'] = (N+1) / 2
 header['CRPIX2'] = (N+1) / 2
+# Ensure DS9 recognizes 3D WCS
+header['WCSAXES'] = 3
+# Spectral axis definition (linear wavelength grid)
 header['CDELT3'] = 2.
 header['CRPIX3'] = 1.
 header['CRVAL3'] = 3470.
@@ -432,3 +570,46 @@ header['CUNIT3'] = 'Angstrom'
 header['SPECSYS'] = 'TOPOCENT'
 F = fits.PrimaryHDU(np.array(ecube, 'float32'), header=header)
 F.writeto(name, overwrite=True)
+# Write weight cube as requested
+name = op.basename('%s_weight_cube.fits' % args.surname)
+header['CRPIX1'] = (N+1) / 2
+header['CRPIX2'] = (N+1) / 2
+header['WCSAXES'] = 3
+header['CDELT3'] = 2.
+header['CRPIX3'] = 1.
+header['CRVAL3'] = 3470.
+header['CTYPE1'] = 'RA---TAN'
+header['CTYPE2'] = 'DEC--TAN'
+header['CTYPE3'] = 'WAVE'
+header['CUNIT1'] = 'deg'
+header['CUNIT2'] = 'deg'
+header['CUNIT3'] = 'Angstrom'
+header['SPECSYS'] = 'TOPOCENT'
+F = fits.PrimaryHDU(np.array(weightcube, 'float32'), header=header)
+F.writeto(name, overwrite=True)
+
+# Write per-dither cubes if requested/enabled
+if write_sub and len(sub_cubes) > 0:
+    for jd in range(len(sub_cubes)):
+        # Data cube
+        name = op.basename(f"{args.surname}_sub_dither_{jd+1}_cube.fits")
+        header['CRPIX1'] = (N+1) / 2
+        header['CRPIX2'] = (N+1) / 2
+        header['WCSAXES'] = 3
+        header['CDELT3'] = 2.
+        header['CRPIX3'] = 1.
+        header['CRVAL3'] = 3470.
+        header['CTYPE1'] = 'RA---TAN'
+        header['CTYPE2'] = 'DEC--TAN'
+        header['CTYPE3'] = 'WAVE'
+        header['CUNIT1'] = 'deg'
+        header['CUNIT2'] = 'deg'
+        header['CUNIT3'] = 'Angstrom'
+        header['SPECSYS'] = 'TOPOCENT'
+        F = fits.PrimaryHDU(np.array(sub_cubes[jd], 'float32'), header=header)
+        F.writeto(name, overwrite=True)
+        # Error cube
+        name = op.basename(f"{args.surname}_sub_dither_{jd+1}_errorcube.fits")
+        F = fits.PrimaryHDU(np.array(sub_ecubes[jd], 'float32'), header=header)
+        F.writeto(name, overwrite=True)
+    args.log.info(f"Wrote {len(sub_cubes)} per-dither cube/errorcube pairs with pattern {args.surname}_sub_dither_N_*.fits")
