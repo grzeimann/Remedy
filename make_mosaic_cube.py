@@ -267,10 +267,6 @@ try:
 except Exception as e:
     args.log.warning(f'Coverage precheck failed with {e}; proceeding anyway.')
 
-if args.filter_file is not None:
-    R = Table.read(args.filter_file, format='ascii')
-    response = np.interp(def_wave, R['Wavelength'], R['R'], left=0.0, right=0.0)
-
 cnt = 0
 # Streaming counters to avoid memory-heavy global scans
 _total_finite = 0
