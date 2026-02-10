@@ -535,6 +535,13 @@ for i in np.arange(len(def_wave)):
             sub_ecubes[jd][i, :, :] += seimg
 
 name = op.basename('%s_cube.fits' % args.surname)
+scale = args.pixel_scale / 3600.
+header['WCSAXES'] = 3
+header['CD1_1']   = -scale              # minus sign -> RA increases to the left (north up, east left)
+header['CD1_2']   = 0.0
+header['CD2_1']   = 0.0
+header['CD2_2']   = scale
+del header['CDELT1'], header['CDELT2']
 header['CRPIX1'] = (N+1) / 2
 header['CRPIX2'] = (N+1) / 2
 # Ensure DS9 recognizes 3D WCS
@@ -570,6 +577,7 @@ header['CUNIT3'] = 'Angstrom'
 header['SPECSYS'] = 'TOPOCENT'
 F = fits.PrimaryHDU(np.array(ecube, 'float32'), header=header)
 F.writeto(name, overwrite=True)
+<<<<<<< Updated upstream:make_mosaic_cube.py
 # Write weight cube as requested
 name = op.basename('%s_weight_cube.fits' % args.surname)
 header['CRPIX1'] = (N+1) / 2
@@ -613,3 +621,5 @@ if write_sub and len(sub_cubes) > 0:
         F = fits.PrimaryHDU(np.array(sub_ecubes[jd], 'float32'), header=header)
         F.writeto(name, overwrite=True)
     args.log.info(f"Wrote {len(sub_cubes)} per-dither cube/errorcube pairs with pattern {args.surname}_sub_dither_N_*.fits")
+=======
+>>>>>>> Stashed changes:make_mosaic_cube_org.py
