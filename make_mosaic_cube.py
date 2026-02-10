@@ -340,6 +340,9 @@ if args.image_file is not None:
         fits.PrimaryHDU(np.array(binimage, dtype='float32'), header=h).writeto(name, overwrite=True)
 
 cnt = 0
+# Streaming counters to avoid memory-heavy global scans
+_total_finite = 0
+_total_nonzero = 0
 norm_array = np.ones((len(h5files),))
 for jk, h5file in enumerate(h5files):
     args.log.info('Working on %s' % h5file)
@@ -474,10 +477,17 @@ for jk, h5file in enumerate(h5files):
         norm_j = 1.0
     specarray[cnt:cnt1, :] = spectra / norm_j
     errarray[cnt:cnt1, :] = error / norm_j
-    # Diagnostics for this chunk
+    # Diagnostics for this chunk (avoid nan_to_num on large arrays)
     chunk = specarray[cnt:cnt1, :]
-    finite_cnt = int(np.isfinite(chunk).sum())
-    nonzero_cnt = int(np.count_nonzero(np.nan_to_num(chunk)))
+    finite_mask = np.isfinite(chunk)
+    finite_cnt = int(finite_mask.sum())
+    # count non-zeros only among finite values
+    if finite_cnt > 0:
+        nonzero_cnt = int((chunk[finite_mask] != 0).sum())
+    else:
+        nonzero_cnt = 0
+    _total_finite += finite_cnt
+    _total_nonzero += nonzero_cnt
     args.log.info(f'Chunk stats [{cnt}:{cnt1}]: finite={finite_cnt}/{chunk.size}, nonzero={nonzero_cnt}')
     if nonzero_cnt == 0:
         args.log.warning('This chunk of specarray is all zeros after normalization; check upstream masking/flagging and norms.')
@@ -491,9 +501,9 @@ if (not np.isfinite(_bi)) or (_bi == 0.0):
 else:
     specarray[:] *= _bi
     errarray[:] *= _bi
-# Report overall specarray stats before imaging
-_nonzero_total = int(np.count_nonzero(np.nan_to_num(specarray)))
-_finite_total = int(np.isfinite(specarray).sum())
+# Report overall specarray stats before imaging using streaming counters (memory-safe)
+_finite_total = int(_total_finite)
+_nonzero_total = int(_total_nonzero)
 args.log.info(f'specarray global stats: finite={_finite_total}/{specarray.size}, nonzero={_nonzero_total}')
 if _nonzero_total == 0:
     args.log.error('specarray is all zeros before imaging. Possible causes: filter response zero everywhere, norms zero/NaN, all spectra flagged.')
