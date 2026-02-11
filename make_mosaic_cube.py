@@ -572,6 +572,41 @@ def evaluate_cube_stats(cube, ecube, weightcube, surname, log,
     n_spax_final = int(inliers.sum())
     log.info(f'Continuum clipping: kept {n_spax_final}/{n_spax_sel0} spaxels after |cont - med| <= {continuum_sigma:.1f} * MAD')
 
+    # Save a continuum image PNG with robust stretch from inlier spaxels
+    try:
+        cont_inliers = continuum_img[inliers]
+        cont_inliers = cont_inliers[np.isfinite(cont_inliers)]
+        if cont_inliers.size >= 10:
+            p005 = float(np.nanpercentile(cont_inliers, 0.5))
+            p995 = float(np.nanpercentile(cont_inliers, 99.5))
+            if (not np.isfinite(p005)) or (not np.isfinite(p995)) or (p005 == p995):
+                p005, p995 = float(np.nanmin(cont_inliers)), float(np.nanmax(cont_inliers))
+        else:
+            # fallback: use all finite continuum values among initially selected spaxels
+            cont_all = continuum_img[spax_idx]
+            cont_all = cont_all[np.isfinite(cont_all)]
+            if cont_all.size >= 2:
+                p005 = float(np.nanpercentile(cont_all, 0.5))
+                p995 = float(np.nanpercentile(cont_all, 99.5))
+            else:
+                # final fallback: global finite min/max
+                fin_all = continuum_img[np.isfinite(continuum_img)]
+                if fin_all.size >= 1:
+                    p005, p995 = float(np.nanmin(fin_all)), float(np.nanmax(fin_all))
+                else:
+                    p005, p995 = 0.0, 1.0
+        figc, axc = plt.subplots(figsize=(6, 5))
+        imc = axc.imshow(continuum_img, origin='lower', cmap='viridis', vmin=p005, vmax=p995)
+        axc.set_title('Continuum (nanmedian over covered wavelengths)')
+        plt.colorbar(imc, ax=axc, fraction=0.046, pad=0.04, label='Flux (cube units)')
+        figc.tight_layout()
+        out_cont = op.basename(f'{surname}_continuum.png')
+        figc.savefig(out_cont, dpi=150)
+        plt.close(figc)
+        log.info(f'Saved continuum image to {out_cont} with vmin/vmax at 0.5/99.5 percentiles: {p005:.5g}, {p995:.5g}')
+    except Exception as e:
+        log.warning(f'Failed to save continuum image: {e}')
+
     # Gather SNR samples from final spaxels over covered wavelengths with valid errors
     # Build masks lazily to avoid large temporaries
     valid_err = np.isfinite(ecube) & (ecube > 0)
