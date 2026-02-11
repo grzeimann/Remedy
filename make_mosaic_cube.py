@@ -663,6 +663,34 @@ def main():
     h5files = sorted(glob.glob(args.h5files))
     args.log.info(f"Detected {len(h5files)} input file(s). Assuming each h5 contains 3 interleaved dithers by default.")
 
+    # Quick path: if cubes already exist, load and run stats only
+    cube_path = op.basename(f"{args.surname}_cube.fits")
+    ecube_path = op.basename(f"{args.surname}_errorcube.fits")
+    wcube_path = op.basename(f"{args.surname}_weight_cube.fits")
+    if op.exists(cube_path) and op.exists(ecube_path):
+        try:
+            args.log.info("Existing cube files detected; loading to run stats only.")
+            cube = fits.getdata(cube_path)
+            ecube = fits.getdata(ecube_path)
+            if op.exists(wcube_path):
+                weightcube = fits.getdata(wcube_path)
+            else:
+                args.log.warning("Weight cube not found; synthesizing coverage from nonzero cube pixels.")
+                with np.errstate(invalid='ignore'):
+                    weightcube = (cube != 0).astype(np.float32)
+            # Basic validation
+            if cube.shape != ecube.shape or cube.shape != weightcube.shape:
+                args.log.warning(f"Loaded cubes have incompatible shapes: cube={cube.shape}, ecube={ecube.shape}, weight={weightcube.shape}; rebuilding cubes instead.")
+            else:
+                try:
+                    evaluate_cube_stats(cube, ecube, weightcube, args.surname, args.log,
+                                        valid_frac_threshold=0.8, continuum_sigma=5.0, max_iter=2)
+                except Exception as e:
+                    args.log.warning(f"Cube statistics evaluation failed on loaded cubes: {e}")
+                return
+        except Exception as e:
+            args.log.warning(f"Failed to load existing cubes due to: {e}; proceeding to (re)build cubes.")
+
     # Parse bounding box string: "RA, Dec, size_arcmin"
     bounding_box = [float(corner.replace(' ', '')) for corner in args.image_center_size.split(',')]
     # Convert size from arcmin to arcsec for internal logic
