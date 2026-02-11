@@ -11,11 +11,13 @@ import argparse as ap
 from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.convolution import Gaussian1DKernel, interpolate_replace_nans
 from astropy.io import fits
+from astropy.stats import mad_std
 import tables
 import numpy as np
 import os.path as op
 import sys
 import warnings
+import matplotlib.pyplot as plt
 from input_utils import setup_logging
 from astrometry import Astrometry
 from math_utils import biweight
@@ -465,6 +467,194 @@ def write_cube(path, data, header, N):
     fits.PrimaryHDU(np.array(data, 'float32'), header=h).writeto(path, overwrite=True)
 
 
+def evaluate_cube_stats(cube, ecube, weightcube, surname, log,
+                        valid_frac_threshold=0.8, continuum_sigma=5.0, max_iter=2):
+    """Evaluate S/N statistics and continuum-based clipping on the final cubes.
+
+    This routine summarizes per-spaxel spectral behavior, selects spaxels with
+    sufficiently well-behaved spectra, estimates a continuum image and removes
+    high-continuum outliers, and finally measures the distribution of flux/error
+    (SNR) values. A publication-quality histogram is saved alongside a standard
+    normal reference curve.
+
+    Args:
+        cube (np.ndarray): Data cube of shape (nw, ny, nx).
+        ecube (np.ndarray): Error cube of same shape as cube.
+        weightcube (np.ndarray): Coverage/weight cube; wavelengths with weight>0 are considered covered.
+        surname (str): Output tag used to write plot and optional text summary.
+        log (logging.Logger): Logger for status output.
+        valid_frac_threshold (float, optional): Minimum fraction of covered wavelengths in a spaxel that must have
+            positive finite flux (>0) to consider the spaxel for SNR stats. Default 0.8.
+        continuum_sigma (float, optional): Sigma multiple of MAD to clip high-continuum spaxels. Default 5.0.
+        max_iter (int, optional): Maximum clipping iterations. Default 2.
+
+    Returns:
+        dict: Summary statistics including counts and robust SNR location/scale.
+    """
+    try:
+        nw, ny, nx = cube.shape
+    except Exception:
+        log.warning('evaluate_cube_stats: cube has unexpected shape; skipping stats.')
+        return {}
+
+    # Coverage mask per wavelength and spaxel
+    covered = weightcube > 0
+
+    # Compute fraction of positive finite flux per spaxel over covered wavelengths
+    finite_flux = np.isfinite(cube)
+    positive_flux = (cube > 0) & finite_flux
+    covered_cnt = covered.sum(axis=0).astype(float)
+    pos_cnt = (positive_flux & covered).sum(axis=0).astype(float)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        frac_pos = np.where(covered_cnt > 0, pos_cnt / covered_cnt, 0.0)
+    spax_sel = (covered_cnt > 0) & (frac_pos >= float(valid_frac_threshold))
+
+    n_spax_total = int((covered_cnt > 0).sum())
+    n_spax_sel0 = int(spax_sel.sum())
+    log.info(f'Cube stats: total covered spaxels={n_spax_total}, meeting frac_pos>{valid_frac_threshold:.2f}: {n_spax_sel0}')
+
+    if n_spax_sel0 == 0:
+        log.warning('No spaxels meet the positive-fraction criterion; skipping stats plot.')
+        return {
+            'n_spax_total': n_spax_total,
+            'n_spax_selected': 0,
+            'biweight_snr': np.nan,
+            'mad_snr': np.nan,
+        }
+
+    # Continuum image via robust collapse over covered wavelengths
+    cube_masked = np.where(covered, cube, np.nan)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', category=RuntimeWarning)
+        continuum_img = np.nanmedian(cube_masked, axis=0)
+
+    # Robust stats over initially selected spaxels
+    spax_idx = spax_sel & np.isfinite(continuum_img)
+    cont_vals = continuum_img[spax_idx]
+    if cont_vals.size == 0:
+        log.warning('No finite continuum values among selected spaxels; skipping stats plot.')
+        return {
+            'n_spax_total': n_spax_total,
+            'n_spax_selected': 0,
+            'biweight_snr': np.nan,
+            'mad_snr': np.nan,
+        }
+
+    med_c = np.nanmedian(cont_vals)
+    mad_c = mad_std(cont_vals)
+    thr = continuum_sigma * (mad_c if np.isfinite(mad_c) and mad_c > 0 else np.nanstd(cont_vals))
+    if not np.isfinite(thr) or thr == 0:
+        thr = continuum_sigma * (np.nanstd(cont_vals) if cont_vals.size > 1 else 0.0)
+
+    inliers = spax_idx & (np.abs(continuum_img - med_c) <= thr)
+
+    for _ in range(int(max_iter)):
+        vals = continuum_img[inliers]
+        if vals.size < 10:
+            break
+        med_c = np.nanmedian(vals)
+        mad_c = mad_std(vals)
+        thr = continuum_sigma * (mad_c if np.isfinite(mad_c) and mad_c > 0 else np.nanstd(vals))
+        new_inliers = spax_idx & (np.abs(continuum_img - med_c) <= thr)
+        if new_inliers.sum() == inliers.sum():
+            break
+        inliers = new_inliers
+
+    n_spax_final = int(inliers.sum())
+    log.info(f'Continuum clipping: kept {n_spax_final}/{n_spax_sel0} spaxels after |cont - med| <= {continuum_sigma:.1f} * MAD')
+
+    # Gather SNR samples from final spaxels over covered wavelengths with valid errors
+    # Build masks lazily to avoid large temporaries
+    valid_err = np.isfinite(ecube) & (ecube > 0)
+    valid_flux_any = np.isfinite(cube)
+    valid = covered & valid_err & valid_flux_any
+
+    # Mask down to inlier spaxels
+    inliers_3d = np.broadcast_to(inliers, (nw, ny, nx))
+    valid &= inliers_3d
+
+    if not np.any(valid):
+        log.warning('No valid flux/error samples after masking; skipping stats plot.')
+        return {
+            'n_spax_total': n_spax_total,
+            'n_spax_selected': n_spax_final,
+            'biweight_snr': np.nan,
+            'mad_snr': np.nan,
+        }
+
+    snr = np.zeros(valid.sum(), dtype=np.float32)
+    # Efficient extraction without building full flattened arrays
+    # Iterate over wavelength slabs to limit peak memory
+    idx = 0
+    for i in range(nw):
+        m = valid[i]
+        if np.any(m):
+            v = cube[i][m] / ecube[i][m]
+            n = v.size
+            snr[idx:idx+n] = v
+            idx += n
+    snr = snr[:idx]
+
+    # Compute robust location and scale on clipped range for visualization
+    # Keep all values for biweight, but we will draw histogram only within [-10, 10]
+    bi = biweight(snr)
+    mad_s = mad_std(snr)
+
+    # Histogram within [-10, 10]
+    hmin, hmax = -10.0, 10.0
+    clip_mask = (snr >= hmin) & (snr <= hmax) & np.isfinite(snr)
+    snr_plot = snr[clip_mask]
+    if snr_plot.size < 10:
+        log.warning(f'Only {snr_plot.size} SNR samples within [{hmin},{hmax}]; histogram may be uninformative.')
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    bins = np.linspace(hmin, hmax, 201)
+    ax.hist(snr_plot, bins=bins, histtype='stepfilled', alpha=0.7, color='tab:blue',
+            density=True, label='Flux/Error')
+    ax.set_yscale('log')
+    x = 0.5 * (bins[:-1] + bins[1:])
+    gauss = (1.0 / np.sqrt(2*np.pi)) * np.exp(-0.5 * x * x)
+    ax.plot(x, gauss, 'k--', lw=1.5, label='N(0,1)')
+    ax.axvline(bi, color='tab:red', lw=1.5, label=f'Biweight={bi:.3f}')
+    ax.set_xlabel('Flux / Error')
+    ax.set_ylabel('Density (log scale)')
+    ax.set_title('Distribution of Flux/Error (SNR)')
+    ax.set_xlim(hmin, hmax)
+    ax.legend(frameon=False)
+    out_png = op.basename(f'{surname}_snr_hist.png')
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+    log.info(f'Saved SNR histogram to {out_png} (samples: total={snr.size}, in-plot={snr_plot.size})')
+
+    # Log a compact summary and also write a small text file next to the plot
+    summary = {
+        'n_spax_total': n_spax_total,
+        'n_spax_selected_initial': n_spax_sel0,
+        'n_spax_selected': n_spax_final,
+        'continuum_median': float(med_c),
+        'continuum_mad': float(mad_c),
+        'continuum_threshold': float(thr),
+        'snr_count_total': int(snr.size),
+        'snr_count_inplot': int(snr_plot.size),
+        'biweight_snr': float(bi) if np.isfinite(bi) else np.nan,
+        'mad_snr': float(mad_s) if np.isfinite(mad_s) else np.nan,
+    }
+    for k, v in summary.items():
+        log.info(f'CubeStat {k}: {v}')
+
+    try:
+        txt_path = op.basename(f'{surname}_cube_stats.txt')
+        with open(txt_path, 'w') as f:
+            for k, v in summary.items():
+                f.write(f'{k}: {v}\n')
+        log.info(f'Wrote cube statistics to {txt_path}')
+    except Exception as e:
+        log.warning(f'Failed to write stats text file: {e}')
+
+    return summary
+
+
 def main():
     """Entrypoint for building a mosaic cube from H5 fiber files.
 
@@ -496,6 +686,13 @@ def main():
 
     # Assemble cubes
     cube, ecube, weightcube = assemble_cubes(def_wave, raarray, decarray, specarray, errarray, shot_indices, tp, xg, yg, xgrid, ygrid, args.log)
+
+    # Post-assembly cube statistics and SNR histogram
+    try:
+        evaluate_cube_stats(cube, ecube, weightcube, args.surname, args.log,
+                            valid_frac_threshold=0.8, continuum_sigma=5.0, max_iter=2)
+    except Exception as e:
+        args.log.warning(f'Cube statistics evaluation failed: {e}')
 
     # Write outputs
     write_cube(op.basename(f'{args.surname}_cube.fits'), cube, header, N)
