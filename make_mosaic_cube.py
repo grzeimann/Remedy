@@ -484,7 +484,7 @@ def evaluate_cube_stats(cube, ecube, weightcube, surname, log,
         surname (str): Output tag used to write plot and optional text summary.
         log (logging.Logger): Logger for status output.
         valid_frac_threshold (float, optional): Minimum fraction of covered wavelengths in a spaxel that must have
-            positive finite flux (>0) to consider the spaxel for SNR stats. Default 0.8.
+            finite (non-NaN, non-Inf) flux to consider the spaxel for SNR stats. Default 0.8.
         continuum_sigma (float, optional): Sigma multiple of MAD to clip high-continuum spaxels. Default 5.0.
         max_iter (int, optional): Maximum clipping iterations. Default 2.
 
@@ -500,19 +500,19 @@ def evaluate_cube_stats(cube, ecube, weightcube, surname, log,
     # Coverage mask per wavelength and spaxel
     covered = weightcube > 0
 
-    # Compute fraction of positive finite flux per spaxel over covered wavelengths
+    # Compute fraction of finite flux per spaxel over covered wavelengths
     finite_flux = np.isfinite(cube)
     good_spaxels = finite_flux & covered
-    frac_pos =  good_spaxels.sum(axis=0)[np.newaxis, :, :] / good_spaxels.shape[0]
-    pix_sel = frac_pos >= float(valid_frac_threshold)
-    spax_sel = good_spaxels & pix_sel
+    frac_good = good_spaxels.sum(axis=0) / good_spaxels.shape[0]
+    pix_sel2d = frac_good >= float(valid_frac_threshold)
+    spax_sel = good_spaxels & pix_sel2d[None, :, :]
 
-    n_spax_total = int((covered > 0).sum())
-    n_spax_sel0 = int(spax_sel.sum())
-    log.info(f'Cube stats: total covered spaxels={n_spax_total}, meeting frac_pos>{valid_frac_threshold:.2f}: {n_spax_sel0}')
+    n_spax_total = int(np.any(covered, axis=0).sum())
+    n_spax_sel0 = int(pix_sel2d.sum())
+    log.info(f'Cube stats: total covered spaxels={n_spax_total}, meeting finite-fraction>={valid_frac_threshold:.2f}: {n_spax_sel0}')
 
     if n_spax_sel0 == 0:
-        log.warning('No spaxels meet the positive-fraction criterion; skipping stats plot.')
+        log.warning('No spaxels meet the finite-fraction criterion; skipping stats plot.')
         return {
             'n_spax_total': n_spax_total,
             'n_spax_selected': 0,
@@ -527,7 +527,7 @@ def evaluate_cube_stats(cube, ecube, weightcube, surname, log,
         continuum_img = np.nanmedian(cube_masked, axis=0)
 
     # Robust stats over initially selected spaxels
-    spax_idx = pix_sel & np.isfinite(continuum_img)
+    spax_idx = pix_sel2d & np.isfinite(continuum_img)
     cont_vals = continuum_img[spax_idx]
     if cont_vals.size == 0:
         log.warning('No finite continuum values among selected spaxels; skipping stats plot.')
