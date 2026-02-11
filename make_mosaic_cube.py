@@ -502,14 +502,12 @@ def evaluate_cube_stats(cube, ecube, weightcube, surname, log,
 
     # Compute fraction of positive finite flux per spaxel over covered wavelengths
     finite_flux = np.isfinite(cube)
-    positive_flux = (cube > 0) & finite_flux
-    covered_cnt = covered.sum(axis=0).astype(float)
-    pos_cnt = (positive_flux & covered).sum(axis=0).astype(float)
-    with np.errstate(invalid='ignore', divide='ignore'):
-        frac_pos = np.where(covered_cnt > 0, pos_cnt / covered_cnt, 0.0)
-    spax_sel = (covered_cnt > 0) & (frac_pos >= float(valid_frac_threshold))
+    good_spaxels = finite_flux & covered
+    frac_pos =  good_spaxels.sum(axis=0)[np.newaxis, :, :] / good_spaxels.shape[0]
+    pix_sel = frac_pos >= float(valid_frac_threshold)
+    spax_sel = good_spaxels & pix_sel
 
-    n_spax_total = int((covered_cnt > 0).sum())
+    n_spax_total = int((covered > 0).sum())
     n_spax_sel0 = int(spax_sel.sum())
     log.info(f'Cube stats: total covered spaxels={n_spax_total}, meeting frac_pos>{valid_frac_threshold:.2f}: {n_spax_sel0}')
 
@@ -523,13 +521,13 @@ def evaluate_cube_stats(cube, ecube, weightcube, surname, log,
         }
 
     # Continuum image via robust collapse over covered wavelengths
-    cube_masked = np.where(covered, cube, np.nan)
+    cube_masked = np.where(spax_sel, cube, np.nan)
     with warnings.catch_warnings():
         warnings.simplefilter('ignore', category=RuntimeWarning)
         continuum_img = np.nanmedian(cube_masked, axis=0)
 
     # Robust stats over initially selected spaxels
-    spax_idx = spax_sel & np.isfinite(continuum_img)
+    spax_idx = pix_sel & np.isfinite(continuum_img)
     cont_vals = continuum_img[spax_idx]
     if cont_vals.size == 0:
         log.warning('No finite continuum values among selected spaxels; skipping stats plot.')
