@@ -577,9 +577,8 @@ def evaluate_cube_stats(cube, ecube, weightcube, surname, log,
         cont_inliers = continuum_img[inliers]
         cont_inliers = cont_inliers[np.isfinite(cont_inliers)]
         if cont_inliers.size >= 10:
-            p005 = float(np.nanpercentile(cont_inliers, 2.5))
-            p995 = float(np.nanpercentile(cont_inliers, 97.5))
-            print(p005, p995)
+            p005 = float(np.nanpercentile(cont_inliers, 0.2))
+            p995 = float(np.nanpercentile(cont_inliers, 99.8))
             if (not np.isfinite(p005)) or (not np.isfinite(p995)) or (p005 == p995):
                 p005, p995 = float(np.nanmin(cont_inliers)), float(np.nanmax(cont_inliers))
         else:
@@ -587,8 +586,8 @@ def evaluate_cube_stats(cube, ecube, weightcube, surname, log,
             cont_all = continuum_img[spax_idx]
             cont_all = cont_all[np.isfinite(cont_all)]
             if cont_all.size >= 2:
-                p005 = float(np.nanpercentile(cont_all, 2.5))
-                p995 = float(np.nanpercentile(cont_all, 97.5))
+                p005 = float(np.nanpercentile(cont_all, 0.5))
+                p995 = float(np.nanpercentile(cont_all, 99.5))
             else:
                 # final fallback: global finite min/max
                 fin_all = continuum_img[np.isfinite(continuum_img)]
