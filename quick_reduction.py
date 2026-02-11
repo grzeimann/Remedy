@@ -24,7 +24,6 @@ import psutil
 
 
 from astrometry import Astrometry
-from astroquery.mast import Catalogs
 from astropy.coordinates import SkyCoord, match_coordinates_sky
 from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.convolution import interpolate_replace_nans, Gaussian1DKernel
@@ -53,7 +52,8 @@ from sklearn.decomposition import PCA
 from tables import open_file, IsDescription, Float32Col, StringCol, Int32Col
 from matplotlib.ticker import MultipleLocator
 from matplotlib.colors import ListedColormap
-
+import requests
+from astropy.io import ascii
 
 # Plot Style
 sns.set_context('notebook')
@@ -172,6 +172,47 @@ args = parser.parse_args(args=None)
 
 ###############################################################################
 # FUNCTIONS FOR THE MAIN BODY BELOW                                                       
+
+
+
+def ps1_cone_table(
+    ra, dec,
+    radius_deg=9.0/60.0,
+    table="stack",
+    release="dr2",
+    columns=None,
+    baseurl="https://catalogs.mast.stsci.edu/api/v0.1/panstarrs",
+    **kw,
+):
+    """
+    Cone search PS1 and return an astropy Table.
+    Uses CSV output (per STScI example) and is quite robust.
+    """
+    params = dict(ra=ra, dec=dec, radius=radius_deg, **kw)
+
+    if columns:
+        # PS1 API expects '[col1,col2,...]'
+        params["columns"] = "[" + ",".join(columns) + "]"
+
+    url = f"{baseurl}/{release}/{table}.csv"
+    r = requests.get(url, params=params)
+    r.raise_for_status()
+    text = r.text
+
+    # No results
+    if not text.strip():
+        return Table(names=columns or [])
+
+    tab = ascii.read(text)
+
+    # Optional: turn PS1 sentinel -999.0 into NaN for magnitudes
+    for col in tab.colnames:
+        if tab[col].dtype.kind in "fi":
+            mask = tab[col] <= -999.0
+            if np.any(mask):
+                tab[col][mask] = np.nan
+
+    return tab
 
 def splitall(path):
     ''' 
@@ -2641,23 +2682,23 @@ if op.exists(pname):
                          np.array(Pan['yApMag']))
 else:
     try:
-        Pan = Catalogs.query_region("%s %s" % (ra, dec), radius=9./60., 
-                                       catalog="Panstarrs", data_release="dr2",
-                                       table="stack")
-        raC, decC, gC, rC, iC, zC, yC = (np.array(Pan['raMean']), np.array(Pan['decMean']),
-                         np.array(Pan['gApMag']), np.array(Pan['rApMag']),
-                         np.array(Pan['iApMag']), np.array(Pan['zApMag']),
-                         np.array(Pan['yApMag'])) 
-        
+        cols = [
+            "objID", "raMean", "decMean",
+            "gApMag", "rApMag", "iApMag", "zApMag", "yApMag",
+        ]
+
+        Pan = ps1_cone_table(
+            ra=ra,
+            dec=dec,
+            radius_deg=9.0 / 60.0,
+            table="stack",
+            release="dr2",
+            columns=cols,
+        )
     except:
-        log.info('Panstarrs initial query failed, '
-                 'trying with small coord adjustment')
-        Pan = Catalogs.query_region("%s %s" % (ra, dec), radius=9./60., 
-                                       catalog="Panstarrs")
-        raC, decC, gC, rC, iC, zC, yC = (np.array(Pan['raMean']), np.array(Pan['decMean']),
-                         np.array(Pan['gMeanApMag']), np.array(Pan['rMeanApMag']),
-                         np.array(Pan['iMeanApMag']), np.array(Pan['zMeanApMag']),
-                         np.array(Pan['yMeanApMag']))
+        log.error('Pan-STARRS query failed for %0.5f %0.5f' % (ra, dec))
+        sys.exit(1)
+
     Pan.write(pname, format='ascii.fixed_width_two_line', overwrite=True)
 
 
