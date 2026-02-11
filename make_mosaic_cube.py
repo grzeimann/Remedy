@@ -68,6 +68,14 @@ parser.add_argument("-ps", "--pixel_scale",
                     help='''Pixel scale for output image in arcsec''',
                     default=1.0, type=float)
 
+parser.add_argument("--auto_error_rescale",
+                    help='''If set, scale the final error cube by the global MAD of (flux/error) to target N(0,1).''',
+                    action='store_true')
+
+parser.add_argument("--snr_mad_min_samples",
+                    help='''Minimum number of wavelength samples per spaxel to compute SNR-MAD; otherwise set NaN.''',
+                    default=100, type=int)
+
 
 
 def rebin(arr, new_shape):
@@ -470,7 +478,8 @@ def write_cube(path, data, header, N):
 
 
 def evaluate_cube_stats(cube, ecube, weightcube, surname, log,
-                        valid_frac_threshold=0.8, continuum_sigma=5.0, max_iter=2):
+                        valid_frac_threshold=0.8, continuum_sigma=5.0, max_iter=2,
+                        snr_mad_min_samples=100):
     """Evaluate S/N statistics and continuum-based clipping on the final cubes.
 
     This routine summarizes per-spaxel spectral behavior, selects spaxels with
@@ -600,6 +609,67 @@ def evaluate_cube_stats(cube, ecube, weightcube, surname, log,
     bi = biweight(snr)
     mad_s = mad_std(snr)
 
+    # Build and save a per-spaxel map of the robust scale of (flux - median)/error over wavelength
+    try:
+        nw, ny, nx = cube.shape
+        # indices of inlier spaxels
+        yy, xx = np.where(inliers)
+        snr_mad_map = np.full((ny, nx), np.nan, dtype=np.float32)
+        # process in blocks to limit memory
+        block = 2000
+        for i0 in range(0, yy.size, block):
+            i1 = min(i0 + block, yy.size)
+            by = yy[i0:i1]
+            bx = xx[i0:i1]
+            # extract slabs (nw, nb)
+            fblk = np.vstack([cube[:, y, x] for y, x in zip(by, bx)]).T  # shape (nw, nb)
+            eblk = np.vstack([ecube[:, y, x] for y, x in zip(by, bx)]).T
+            wblk = np.vstack([covered[:, y, x] for y, x in zip(by, bx)]).T
+            # continuum med per spaxel (nb,)
+            cmed = continuum_img[by, bx]
+            # residuals
+            with np.errstate(invalid='ignore', divide='ignore'):
+                rblk = (fblk - cmed[None, :]) / eblk
+            # mask invalid
+            mvalid = np.isfinite(rblk) & (eblk > 0) & wblk
+            rblk[~mvalid] = np.nan
+            # require min samples
+            cnt = np.sum(np.isfinite(rblk), axis=0)
+            # robust MAD: 1.4826 * median(|r - med(r)|)
+            med_r = np.nanmedian(rblk, axis=0)
+            mad = np.nanmedian(np.abs(rblk - med_r[None, :]), axis=0)
+            scale = 1.4826 * mad
+            # place into map where enough samples
+            ok = cnt >= int(snr_mad_min_samples)
+            snr_mad_map[by[ok], bx[ok]] = scale[ok].astype(np.float32)
+        # save FITS and PNG
+        try:
+            fits.PrimaryHDU(snr_mad_map.astype('float32')).writeto(op.basename(f'{surname}_snr_mad_map.fits'), overwrite=True)
+        except Exception as _e:  # noqa: F841
+            pass
+        try:
+            fig2, ax2 = plt.subplots(figsize=(6, 5))
+            im = ax2.imshow(snr_mad_map, origin='lower', cmap='viridis', vmin=np.nanpercentile(snr_mad_map, 5), vmax=np.nanpercentile(snr_mad_map, 95))
+            ax2.set_title('Per-spaxel MAD of (flux - median)/error')
+            plt.colorbar(im, ax=ax2, fraction=0.046, pad=0.04, label='MAD-based sigma')
+            fig2.tight_layout()
+            fig2.savefig(op.basename(f'{surname}_snr_mad_map.png'), dpi=150)
+            plt.close(fig2)
+            log.info('Saved SNR-MAD map to FITS and PNG')
+        except Exception as _e:  # noqa: F841
+            log.warning('Failed to save SNR-MAD map image')
+        # summarize
+        mvals = snr_mad_map[np.isfinite(snr_mad_map)]
+        mad_map_median = float(np.nanmedian(mvals)) if mvals.size else np.nan
+        mad_map_p16 = float(np.nanpercentile(mvals, 16)) if mvals.size else np.nan
+        mad_map_p84 = float(np.nanpercentile(mvals, 84)) if mvals.size else np.nan
+    except Exception as e:
+        log.warning(f'Failed to compute SNR-MAD map: {e}')
+        snr_mad_map = None
+        mad_map_median = np.nan
+        mad_map_p16 = np.nan
+        mad_map_p84 = np.nan
+
     # Histogram within [-6, 6]
     hmin, hmax = -6.0, 6.0
     clip_mask = (snr >= hmin) & (snr <= hmax) & np.isfinite(snr)
@@ -615,6 +685,9 @@ def evaluate_cube_stats(cube, ecube, weightcube, surname, log,
     x = 0.5 * (bins[:-1] + bins[1:])
     gauss = (1.0 / np.sqrt(2*np.pi)) * np.exp(-0.5 * x * x)
     ax.plot(x, gauss, 'k--', lw=1.5, label='N(0,1)')
+    if np.isfinite(mad_s) and mad_s > 0:
+        gauss_s = (1.0 / (np.sqrt(2*np.pi) * mad_s)) * np.exp(-0.5 * (x / mad_s)**2)
+        ax.plot(x, gauss_s, color='0.3', lw=1.2, ls=':', label=f'N(0,{mad_s:.2f})')
     ax.axvline(bi, color='tab:red', lw=1.5, label=f'Biweight={bi:.3f}')
     ax.set_xlabel('Flux / Error')
     ax.set_ylabel('Density (log scale)')
@@ -639,6 +712,9 @@ def evaluate_cube_stats(cube, ecube, weightcube, surname, log,
         'snr_count_inplot': int(snr_plot.size),
         'biweight_snr': float(bi) if np.isfinite(bi) else np.nan,
         'mad_snr': float(mad_s) if np.isfinite(mad_s) else np.nan,
+        'snr_mad_map_median': float(mad_map_median) if np.isfinite(mad_map_median) else np.nan,
+        'snr_mad_map_p16': float(mad_map_p16) if np.isfinite(mad_map_p16) else np.nan,
+        'snr_mad_map_p84': float(mad_map_p84) if np.isfinite(mad_map_p84) else np.nan,
     }
     for k, v in summary.items():
         log.info(f'CubeStat {k}: {v}')
@@ -685,10 +761,26 @@ def main():
                 args.log.warning(f"Loaded cubes have incompatible shapes: cube={cube.shape}, ecube={ecube.shape}, weight={weightcube.shape}; rebuilding cubes instead.")
             else:
                 try:
-                    evaluate_cube_stats(cube, ecube, weightcube, args.surname, args.log,
-                                        valid_frac_threshold=0.8, continuum_sigma=5.0, max_iter=2)
+                    summary = evaluate_cube_stats(cube, ecube, weightcube, args.surname, args.log,
+                                        valid_frac_threshold=0.8, continuum_sigma=5.0, max_iter=2,
+                                        snr_mad_min_samples=int(getattr(args, 'snr_mad_min_samples', 100)))
                 except Exception as e:
                     args.log.warning(f"Cube statistics evaluation failed on loaded cubes: {e}")
+                    summary = None
+                # Optional auto-rescale of error cube by global MAD of SNR
+                if getattr(args, 'auto_error_rescale', False) and summary is not None:
+                    mad_s = summary.get('mad_snr', np.nan)
+                    if np.isfinite(mad_s) and mad_s > 0:
+                        args.log.info(f"--auto_error_rescale: scaling existing error cube by factor {mad_s:.4f} to target N(0,1)")
+                        try:
+                            ecube *= float(mad_s)
+                            write_cube(op.basename(f'{args.surname}_errorcube.fits'), ecube, fits.getheader(cube_path), cube.shape[-1])
+                            # re-run stats after rescale (do not recurse to quick path)
+                            evaluate_cube_stats(cube, ecube, weightcube, args.surname, args.log,
+                                                valid_frac_threshold=0.8, continuum_sigma=5.0, max_iter=2,
+                                                snr_mad_min_samples=int(getattr(args, 'snr_mad_min_samples', 100)))
+                        except Exception as e:
+                            args.log.warning(f"Failed to rescale and rewrite existing error cube: {e}")
                 return
         except Exception as e:
             args.log.warning(f"Failed to load existing cubes due to: {e}; proceeding to (re)build cubes.")
@@ -717,10 +809,25 @@ def main():
 
     # Post-assembly cube statistics and SNR histogram
     try:
-        evaluate_cube_stats(cube, ecube, weightcube, args.surname, args.log,
-                            valid_frac_threshold=0.8, continuum_sigma=5.0, max_iter=2)
+        summary = evaluate_cube_stats(cube, ecube, weightcube, args.surname, args.log,
+                            valid_frac_threshold=0.8, continuum_sigma=5.0, max_iter=2,
+                            snr_mad_min_samples=int(getattr(args, 'snr_mad_min_samples', 100)))
     except Exception as e:
         args.log.warning(f'Cube statistics evaluation failed: {e}')
+        summary = None
+
+    # Optionally rescale error cube by global MAD of SNR and re-run stats
+    if getattr(args, 'auto_error_rescale', False) and summary is not None:
+        mad_s = summary.get('mad_snr', np.nan)
+        if np.isfinite(mad_s) and mad_s > 0:
+            args.log.info(f"--auto_error_rescale: scaling error cube by factor {mad_s:.4f} to target N(0,1)")
+            ecube *= float(mad_s)
+            try:
+                evaluate_cube_stats(cube, ecube, weightcube, args.surname, args.log,
+                                    valid_frac_threshold=0.8, continuum_sigma=5.0, max_iter=2,
+                                    snr_mad_min_samples=int(getattr(args, 'snr_mad_min_samples', 100)))
+            except Exception as e:
+                args.log.warning(f'Cube statistics evaluation failed after rescale: {e}')
 
     # Write outputs
     write_cube(op.basename(f'{args.surname}_cube.fits'), cube, header, N)
