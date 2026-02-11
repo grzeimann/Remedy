@@ -140,7 +140,9 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array, binsiz
             valid_e = np.isfinite(ye_sel) & (ye_sel > 0)
             if np.any(valid_e):
                 ivar_vals = np.zeros_like(ye_sel, dtype=float)
-                ivar_vals[valid_e] = 1.0 / (ye_sel[valid_e]**2) / (area**2)
+                # Propagate scaling: flux is divided by area, so variance scales by 1/area^2
+                # Therefore inverse-variance scales by area^2
+                ivar_vals[valid_e] = (area**2) / (ye_sel[valid_e]**2)
                 ivar_grid[yc[sel_idx], xc[sel_idx]] += ivar_vals
         valid_flux = np.isfinite(y[sel_idx])
         if np.any(valid_flux):
@@ -598,8 +600,8 @@ def evaluate_cube_stats(cube, ecube, weightcube, surname, log,
     bi = biweight(snr)
     mad_s = mad_std(snr)
 
-    # Histogram within [-10, 10]
-    hmin, hmax = -10.0, 10.0
+    # Histogram within [-6, 6]
+    hmin, hmax = -6.0, 6.0
     clip_mask = (snr >= hmin) & (snr <= hmax) & np.isfinite(snr)
     snr_plot = snr[clip_mask]
     if snr_plot.size < 10:
