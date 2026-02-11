@@ -596,7 +596,7 @@ def evaluate_cube_stats(cube, ecube, weightcube, surname, log,
                 else:
                     p005, p995 = 0.0, 1.0
         figc, axc = plt.subplots(figsize=(6, 5))
-        imc = axc.imshow(continuum_img, origin='lower', cmap='viridis', vmin=p005, vmax=p995)
+        imc = axc.imshow(continuum_img, origin='lower', cmap='coolwarm', vmin=p005, vmax=p995)
         axc.set_title('Continuum (nanmedian over covered wavelengths)')
         plt.colorbar(imc, ax=axc, fraction=0.046, pad=0.04, label='Flux (cube units)')
         figc.tight_layout()
