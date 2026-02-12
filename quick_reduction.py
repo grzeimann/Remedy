@@ -2695,6 +2695,10 @@ else:
             release="dr2",
             columns=cols,
         )
+        raC, decC, gC, rC, iC, zC, yC = (np.array(Pan['raMean']), np.array(Pan['decMean']),
+                                         np.array(Pan['gApMag']), np.array(Pan['rApMag']),
+                                         np.array(Pan['iApMag']), np.array(Pan['zApMag']),
+                                         np.array(Pan['yApMag']))
     except:
         log.error('Pan-STARRS query failed for %0.5f %0.5f' % (ra, dec))
         sys.exit(1)
