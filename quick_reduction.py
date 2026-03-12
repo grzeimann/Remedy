@@ -1100,6 +1100,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
     ft = np.zeros((N, 1032))
     s = np.zeros((N, 1032))
     ms = np.zeros((N, 1032))
+    ar = np.zeros((N, 1032))
     e = np.zeros((N, 1032))
     c1 = np.zeros((N, 1032))
     wa = np.zeros((N, 1032))
@@ -1119,6 +1120,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         readnoise = h5table[ind]['readnoise']
         masterflt = h5table[ind]['masterflt']
         mastertwi = h5table[ind]['mastertwi']
+        masterarc = h5table[ind]['masterarc']
 
         mastersci = h5table[ind]['mastersci']
         maskspec = h5table[ind]['maskspec']
@@ -1141,7 +1143,13 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         except:
             plaw = 0.
         masterflt[:] = masterflt - plaw
-        
+        masterarc[:] = masterarc - masterbias
+        try:
+            plaw = get_powerlaw(masterarc, trace)
+        except:
+            plaw = 0.
+        masterarc[:] = masterarc - plaw
+        masterarc = clean_data(masterarc, pixelmask)
         mastertwi[:] = mastertwi - masterbias
         try:
             plaw = get_powerlaw(mastertwi, trace)
@@ -1149,6 +1157,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             plaw = 0.
         mastertwi[:] = mastertwi - plaw
         mastertwi = clean_data(mastertwi, pixelmask)
+
         mastersci[:] = mastersci - masterdark - masterbias
         try:
             plaw2 = get_powerlaw(mastersci, trace)
@@ -1177,14 +1186,14 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             sciimage[:] = sciimage - sci_plaw
             flt = get_spectra(masterflt, trace) / dw
             twi = get_spectra(mastertwi, trace) / dw
-
+            arc = get_spectra(masterarc, trace) / dw
             spec = get_spectra(sciimage, trace) / dw
             espec = get_spectra_error(scierror, trace) / dw
             chi21 = get_spectra_chi2(masterflt, sciimage, scierror, trace)
             mask1 = spec * 0. # get_spectra(pixelmask, trace)
             mspec = get_spectra(mastersci, trace) / dw
             #mask1 = mask1 + maskspec
-            for arr in [spec, espec, flt, twi, mspec]:
+            for arr in [spec, espec, flt, twi, mspec, arc]:
                 arr[mask1>0.] = np.nan
             if j==0:
                 #intpm, shifts = measure_fiber_profile(masterflt, twi, 
@@ -1216,6 +1225,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
             ft[cnt:cnt+112, :] = flt
             s[cnt:cnt+112, :] = spec
             ms[cnt:cnt+112, :] = mspec
+            ar[cnt:cnt+112, :] = arc
             e[cnt:cnt+112, :] = espec
             c1[cnt:cnt+112, :] = chi21
             wa[cnt:cnt+112, :] = wave
@@ -1228,7 +1238,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
     _i = np.vstack(_i)
     tableh5.flush()
     tableh5 = None
-    return p, ft, s, e, wa, filenames, scitarfile, _i, c1, intm, ExP, ms, t
+    return p, ft, s, e, wa, filenames, scitarfile, _i, c1, intm, ExP, ms, t, ar
 
 
 def make_cube(xloc, yloc, data, error, Dx, Dy, scale, ran,
@@ -2255,105 +2265,114 @@ if op.exists(name):
     log.info('%s removed before writing new one' % name)
 h5spec = open_file(name, mode="w", title="%s Spectra" % name[:-3])
 
+class Raw(IsDescription):
+    spectrum = Float32Col((1032,))  # float  (single-precision)
+    error = Float32Col((1032,))  # float  (single-precision)
+    mscispectrum = Float32Col((1032,))  # float  (single-precision)
+    fltspectrum = Float32Col((1032,))  # float  (single-precision)
+    twispectrum = Float32Col((1032,))
+    arcspectrum = Float32Col((1032,))
+    wave = Float32Col((1032,))
+
 class Fibers(IsDescription):
-     spectrum  = Float32Col((1036,))    # float  (single-precision)
-     error  = Float32Col((1036,))    # float  (single-precision)
-     fiber_to_fiber  = Float32Col((1036,))    # float  (single-precision)
-     residual = Float32Col((1032,))
-     skyspectrum = Float32Col((1036,))
+    spectrum  = Float32Col((1036,))    # float  (single-precision)
+    error  = Float32Col((1036,))    # float  (single-precision)
+    fiber_to_fiber  = Float32Col((1036,))    # float  (single-precision)
+    residual = Float32Col((1032,))
+    skyspectrum = Float32Col((1036,))
      
      #fiber_to_fiber_adj  = Float32Col((1036,))    # float  (single-precision)     
 
 class Cals(IsDescription):
-     trace  = Float32Col((1032,))    # float  (single-precision)
-     wavelength  = Float32Col((1032,))    # float  (single-precision)
-     observed  = Float32Col((1036,))
-     observed_error = Float32Col((1036,))
-     plawspec = Float32Col((1036,))
-     mdarkspec = Float32Col((1036,))
+    trace  = Float32Col((1032,))    # float  (single-precision)
+    wavelength  = Float32Col((1032,))    # float  (single-precision)
+    observed  = Float32Col((1036,))
+    observed_error = Float32Col((1036,))
+    plawspec = Float32Col((1036,))
+    mdarkspec = Float32Col((1036,))
      
 class Images(IsDescription):
-     zipcode  = StringCol(21)
-     #mastersci  = Float32Col((1032,1032))    # float  (single-precision)
-     #image  = Float32Col((1032,1032))    # float  (single-precision)
+    zipcode  = StringCol(21)
+    #mastersci  = Float32Col((1032,1032))    # float  (single-precision)
+    #image  = Float32Col((1032,1032))    # float  (single-precision)
 
 class Info(IsDescription):
-     ra  = Float32Col()    # float  (single-precision)
-     dec  = Float32Col()    # float  (single-precision)
-     ifux  = Float32Col()    # float  (single-precision)
-     ifuy  = Float32Col()    # float  (single-precision)
-     specid  = Int32Col()    # float  (single-precision)
-     ifuslot  = Int32Col()    # float  (single-precision)
-     ifuid  = Int32Col()   # float  (single-precision)
-     amp  = StringCol(2)
-     exp = Int32Col()
+    ra  = Float32Col()    # float  (single-precision)
+    dec  = Float32Col()    # float  (single-precision)
+    ifux  = Float32Col()    # float  (single-precision)
+    ifuy  = Float32Col()    # float  (single-precision)
+    specid  = Int32Col()    # float  (single-precision)
+    ifuslot  = Int32Col()    # float  (single-precision)
+    ifuid  = Int32Col()   # float  (single-precision)
+    amp  = StringCol(2)
+    exp = Int32Col()
 
 class Survey(IsDescription):
-     ra  = Float32Col()    # float  (single-precision)
-     dec  = Float32Col()    # float  (single-precision)
-     pa  = Float32Col()    # float  (single-precision)
-     rot  = Float32Col()    # float  (single-precision)
-     millum  = Float32Col()    # float  (single-precision)
-     throughput  = Float32Col()    # float  (single-precision)
-     fwhm  = Float32Col()   # float  (single-precision)
-     fwhmv  = Float32Col()   # float  (single-precision)
-     name  = StringCol(25)
-     exp = Int32Col()
-     offset  = Float32Col()    # float  (single-precision)
-     nstarsastrom = Int32Col()
-     nstarsphotom = Int32Col()
-     raoffset = Float32Col()
-     decoffset = Float32Col()
-     rastd = Float32Col()
-     decstd = Float32Col()
-     exptime = Float32Col()
+    ra  = Float32Col()    # float  (single-precision)
+    dec  = Float32Col()    # float  (single-precision)
+    pa  = Float32Col()    # float  (single-precision)
+    rot  = Float32Col()    # float  (single-precision)
+    millum  = Float32Col()    # float  (single-precision)
+    throughput  = Float32Col()    # float  (single-precision)
+    fwhm  = Float32Col()   # float  (single-precision)
+    fwhmv  = Float32Col()   # float  (single-precision)
+    name  = StringCol(25)
+    exp = Int32Col()
+    offset  = Float32Col()    # float  (single-precision)
+    nstarsastrom = Int32Col()
+    nstarsphotom = Int32Col()
+    raoffset = Float32Col()
+    decoffset = Float32Col()
+    rastd = Float32Col()
+    decstd = Float32Col()
+    exptime = Float32Col()
      
 class Detections(IsDescription):
-     ra  = Float32Col()    # float  (single-precision)
-     dec  = Float32Col()    # float  (single-precision)
-     ifux  = Float32Col()    # float  (single-precision)
-     ifuy  = Float32Col()    # float  (single-precision)
-     fx  = Float32Col()    # float  (single-precision)
-     fy  = Float32Col()    # float  (single-precision)
-     specid  = Int32Col()    # float  (single-precision)
-     ifuslot  = Int32Col()    # float  (single-precision)
-     ifuid  = Int32Col()   # float  (single-precision)
-     wave  = Float32Col()    # float  (single-precision)
-     flux  = Float32Col()    # float  (single-precision)
-     sn  = Float32Col()    # float  (single-precision)
-     chi2  = Float32Col()    # float  (single-precision)
-     fwhm  = Float32Col()    # float  (single-precision)
-     spectrum  = Float32Col((1036,))    # float  (single-precision)
-     error  = Float32Col((1036,))     # float  (single-precision)
-     model  = Float32Col((1036,))     # float  (single-precision)
+    ra  = Float32Col()    # float  (single-precision)
+    dec  = Float32Col()    # float  (single-precision)
+    ifux  = Float32Col()    # float  (single-precision)
+    ifuy  = Float32Col()    # float  (single-precision)
+    fx  = Float32Col()    # float  (single-precision)
+    fy  = Float32Col()    # float  (single-precision)
+    specid  = Int32Col()    # float  (single-precision)
+    ifuslot  = Int32Col()    # float  (single-precision)
+    ifuid  = Int32Col()   # float  (single-precision)
+    wave  = Float32Col()    # float  (single-precision)
+    flux  = Float32Col()    # float  (single-precision)
+    sn  = Float32Col()    # float  (single-precision)
+    chi2  = Float32Col()    # float  (single-precision)
+    fwhm  = Float32Col()    # float  (single-precision)
+    spectrum  = Float32Col((1036,))    # float  (single-precision)
+    error  = Float32Col((1036,))     # float  (single-precision)
+    model  = Float32Col((1036,))     # float  (single-precision)
 
 class CatSpectra(IsDescription):
-     ra  = Float32Col()    # float  (single-precision)
-     dec  = Float32Col()    # float  (single-precision)
-     spectrum  = Float32Col((1036,))    # float  (single-precision)
-     error  = Float32Col((1036,))    # float  (single-precision)
-     weight  = Float32Col((1036,))    # float  (single-precision)
-     gmag  = Float32Col()    # float  (single-precision)
-     rmag  = Float32Col()    # float  (single-precision)
-     imag  = Float32Col()    # float  (single-precision)
-     zmag  = Float32Col()    # float  (single-precision)
-     ymag  = Float32Col()    # float  (single-precision)
+    ra  = Float32Col()    # float  (single-precision)
+    dec  = Float32Col()    # float  (single-precision)
+    spectrum  = Float32Col((1036,))    # float  (single-precision)
+    error  = Float32Col((1036,))    # float  (single-precision)
+    weight  = Float32Col((1036,))    # float  (single-precision)
+    gmag  = Float32Col()    # float  (single-precision)
+    rmag  = Float32Col()    # float  (single-precision)
+    imag  = Float32Col()    # float  (single-precision)
+    zmag  = Float32Col()    # float  (single-precision)
+    ymag  = Float32Col()    # float  (single-precision)
 
 class MatSpectra(IsDescription):
-     ra  = Float32Col()    # float  (single-precision)
-     dec  = Float32Col()    # float  (single-precision)
-     fx  = Float32Col()    # float  (single-precision)
-     fy  = Float32Col()    # float  (single-precision)
-     catfx  = Float32Col()    # float  (single-precision)
-     catfy  = Float32Col()    # float  (single-precision)
-     gmag  = Float32Col()    # float  (single-precision)
-     syngmag  = Float32Col()    # float  (single-precision)
-     spectrum  = Float32Col((1036,))    # float  (single-precision)
-     error  = Float32Col((1036,))    # float  (single-precision)
-     weight  = Float32Col((1036,))    # float  (single-precision)
-     image = Float32Col((11, 21, 21))
-     xgrid = Float32Col((21, 21))
-     ygrid = Float32Col((21, 21))
+    ra  = Float32Col()    # float  (single-precision)
+    dec  = Float32Col()    # float  (single-precision)
+    fx  = Float32Col()    # float  (single-precision)
+    fy  = Float32Col()    # float  (single-precision)
+    catfx  = Float32Col()    # float  (single-precision)
+    catfy  = Float32Col()    # float  (single-precision)
+    gmag  = Float32Col()    # float  (single-precision)
+    syngmag  = Float32Col()    # float  (single-precision)
+    spectrum  = Float32Col((1036,))    # float  (single-precision)
+    error  = Float32Col((1036,))    # float  (single-precision)
+    weight  = Float32Col((1036,))    # float  (single-precision)
+    image = Float32Col((11, 21, 21))
+    xgrid = Float32Col((21, 21))
+    ygrid = Float32Col((21, 21))
 
 # =============================================================================
 # Get directory name for path building
@@ -2423,7 +2442,7 @@ allifus = ifuslots[ziploop[::4]]
 tableh5 = h5spec.create_table(h5spec.root, 'Images', Images, 
                             "Image Information")
 (pos, fltspectra, scispectra, errspectra, wave_all, 
- fns, tfile, _I, C1, intm, ExP, mscispectra, twispectra) = reduce_ifuslot(ziploop, h5table,
+ fns, tfile, _I, C1, intm, ExP, mscispectra, twispectra, arcspectra) = reduce_ifuslot(ziploop, h5table,
                                                               tableh5)
 
 for i in np.arange(len(allifus)):
@@ -2453,8 +2472,7 @@ log.info('Number of exposures: %i' % nexp)
 log.info('Getting Fiber to Fiber')
 ftf, res = get_fiber_to_fiber(fltspectra, mscispectra, wave_all, twispectra)
 
-del twispectra, mscispectra, fltspectra
-gc.collect()
+
 process = psutil.Process(os.getpid())
 log.info('Memory Used: %0.2f GB' % (process.memory_info()[0] / 1e9))
 
@@ -2469,8 +2487,37 @@ mask[:, 1:] += mask[:, :-1]
 if not args.no_masking:
     scispectra[mask] = np.nan
     errspectra[mask] = np.nan
+    fltspectra[mask] = np.nan
+    mscispectra[mask] = np.nan
+    twispectra[mask] = np.nan
+    arcspectra[mask] = np.nan
+
 scispectra = safe_division(scispectra, ftf)
 errspectra = safe_division(errspectra, ftf)
+fltspectra = safe_division(fltspectra, ftf)
+mscispectra = safe_division(mscispectra, ftf)
+twispectra = safe_division(twispectra, ftf)
+arcspectra = safe_division(arcspectra, ftf)
+
+table = h5spec.create_table(h5spec.root, 'Raw', Raw,
+                            "Raw Fiber Spectra")
+specrow = table.row
+for i in np.arange(len(scispectra)):
+    specrow['spectrum'] = scispectra[i]
+    specrow['error'] = errspectra[i]
+    specrow['fltspectrum'] = fltspectra[i]
+    specrow['mscispectrum'] = mscispectra[i]
+    specrow['twispectrum'] = twispectra[i]
+    specrow['arcspectrum'] = arcspectra[i]
+    specrow['wave'] = wave_all[i]
+    specrow.append()
+table.flush()
+
+del twispectra, mscispectra, fltspectra
+gc.collect()
+
+log.info('Finished writing Fibers')
+
 scirect = np.zeros((scispectra.shape[0], len(def_wave)))
 ftfrect = np.zeros((scispectra.shape[0], len(def_wave)))
 
