@@ -54,7 +54,7 @@ from matplotlib.ticker import MultipleLocator
 from matplotlib.colors import ListedColormap
 import requests
 from astropy.io import ascii
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
 # Plot Style
 sns.set_context('notebook')
@@ -3032,8 +3032,10 @@ E.data = scispectra
 E.error = errspectra
 E.mask = np.isfinite(scispectra)
 E.ifuslot_i = ifuslot_i
-spec_list = []
-for i in np.arange(len(E.coords)):
+# Parallelizable extraction over E.coords
+spec_list = [None] * len(E.coords)
+
+def _worker_spec(i):
     specinfo = E.get_spectrum_by_coord_index(i)
     gmask = np.isfinite(specinfo[0]) * (specinfo[2] > (0.7*np.nanmedian(specinfo[2])))
     nu = 2.99792e18 / def_wave
@@ -3041,24 +3043,60 @@ for i in np.arange(len(E.coords)):
     dnu = np.hstack([dnu[0], dnu])
     if gmask.sum() > 50.:
         gmag = np.dot((nu/dnu*specinfo[0])[gmask], filtg[gmask]) / np.sum((nu/dnu*filtg)[gmask])
-        GMag[i, 1] = -2.5 * np.log10(gmag) + 23.9
+        gcalc = -2.5 * np.log10(gmag) + 23.9
     else:
-        GMag[i, 1] = np.nan
-    
-    spec_list.append([mRA[i], mDec[i], FX[i], FY[i], pFX[i], pFY[i], GMag[i, 0],
-                      GMag[i, 1]] + list(specinfo))
+        gcalc = np.nan
+    entry = [mRA[i], mDec[i], FX[i], FY[i], pFX[i], pFY[i], GMag[i, 0], gcalc] + list(specinfo)
+    return i, gcalc, entry
+
+if getattr(args, 'nproc', 1) and args.nproc > 1:
+    with ThreadPoolExecutor(max_workers=int(args.nproc)) as ex:
+        futures = [ex.submit(_worker_spec, int(i)) for i in np.arange(len(E.coords))]
+        for fut in futures:
+            i, gcalc, entry = fut.result()
+            GMag[i, 1] = gcalc
+            spec_list[i] = entry
+else:
+    for i in np.arange(len(E.coords)):
+        i, gcalc, entry = _worker_spec(int(i))
+        GMag[i, 1] = gcalc
+        spec_list[i] = entry
+
+# Ensure deterministic ordering
+spec_list = [spec_list[i] for i in np.arange(len(E.coords))]
 
 E.coords = SkyCoord(R*units.deg, D*units.deg, frame='fk5')
 allspec_list = []
 log.info('Extracting %i Pan-STARRS Sources' % len(R))
-for i in np.arange(len(E.coords)):
+
+# Parallelizable extraction over E.coords for Pan-STARRS catalog
+
+def _worker_all(i):
     specinfo = E.get_spectrum_by_coord_index(i)
     if len(specinfo[0]) == 0:
-        continue
-    gmask = np.isfinite(specinfo[0]) * (specinfo[2] > (0.1)) 
+        return i, None
+    gmask = np.isfinite(specinfo[0]) * (specinfo[2] > (0.1))
     if gmask.sum() > 50.:
-        allspec_list.append([R[i], D[i], GMM[0, i], GMM[1, i], GMM[2, i],
-                             GMM[3, i], GMM[4, i]] + list(specinfo))
+        entry = [R[i], D[i], GMM[0, i], GMM[1, i], GMM[2, i],
+                 GMM[3, i], GMM[4, i]] + list(specinfo)
+        return i, entry
+    else:
+        return i, None
+
+if getattr(args, 'nproc', 1) and args.nproc > 1:
+    with ThreadPoolExecutor(max_workers=int(args.nproc)) as ex:
+        futures = [ex.submit(_worker_all, int(i)) for i in np.arange(len(E.coords))]
+        temp = [None] * len(E.coords)
+        for fut in futures:
+            i, entry = fut.result()
+            temp[i] = entry
+    allspec_list = [e for e in temp if e is not None]
+else:
+    temp = [None] * len(E.coords)
+    for i in np.arange(len(E.coords)):
+        i, entry = _worker_all(int(i))
+        temp[i] = entry
+    allspec_list = [e for e in temp if e is not None]
 X, Y, Z = [np.zeros((len(spec_list), 11)) for k in np.arange(3)]
 nwave = np.array([np.mean(xi) for xi in np.array_split(def_wave, 11)])
 seeing_array = np.linspace(np.median(gseeing)-0.8, np.median(gseeing)+0.8, 161)
