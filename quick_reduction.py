@@ -1120,7 +1120,7 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
         readnoise = h5table[ind]['readnoise']
         masterflt = h5table[ind]['masterflt']
         mastertwi = h5table[ind]['mastertwi']
-        masterarc = h5table[ind]['masterarc']
+        masterarc = h5table[ind]['mastercmp']
 
         mastersci = h5table[ind]['mastersci']
         maskspec = h5table[ind]['maskspec']
