@@ -54,6 +54,7 @@ from matplotlib.ticker import MultipleLocator
 from matplotlib.colors import ListedColormap
 import requests
 from astropy.io import ascii
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # Plot Style
 sns.set_context('notebook')
@@ -165,6 +166,9 @@ parser.add_argument("-ss", "--source_seeing",
                     help='''seeing conditions manually entered''',
                     type=float, default=1.5)
 
+parser.add_argument("--nproc",
+                    help='''Number of parallel workers for IFU slot reduction (1 = sequential)''',
+                    type=int, default=1)
 
 
 args = parser.parse_args(args=None)
@@ -1058,6 +1062,142 @@ def get_sci_twi_files(kind='twi'):
             twinames = sorted(tf.getnames())
     return scinames, twinames, scitarfile, twitarfile
 
+def _reduce_ifu_worker(ind):
+    # Worker function to process a single IFU index. Reopens HDF5 in the process.
+    # Returns a dict with concatenated arrays for this IFU across its exposures,
+    # plus metadata strings.
+    scinames, twinames, scitarfile, twitarfile = get_sci_twi_files()
+    h5f = open_file(args.hdf5file, mode='r')
+    h5tab = h5f.root.Cals
+    ifuslot = '%03d' % h5tab[ind]['ifuslot']
+    ifuid = h5tab[ind]['ifuid'].decode("utf-8")
+    specid = h5tab[ind]['specid'].decode("utf-8")
+    amp = h5tab[ind]['amp'].decode("utf-8")
+    amppos = h5tab[ind]['ifupos']
+    wave = h5tab[ind]['wavelength']
+    dw = np.diff(wave, axis=1)
+    dw = np.hstack([dw[:, 0:1], dw])
+    trace = h5tab[ind]['trace']
+    if np.min(trace) < 0.:
+        trace = 0. * trace
+    readnoise = h5tab[ind]['readnoise']
+    masterflt = h5tab[ind]['masterflt']
+    mastertwi = h5tab[ind]['mastertwi']
+    masterarc = h5tab[ind]['mastercmp']
+    mastersci = h5tab[ind]['mastersci']
+    maskspec = h5tab[ind]['maskspec']
+    masterbias = h5tab[ind]['masterbias']
+    try:
+        masterdark = h5tab[ind]['masterdark']
+        pixelmask = h5tab[ind]['pixelmask'] * 1.
+        pixelmask = pixelmask + get_pixelmask_camera(specid, amp)
+    except Exception:
+        masterdark = np.zeros((1032, 1032))
+        pixelmask = np.zeros((1032, 1032), dtype=int)
+    # Prepare masters
+    masterdark[:] = masterdark - masterbias
+    masterflt[:] = masterflt - masterbias
+    masterflt = clean_data(masterflt, pixelmask)
+    try:
+        plaw = get_powerlaw(masterflt, trace)
+    except Exception:
+        plaw = 0.
+    masterflt[:] = masterflt - plaw
+    masterarc[:] = masterarc - masterbias
+    try:
+        plaw = get_powerlaw(masterarc, trace)
+    except Exception:
+        plaw = 0.
+    masterarc[:] = masterarc - plaw
+    masterarc = clean_data(masterarc, pixelmask)
+    mastertwi[:] = mastertwi - masterbias
+    try:
+        plaw = get_powerlaw(mastertwi, trace)
+    except Exception:
+        plaw = 0.
+    mastertwi[:] = mastertwi - plaw
+    mastertwi = clean_data(mastertwi, pixelmask)
+    mastersci[:] = mastersci - masterdark - masterbias
+    try:
+        plaw2 = get_powerlaw(mastersci, trace)
+    except Exception:
+        plaw2 = 0.
+    mastersci[:] = mastersci - plaw2
+    # Find our exposures
+    fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, args.nametype)
+    filenames = fnmatch.filter(scinames, fnames_glob)
+    nexposures = len(filenames)
+    # Accumulators
+    P = []
+    FT = []
+    S = []
+    MS = []
+    AR = []
+    E = []
+    C1 = []
+    WA = []
+    TWI = []
+    EXPT = []
+    ids_blocks = []
+    intm_list = []
+    for j, fn in enumerate(filenames):
+        sciimage, scierror, header = base_reduction(fn, tfile=scitarfile,
+                                            rdnoise=readnoise, get_header=True)
+        sciimage = clean_data(sciimage, pixelmask)
+        scierror = clean_data(scierror, pixelmask)
+        facexp = header.get('EXPTIME', 360.0) / 360.
+        if facexp < 0.:
+            facexp = 1.
+        sciimage[:] = sciimage - masterdark*facexp - masterbias
+        try:
+            sci_plaw = get_powerlaw(sciimage, trace)
+        except Exception:
+            sci_plaw = 0.
+        sciimage[:] = sciimage - sci_plaw
+        flt = get_spectra(masterflt, trace) / dw
+        twi = get_spectra(mastertwi, trace) / dw
+        arc = get_spectra(masterarc, trace) / dw
+        spec = get_spectra(sciimage, trace) / dw
+        espec = get_spectra_error(scierror, trace) / dw
+        chi21 = get_spectra_chi2(masterflt, sciimage, scierror, trace)
+        mask1 = spec * 0.
+        mspec = get_spectra(mastersci, trace) / dw
+        for arr in [spec, espec, flt, twi, mspec, arc]:
+            arr[mask1>0.] = np.nan
+        if nexposures == 3:
+            pos = amppos + dither_pattern[j]
+        else:
+            pos = amppos * 1.
+        Nf = flt.shape[0]
+        _I = np.char.array(['%s_%s_%s_%s' % (specid, ifuslot, ifuid, amp)] * Nf)
+        _V = '%s_%s_%s_%s_exp%02d' % (specid, ifuslot, ifuid, amp, j+1)
+        # append blocks
+        EXPT.append(np.array([header.get('EXPTIME', 360.0)]*112))
+        P.append(pos)
+        FT.append(flt)
+        S.append(spec)
+        MS.append(mspec)
+        AR.append(arc)
+        E.append(espec)
+        C1.append(chi21)
+        WA.append(wave)
+        TWI.append(twi)
+        ids_blocks.append(_I)
+        intm_list.append([None, 0.0, _V])
+    # Concatenate
+    if len(P) == 0:
+        result = dict(p=None)
+    else:
+        result = dict(
+            p=np.vstack(P), ft=np.vstack(FT), s=np.vstack(S), e=np.vstack(E),
+            wa=np.vstack(WA), c1=np.vstack(C1), ExP=np.hstack(EXPT),
+            ms=np.vstack(MS), t=np.vstack(TWI) if len(TWI) else np.zeros_like(np.vstack(MS)),
+            ar=np.vstack(AR), ids=ids_blocks, intm=intm_list,
+            filenames=filenames, scitarfile=scitarfile
+        )
+    h5f.close()
+    return result
+
 def reduce_ifuslot(ifuloop, h5table, tableh5):
     '''
     Parameters
@@ -1080,6 +1220,50 @@ def reduce_ifuslot(ifuloop, h5table, tableh5):
     scitarfile : str or None
         name of the tar file for the science frames if there is one
     '''
+    # Parallel branch: map per-IFU work to processes, then concatenate and write HDF5 only in main proc
+    if getattr(args, 'nproc', 1) and args.nproc > 1:
+        futures = []
+        with ProcessPoolExecutor(max_workers=int(args.nproc)) as ex:
+            for ind in ifuloop:
+                futures.append(ex.submit(_reduce_ifu_worker, int(ind)))
+            results = [f.result() for f in futures]
+        # Filter out empty
+        results = [r for r in results if (r is not None and r.get('p') is not None)]
+        if len(results) == 0:
+            tableh5.flush()
+            tableh5 = None
+            return (np.zeros((0,2)),) + tuple(np.zeros((0,1032)) for _ in range(3)) + \
+                   (np.zeros((0,1032)), [], None, np.zeros((0,)), np.zeros((0,1032)), [], [], [], [])
+        # Concatenate in submission order
+        p = np.vstack([r['p'] for r in results])
+        ft = np.vstack([r['ft'] for r in results])
+        s = np.vstack([r['s'] for r in results])
+        e = np.vstack([r['e'] for r in results])
+        wa = np.vstack([r['wa'] for r in results])
+        c1 = np.vstack([r['c1'] for r in results])
+        ExP = np.hstack([r['ExP'] for r in results])
+        ms = np.vstack([r['ms'] for r in results])
+        t = np.vstack([r['t'] for r in results])
+        ar = np.vstack([r['ar'] for r in results])
+        # Flatten ids and intm in order
+        ids_list = []
+        intm = []
+        for r in results:
+            ids_list.extend(r['ids'])
+            intm.extend(r['intm'])
+        _i = np.vstack(ids_list)
+        # Write Images rows in main process
+        specrow = tableh5.row
+        for item in intm:
+            specrow['zipcode'] = item[2]
+            specrow.append()
+        tableh5.flush()
+        tableh5 = None
+        # filenames and scitarfile from first non-empty
+        fns = results[0]['filenames']
+        scitarfile = results[0]['scitarfile']
+        return p, ft, s, e, wa, fns, scitarfile, _i, c1, intm, ExP, ms, t, ar
+
     _i, intm = ([], [])
     
     
