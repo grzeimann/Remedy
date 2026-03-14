@@ -1109,14 +1109,12 @@ def _reduce_ifu_worker(ind):
     except Exception:
         plaw = 0.
     masterarc[:] = masterarc - plaw
-    masterarc = clean_data(masterarc, pixelmask)
     mastertwi[:] = mastertwi - masterbias
     try:
         plaw = get_powerlaw(mastertwi, trace)
     except Exception:
         plaw = 0.
     mastertwi[:] = mastertwi - plaw
-    mastertwi = clean_data(mastertwi, pixelmask)
     mastersci[:] = mastersci - masterdark - masterbias
     try:
         plaw2 = get_powerlaw(mastersci, trace)
@@ -2671,10 +2669,6 @@ mask[:, 1:] += mask[:, :-1]
 if not args.no_masking:
     scispectra[mask] = np.nan
     errspectra[mask] = np.nan
-    fltspectra[mask] = np.nan
-    mscispectra[mask] = np.nan
-    twispectra[mask] = np.nan
-    arcspectra[mask] = np.nan
 
 scispectra = safe_division(scispectra, ftf)
 errspectra = safe_division(errspectra, ftf)
