@@ -98,8 +98,8 @@ def base_reduction(filename, tinfo, get_header=False):
     
     # Overscan subtraction
     overscan_length = int(32 * (image.shape[1] / 1064))
-    O = biweight(image[:, -(overscan_length-2):])
-    image[:] = image - O
+    O = biweight(image[:, -(overscan_length-2):], axis=1)
+    image[:] = image - O[:, np.newaxis]
     
     # Trim image
     image = image[:, :-overscan_length]
