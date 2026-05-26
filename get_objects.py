@@ -37,7 +37,7 @@ if 'gc' in inst:
 elif 'hpf' in inst:
     print('TARFILE: EXP TARGET QPROG SCI-OBJ CAL-OBJ SKY-OBJ')
 else:
-    print('TARFILE: EXP TARGET QPROG EXPTIME REXPTIME QRA QDEC DATE')
+    print('TARFILE: EXP TARGET QPROG EXPTIME REXPTIME DARKTIME QRA QDEC DATE')
 for tarfolder in tarfolders:
     T = tarfile.open(tarfolder, 'r')
     flag = True
@@ -93,6 +93,10 @@ for tarfolder in tarfolders:
                 except:
                     rexptime = 0.0
                 try:
+                    dexptime = b[0].header['DARKTIME']
+                except:
+                    dexptime = 0.0
+                try:
                     prog = b[0].header['QPROG']
                 except:
                     prog = 'None'
@@ -106,7 +110,7 @@ for tarfolder in tarfolders:
                 except:
                     ra = '00:00:00'
                     dec = '+00:00:00'
-                print('%s: %s  %s  %s %0.1f %0.1f %s %s %s' % (tarfolder, name[-8:-5],
-                                                Target, prog, exptime, rexptime, ra, dec, dt))
+                print('%s: %s  %s  %s %0.1f %0.1f %0.1f %s %s %s' % (tarfolder, name[-8:-5],
+                                                Target, prog, exptime, rexptime, dexptime, ra, dec, dt))
                 flag = False
     T.close()
