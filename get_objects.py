@@ -29,6 +29,15 @@ if inst == 'gc2':
 if (inst == 'lrs2') or (inst == 'virus'):
     tarfolders = sorted(glob.glob(op.join(rootdir, date, inst,
                                           '%s0000*.tar' % inst)))
+# Print column header once at the top of the list
+if 'gc' in inst:
+    # GC case prints two different line formats below (GC telemetry and general info), so show both headers
+    print('GC TELEMETRY -> TARFILE: EXP TARGET GUIDLOOP PUPILLUM TRANSPAR IQ')
+    print('GENERAL INFO -> TARFILE: EXP TARGET QPROG EXPTIME REXPTIME QRA QDEC DATE')
+elif 'hpf' in inst:
+    print('TARFILE: EXP TARGET QPROG SCI-OBJ CAL-OBJ SKY-OBJ')
+else:
+    print('TARFILE: EXP TARGET QPROG EXPTIME REXPTIME QRA QDEC DATE')
 for tarfolder in tarfolders:
     T = tarfile.open(tarfolder, 'r')
     flag = True
@@ -80,6 +89,10 @@ for tarfolder in tarfolders:
                 except:
                     exptime = 0.0
                 try:
+                    rexptime = b[0].header['REXPTIME']
+                except:
+                    rexptime = 0.0
+                try:
                     prog = b[0].header['QPROG']
                 except:
                     prog = 'None'
@@ -93,7 +106,7 @@ for tarfolder in tarfolders:
                 except:
                     ra = '00:00:00'
                     dec = '+00:00:00'
-                print('%s: %s  %s  %s %0.1f %s %s %s' % (tarfolder, name[-8:-5], 
-                                                Target, prog, exptime, ra, dec, dt))
+                print('%s: %s  %s  %s %0.1f %0.1f %s %s %s' % (tarfolder, name[-8:-5],
+                                                Target, prog, exptime, rexptime, ra, dec, dt))
                 flag = False
     T.close()
