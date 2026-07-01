@@ -28,6 +28,7 @@ from fiber_utils import measure_contrast, get_bigW, get_bigF
 from input_utils import setup_parser, set_daterange, setup_logging
 from math_utils import biweight
 from scipy.interpolate import interp1d
+from qa_utils import summarize_amp_metrics, plot_ref_profile_quarters, save_amp_qa_page
 
 
 warnings.filterwarnings("ignore")
@@ -375,6 +376,12 @@ parser.add_argument("-dd", "--dark_days", help='''Extra days +/- for darks''',
 parser.add_argument("-i", "--ifuslot",  help='''IFUSLOT''', type=str,
                     default='047')
 
+# QA options
+parser.add_argument("--make-qa", action='store_true', default=False,
+                    help='Generate per-amplifier QA summary pages')
+parser.add_argument("--qa-folder", type=str, default='outputs/qa',
+                    help='Folder to write QA summary pages into')
+
 args = parser.parse_args(args=None)
 args.log = setup_logging(logname='build_master_bias')
 args = set_daterange(args)
@@ -535,7 +542,6 @@ for ifuslot_key in ifuslots:
         
         # --- Execute the fixed calibration recipe ---
         row = imagetable.row
-        twi_interp = None  # not used directly here, kept for clarity
         ifupos = get_ifucenfile(dirname, ifuid, amp)
         masterdark = np.zeros((1032, 1032))
         masterflt = np.zeros((1032, 1032))
@@ -597,3 +603,42 @@ for ifuslot_key in ifuslots:
                                          contid)
         if success:
             imagetable.flush()
+            # Optional QA generation per amplifier
+            if getattr(args, 'make-qa', False):
+                try:
+                    t0qa = time.time()
+                    amp_id = f"{ifuslot}_{amp}"
+                    # Build metrics
+                    metrics = summarize_amp_metrics(
+                        amp_id=amp_id,
+                        masterbias=masterbias,
+                        masterdark=masterdark,
+                        masterflt=masterflt,
+                        mastercmp=mastercmp,
+                        mastersci=mastersci,
+                        readnoise=readnoise,
+                        wave=wave,
+                        trace=trace,
+                        lampspec=_cmp,
+                        maskspec=maskspec,
+                        extra={
+                            "specid": specid,
+                            "ifuid": ifuid,
+                            "contid": contid,
+                        },
+                    )
+                    # Derive a simple reference profile from lampspec (median over rows)
+                    ref_profile = None
+                    if _cmp is not None and np.isfinite(_cmp).any():
+                        try:
+                            ref_profile = np.nanmedian(_cmp, axis=0)
+                        except Exception:
+                            ref_profile = None
+                    qa_out_dir = Path(args.qa_folder)
+                    qa_out_dir.mkdir(parents=True, exist_ok=True)
+                    ref_img = plot_ref_profile_quarters(qa_out_dir, ref_profile, None, None,
+                                                         filename=f"ref_profile_quarters_{amp_id}.png")
+                    save_amp_qa_page(qa_out_dir, amp_id, metrics, ref_img)
+                    args.log.info(f"[QA] Wrote QA summary for {amp_id} to {qa_out_dir} in {time.time()-t0qa:.2f}s")
+                except Exception as e:
+                    args.log.warning(f"[QA] Failed to generate QA for {ifuslot_key} {amp}: {e}")
