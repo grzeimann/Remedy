@@ -12,6 +12,7 @@ import tarfile
 import warnings
 import tables as tb
 import glob
+import time
 
 from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.io import fits
@@ -122,6 +123,7 @@ def get_tarinfo(tarnames, filenames):
     return L
 
 def _get_objects_tarfile(daterange, instrument='virus', rootdir='/work/03946/hetdex/maverick'):
+    start_total = time.time()
     dates = []
     for date in daterange:
         date = '%04d%02d%02d' % (date.year, date.month, date.day)
@@ -136,27 +138,42 @@ def _get_objects_tarfile(daterange, instrument='virus', rootdir='/work/03946/het
             tarfolders.append(t)
     objectdict = {}
     filename_list = []
+    args.log.info(f"[get_objects:tarfile] Start scan: {len(dates)} dates, IFUSLOT={ifuslot}, {len(tarfolders)} tar files")
+    total_fits = 0
     for tarfolder in tarfolders:
+        t0 = time.time()
         date = tarfolder.split('/')[-3]
         obsnum = int(tarfolder[-11:-4])
         NEXP = 1
-        T = tarfile.open(tarfolder, 'r')
         try:
+            T = tarfile.open(tarfolder, 'r')
             names_list = T.getnames()
             names_list = [name for name in names_list if name.endswith('.fits')]
+            total_fits += len(names_list)
             for name in names_list:
                 if ifuslot_str in name:
                     c = op.join(args.rootdir, date, instrument, name)
                     filename_list.append(c)
             exposures = np.unique([name.split('/')[1] for name in names_list])
-            b = fits.open(T.extractfile(T.getmember(names_list[0])))
-            Target = b[0].header.get('OBJECT', '')
+            # Read first header for OBJECT
+            Target = ''
+            if names_list:
+                try:
+                    b = fits.open(T.extractfile(T.getmember(names_list[0])))
+                    Target = b[0].header.get('OBJECT', '')
+                except Exception:
+                    Target = ''
             NEXP = len(exposures)
             for i in np.arange(NEXP):
                 objectdict['%s_%07d_%02d' % (date, obsnum, i+1)] = Target
-        except Exception:
+            dt = time.time() - t0
+            args.log.info(f"[get_objects:tarfile] {op.basename(tarfolder)}: {len(names_list)} FITS, {NEXP} exp(s), {dt:.2f}s")
+        except Exception as e:
+            args.log.warning(f"[get_objects:tarfile] Failed {op.basename(tarfolder)}: {e}")
             objectdict['%s_%07d_%02d' % (date, obsnum, NEXP)] = ''
             continue
+    elapsed = time.time() - start_total
+    args.log.info(f"[get_objects:tarfile] Done. Files: {len(filename_list)} (total FITS seen {total_fits}), t={elapsed:.2f}s")
     return objectdict, filename_list
 
 
@@ -167,8 +184,10 @@ def _get_objects_ratarmountcore(daterange, instrument='virus', rootdir='/work/03
         import io
     except Exception:
         # ratarmountcore not available; fall back
+        args.log.info("[get_objects:rmcore] ratarmountcore not available; using tarfile path.")
         return _get_objects_tarfile(daterange, instrument=instrument, rootdir=rootdir)
 
+    start_total = time.time()
     dates = []
     for date in daterange:
         date = '%04d%02d%02d' % (date.year, date.month, date.day)
@@ -179,13 +198,19 @@ def _get_objects_ratarmountcore(daterange, instrument='virus', rootdir='/work/03
 
     objectdict = {}
     filename_list = []
+    args.log.info(f"[get_objects:rmcore] Start scan: {len(dates)} dates, IFUSLOT={ifuslot}")
 
+    total_fits = 0
+    total_tars = 0
     for date in dates:
         tarnames = sorted(glob.glob(op.join(rootdir, date, instrument, '%s0000*.tar' % instrument)))
         for tarpath in tarnames:
+            total_tars += 1
+            t0 = time.time()
             try:
                 sit = SQLiteIndexedTar(tarpath, writeIndex=False)
                 names_list = [n for n in sit.getNames() if n.endswith('.fits')]
+                total_fits += len(names_list)
                 # Build filename list filtering by ifuslot
                 for name in names_list:
                     if ifuslot_str in name:
@@ -215,15 +240,21 @@ def _get_objects_ratarmountcore(daterange, instrument='virus', rootdir='/work/03
                     sit.close()
                 except Exception:
                     pass
-            except Exception:
+                dt = time.time() - t0
+                args.log.info(f"[get_objects:rmcore] {op.basename(tarpath)}: {len(names_list)} FITS, {NEXP} exp(s), {dt:.2f}s")
+            except Exception as e:
+                args.log.warning(f"[get_objects:rmcore] Failed {op.basename(tarpath)} with rmcore ({e}); falling back to tarfile for this archive.")
                 # If anything goes wrong with this tar, fall back for it
                 try:
                     od, fl = _get_objects_tarfile([datetime.strptime(date, '%Y%m%d')], instrument=instrument, rootdir=rootdir)
                     # Merge results
                     objectdict.update(od)
                     filename_list.extend(fl)
-                except Exception:
+                except Exception as e2:
+                    args.log.warning(f"[get_objects:rmcore] Fallback tarfile path also failed for {op.basename(tarpath)}: {e2}")
                     continue
+    elapsed = time.time() - start_total
+    args.log.info(f"[get_objects:rmcore] Done. Files: {len(filename_list)} (total FITS seen {total_fits} across {total_tars} tars), t={elapsed:.2f}s")
     return objectdict, filename_list
 
 
