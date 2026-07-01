@@ -124,6 +124,7 @@ def get_tarinfo(tarnames, filenames):
 
 def _get_objects_tarfile(daterange, instrument='virus', rootdir='/work/03946/hetdex/maverick'):
     start_total = time.time()
+    dtstr = datetime.now().strftime('%Y-%m-%d')
     dates = []
     for date in daterange:
         date = '%04d%02d%02d' % (date.year, date.month, date.day)
@@ -138,7 +139,7 @@ def _get_objects_tarfile(daterange, instrument='virus', rootdir='/work/03946/het
             tarfolders.append(t)
     objectdict = {}
     filename_list = []
-    args.log.info(f"[get_objects:tarfile] Start scan: {len(dates)} dates, IFUSLOT={ifuslot}, {len(tarfolders)} tar files")
+    args.log.info(f"[{dtstr}] [get_objects:tarfile] Start scan: {len(dates)} dates, IFUSLOT={ifuslot}, {len(tarfolders)} tar files")
     total_fits = 0
     for tarfolder in tarfolders:
         t0 = time.time()
@@ -167,13 +168,13 @@ def _get_objects_tarfile(daterange, instrument='virus', rootdir='/work/03946/het
             for i in np.arange(NEXP):
                 objectdict['%s_%07d_%02d' % (date, obsnum, i+1)] = Target
             dt = time.time() - t0
-            args.log.info(f"[get_objects:tarfile] {op.basename(tarfolder)}: {len(names_list)} FITS, {NEXP} exp(s), {dt:.2f}s")
+            args.log.info(f"[{dtstr}] [get_objects:tarfile] {op.basename(tarfolder)}: {len(names_list)} FITS, {NEXP} exp(s), {dt:.2f}s")
         except Exception as e:
-            args.log.warning(f"[get_objects:tarfile] Failed {op.basename(tarfolder)}: {e}")
+            args.log.warning(f"[{dtstr}] [get_objects:tarfile] Failed {op.basename(tarfolder)}: {e}")
             objectdict['%s_%07d_%02d' % (date, obsnum, NEXP)] = ''
             continue
     elapsed = time.time() - start_total
-    args.log.info(f"[get_objects:tarfile] Done. Files: {len(filename_list)} (total FITS seen {total_fits}), t={elapsed:.2f}s")
+    args.log.info(f"[{dtstr}] [get_objects:tarfile] Done. Files: {len(filename_list)} (total FITS seen {total_fits}), t={elapsed:.2f}s")
     return objectdict, filename_list
 
 
@@ -373,10 +374,6 @@ parser.add_argument("-dd", "--dark_days", help='''Extra days +/- for darks''',
 
 parser.add_argument("-i", "--ifuslot",  help='''IFUSLOT''', type=str,
                     default='047')
-
-# Optional fast path: use ratarmountcore to index tar archives without OS mounts
-parser.add_argument("--use-ratarmountcore", action='store_true', default=False,
-                    help='Use ratarmountcore for fast get_objects without external mounts')
 
 args = parser.parse_args(args=None)
 args.log = setup_logging(logname='build_master_bias')
