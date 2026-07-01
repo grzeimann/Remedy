@@ -19,7 +19,9 @@ from astropy.table import Table
 from datetime import datetime, timedelta
 from pathlib import Path
 from fiber_utils import base_reduction, get_trace, get_spectra, get_spectra_error
-from fiber_utils import get_powerlaw, get_ifucenfile, get_wave, get_pixelmask
+from fiber_utils import get_powerlaw, get_ifucenfile, get_pixelmask
+from wave_utils import get_wave
+from mask_utils import build_model_spectra, make_spectral_mask
 from fiber_utils import get_pixelmask_flt
 from fiber_utils import measure_contrast, get_bigW, get_bigF
 from input_utils import setup_parser, set_daterange, setup_logging
@@ -119,7 +121,7 @@ def get_tarinfo(tarnames, filenames):
         L.append(l[ind])
     return L
 
-def get_objects(daterange, instrument='virus', rootdir='/work/03946/hetdex/maverick'):
+def _get_objects_tarfile(daterange, instrument='virus', rootdir='/work/03946/hetdex/maverick'):
     dates = []
     for date in daterange:
         date = '%04d%02d%02d' % (date.year, date.month, date.day)
@@ -141,22 +143,99 @@ def get_objects(daterange, instrument='virus', rootdir='/work/03946/hetdex/maver
         T = tarfile.open(tarfolder, 'r')
         try:
             names_list = T.getnames()
-            names_list = [name for name in names_list if name[-5:] == '.fits']
+            names_list = [name for name in names_list if name.endswith('.fits')]
             for name in names_list:
                 if ifuslot_str in name:
                     c = op.join(args.rootdir, date, instrument, name)
                     filename_list.append(c)
             exposures = np.unique([name.split('/')[1] for name in names_list])
             b = fits.open(T.extractfile(T.getmember(names_list[0])))
-            Target = b[0].header['OBJECT']
-
+            Target = b[0].header.get('OBJECT', '')
             NEXP = len(exposures)
             for i in np.arange(NEXP):
                 objectdict['%s_%07d_%02d' % (date, obsnum, i+1)] = Target
-        except:
+        except Exception:
             objectdict['%s_%07d_%02d' % (date, obsnum, NEXP)] = ''
             continue
     return objectdict, filename_list
+
+
+def _get_objects_ratarmountcore(daterange, instrument='virus', rootdir='/work/03946/hetdex/maverick'):
+    # Fast path using in-Python tar indexing via ratarmountcore (no OS mounts needed)
+    try:
+        from ratarmountcore import SQLiteIndexedTar
+        import io
+    except Exception:
+        # ratarmountcore not available; fall back
+        return _get_objects_tarfile(daterange, instrument=instrument, rootdir=rootdir)
+
+    dates = []
+    for date in daterange:
+        date = '%04d%02d%02d' % (date.year, date.month, date.day)
+        if date not in dates:
+            dates.append(date)
+    ifuslot = '%03d' % int(args.ifuslot)
+    ifuslot_str = '_%sLL' % ifuslot
+
+    objectdict = {}
+    filename_list = []
+
+    for date in dates:
+        tarnames = sorted(glob.glob(op.join(rootdir, date, instrument, '%s0000*.tar' % instrument)))
+        for tarpath in tarnames:
+            try:
+                sit = SQLiteIndexedTar(tarpath, writeIndex=False)
+                names_list = [n for n in sit.getNames() if n.endswith('.fits')]
+                # Build filename list filtering by ifuslot
+                for name in names_list:
+                    if ifuslot_str in name:
+                        c = op.join(args.rootdir, date, instrument, name)
+                        filename_list.append(c)
+                # Derive objectdict key(s)
+                obsnum = int(tarpath[-11:-4])
+                # Determine OBJECT from first FITS in tar
+                Target = ''
+                if len(names_list) > 0:
+                    try:
+                        by = sit.getContent(names_list[0])
+                        with fits.open(io.BytesIO(by)) as hdul:
+                            Target = hdul[0].header.get('OBJECT', '')
+                    except Exception:
+                        Target = ''
+                # Exposure count estimated from unique exposure directory names
+                try:
+                    exposures = np.unique([name.split('/')[1] for name in names_list])
+                    NEXP = len(exposures) if len(exposures) > 0 else 1
+                except Exception:
+                    NEXP = 1
+                for i in np.arange(NEXP):
+                    objectdict['%s_%07d_%02d' % (date, obsnum, i+1)] = Target
+                # Close index to free resources
+                try:
+                    sit.close()
+                except Exception:
+                    pass
+            except Exception:
+                # If anything goes wrong with this tar, fall back for it
+                try:
+                    od, fl = _get_objects_tarfile([datetime.strptime(date, '%Y%m%d')], instrument=instrument, rootdir=rootdir)
+                    # Merge results
+                    objectdict.update(od)
+                    filename_list.extend(fl)
+                except Exception:
+                    continue
+    return objectdict, filename_list
+
+
+def get_objects(daterange, instrument='virus', rootdir='/work/03946/hetdex/maverick'):
+    """Wrapper to choose between tarfile and ratarmountcore implementations."""
+    use_rmc = getattr(args, 'use_ratarmountcore', False)
+    if use_rmc:
+        try:
+            return _get_objects_ratarmountcore(daterange, instrument=instrument, rootdir=rootdir)
+        except Exception as e:
+            args.log.warning(f"ratarmountcore path failed ({e}); falling back to tarfile path.")
+    return _get_objects_tarfile(daterange, instrument=instrument, rootdir=rootdir)
 
 def get_ifuslots(tarfolder):
     if not op.exists(tarfolder):
@@ -351,6 +430,9 @@ parser.add_argument("-dd", "--dark_days", help='''Extra days +/- for darks''',
 parser.add_argument("-i", "--ifuslot",  help='''IFUSLOT''', type=str,
                     default='047')
 
+# Optional fast path: use ratarmountcore to index tar archives without OS mounts
+parser.add_argument("--use-ratarmountcore", action='store_true', default=False,
+                    help='Use ratarmountcore for fast get_objects without external mounts')
 
 args = parser.parse_args(args=None)
 args.log = setup_logging(logname='build_master_bias')
@@ -389,6 +471,7 @@ for ifuslot_key in ifuslots:
     ifuslot, specid, ifuid, contid = ifuslot_key.split('_')
     for amp in ['LL', 'LU', 'RL', 'RU']:
         row = imagetable.row
+        twi_interp = None  # per-amp twilight interpolator for building SCI model spectra
         ifupos = get_ifucenfile(dirname, ifuid, amp)
         masterdark = np.zeros((1032, 1032))
         masterflt = np.zeros((1032, 1032))
@@ -418,8 +501,16 @@ for ifuslot_key in ifuslots:
             if kind == 'sci':
                 mastersci = _info[0] * 1.
                 spec = get_spectra(_info[0], trace)
+                good_solutions = np.isfinite(wave).sum(axis=1) > (0.8 * wave.shape[1])
+                sci_interp, sci_model, sci_image, _ = build_model_spectra(spec, wave, good_solutions)
+                # Preferred spectral-region mask using twilight-based model spectra
+                msci_model_spec = sci_interp(wave)
+                maskspec = make_spectral_mask(spec, msci_model_spec).astype('float32')
+
             if kind == 'twi':
                 mastertwi = _info[0] * 1.
+                twi_spectra = get_spectra(mastertwi, trace)
+
             if kind == 'zro':
                 masterbias = _info[0] * 1.
                 readnoise = biweight(_info[1])
