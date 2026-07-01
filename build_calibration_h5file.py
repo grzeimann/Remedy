@@ -606,11 +606,10 @@ for ifuslot_key in ifuslots:
                                          masterbias, spec, _cmp, maskspec,
                                          contid)
 
-        args.log.info('Appending was successful: %s' % str(success))
         if success:
             imagetable.flush()
             # Optional QA generation per amplifier
-            if getattr(args, 'make-qa', False):
+            if getattr(args, 'make_qa', False):
                 try:
                     t0qa = time.time()
                     amp_id = f"{ifuslot}_{amp}"
