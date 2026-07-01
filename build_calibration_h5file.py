@@ -364,6 +364,130 @@ def get_specmask(amp, wave, trace, masterbias, masterdark, readnoise,
                 data = data[::-1, :]
     return np.array(np.isnan(data), dtype='float32')
 
+# --- Calibration recipe helper functions (scoped to this amp) ---
+def step_zro():
+    kind = 'zro'
+    args.log.info('Making %s master frame for %s %s' % (kind, ifuslot_key, amp))
+    _info = build_master_frame(filename_dict[kind], tarinfo_dict[kind],
+                               ifuslot, amp, kind, args.log, args.folder,
+                               specid, ifuid, contid)
+    if _info is None:
+        args.log.error("Can't complete reduction for %s %s because of lack of %s files." % (ifuslot_key, amp, kind))
+        return None
+    _masterbias = _info[0] * 1.
+    _readnoise = biweight(_info[1])
+    args.log.info('Readnoise for %s %s: %0.2f' % (ifuslot_key, amp, _readnoise))
+    return _masterbias, _readnoise, _info
+
+def step_drk():
+    kind = 'drk'
+    args.log.info('Making %s master frame for %s %s' % (kind, ifuslot_key, amp))
+    _info = build_master_frame(filename_dict[kind], tarinfo_dict[kind],
+                               ifuslot, amp, kind, args.log, args.folder,
+                               specid, ifuid, contid)
+    if _info is None:
+        args.log.error("Can't complete reduction for %s %s because of lack of %s files." % (ifuslot_key, amp, kind))
+        return None
+    _masterdark = _info[0] * 1.
+    args.log.info('Getting pixel mask %03d %s' % (int(ifuslot), amp))
+    _pixelmask = get_pixelmask(_masterdark)
+    return _masterdark, _pixelmask, _info
+
+def step_flt_trace(curr_pixelmask):
+    kind = 'flt'
+    args.log.info('Making %s master frame for %s %s' % (kind, ifuslot_key, amp))
+    _info = build_master_frame(filename_dict[kind], tarinfo_dict[kind],
+                               ifuslot, amp, kind, args.log, args.folder,
+                               specid, ifuid, contid)
+    if _info is None:
+        args.log.error("Can't complete reduction for %s %s because of lack of %s files." % (ifuslot_key, amp, kind))
+        return None
+    _masterflt = _info[0] * 1.
+    pixelmask2 = get_pixelmask_flt(_masterflt)
+    _pixelmask = np.array(pixelmask2 + curr_pixelmask > 0, dtype=int)
+    args.log.info('Getting trace for %s %s' % (ifuslot_key, amp))
+    _trace = np.zeros((112, 1032))
+    try:
+        _specid, _ifuSlot, _ifuid = ['%03d' % int(z) for z in [_info[3], ifuslot, _info[4]]]
+        _trace, _ref = get_trace(_info[0], _specid, _ifuSlot, _ifuid, amp, _info[2][:8], dirname)
+        _flt_spec = get_spectra(_info[0], _trace)
+        cm, cl, ch = measure_contrast(_info[0], _flt_spec, _trace)
+        if cm is not None:
+            args.log.info(
+                'Contrast 5th, 50th, and 95th percentiles for %s %s: %0.2f, %0.2f, %0.2f' % (ifuslot_key, amp, cl,
+                                                                                             cm, ch))
+    except Exception:
+        args.log.error('Trace Failed for %s %s.' % (ifuslot_key, amp))
+    return _masterflt, _pixelmask, _trace, _info
+
+def step_cmp_wave(curr_trace):
+    kind = 'cmp'
+    args.log.info('Making %s master frame for %s %s' % (kind, ifuslot_key, amp))
+    _info = build_master_frame(filename_dict[kind], tarinfo_dict[kind],
+                               ifuslot, amp, kind, args.log, args.folder,
+                               specid, ifuid, contid)
+    if _info is None:
+        args.log.error("Can't complete reduction for %s %s because of lack of %s files." % (ifuslot_key, amp, kind))
+        return None
+    _mastercmp = _info[0] * 1.
+    _cmp_spec = get_spectra(_info[0], curr_trace)
+    _wave = np.zeros((112, 1032))
+    _wave_valid = False
+    try:
+        _wave = get_wave(_cmp_spec, curr_trace, T_array)
+        if _wave is None or not np.isfinite(_wave).any():
+            _wave = np.zeros((112, 1032))
+            args.log.error('Wavelength Failed for %s %s.' % (ifuslot_key, amp))
+        wmin = float(np.nanmin(_wave)) if np.isfinite(_wave).any() else 0.0
+        wmax = float(np.nanmax(_wave)) if np.isfinite(_wave).any() else 0.0
+        _wave_valid = (np.isfinite(_wave).sum() > 0.5 * _wave.size) and (wmax > wmin)
+        args.log.info('Min/Max wavelength for %03d %s: %0.2f, %0.2f' % (int(ifuslot), amp, wmin, wmax))
+    except Exception:
+        args.log.error('Wavelength Failed for %s %s.' % (ifuslot_key, amp))
+        _wave_valid = False
+    return _mastercmp, _cmp_spec, _wave, _wave_valid, _info
+
+def step_twi(curr_trace):
+    kind = 'twi'
+    args.log.info('Making %s master frame for %s %s' % (kind, ifuslot_key, amp))
+    _info = build_master_frame(filename_dict[kind], tarinfo_dict[kind],
+                               ifuslot, amp, kind, args.log, args.folder,
+                               specid, ifuid, contid)
+    if _info is None:
+        args.log.error("Can't complete reduction for %s %s because of lack of %s files." % (ifuslot_key, amp, kind))
+        return None
+    _mastertwi = _info[0] * 1.
+    try:
+        _twi_spectra = get_spectra(_mastertwi, curr_trace)
+    except Exception:
+        _twi_spectra = None
+    return _mastertwi, _twi_spectra, _info
+
+def step_sci_and_mask(curr_trace, curr_wave, wave_ok, twi_spectra_local):
+    kind = 'sci'
+    args.log.info('Making %s master frame for %s %s' % (kind, ifuslot_key, amp))
+    _info = build_master_frame(filename_dict[kind], tarinfo_dict[kind],
+                               ifuslot, amp, kind, args.log, args.folder,
+                               specid, ifuid, contid)
+    if _info is None:
+        args.log.error("Can't complete reduction for %s %s because of lack of %s files." % (ifuslot_key, amp, kind))
+        return None
+    _mastersci = _info[0] * 1.
+    _spec = get_spectra(_info[0], curr_trace)
+    _maskspec = np.zeros_like(_spec, dtype='float32')
+    if not wave_ok:
+        args.log.info('Skipping SCI model/mask for %s %s due to invalid wavelength solution.' % (ifuslot_key, amp))
+        return _mastersci, _spec, _maskspec, _info
+    try:
+        base_spectra = twi_spectra_local if twi_spectra_local is not None else _spec
+        good_solutions = np.isfinite(curr_wave).sum(axis=1) > (0.8 * curr_wave.shape[1])
+        sci_interp, sci_model, sci_image, _ = build_model_spectra(base_spectra, curr_wave, good_solutions)
+        msci_model_spec = sci_interp(curr_wave)
+        _maskspec = make_spectral_mask(_spec, msci_model_spec).astype('float32')
+    except Exception as e:
+        args.log.warning('SCI model/mask generation failed for %s %s: %s' % (ifuslot_key, amp, e))
+    return _mastersci, _spec, _maskspec, _info
+
 parser = setup_parser()
 parser.add_argument('outfilename', type=str,
                     help='''name of the output file''')
@@ -418,127 +542,7 @@ T_array = np.array(T['col1'])
 for ifuslot_key in ifuslots:
     ifuslot, specid, ifuid, contid = ifuslot_key.split('_')
     for amp in ['LL', 'LU', 'RL', 'RU']:
-        # --- Calibration recipe helper functions (scoped to this amp) ---
-        def step_zro():
-            kind = 'zro'
-            args.log.info('Making %s master frame for %s %s' % (kind, ifuslot_key, amp))
-            _info = build_master_frame(filename_dict[kind], tarinfo_dict[kind],
-                                       ifuslot, amp, kind, args.log, args.folder,
-                                       specid, ifuid, contid)
-            if _info is None:
-                args.log.error("Can't complete reduction for %s %s because of lack of %s files." % (ifuslot_key, amp, kind))
-                return None
-            _masterbias = _info[0] * 1.
-            _readnoise = biweight(_info[1])
-            args.log.info('Readnoise for %s %s: %0.2f' % (ifuslot_key, amp, _readnoise))
-            return _masterbias, _readnoise, _info
-        
-        def step_drk():
-            kind = 'drk'
-            args.log.info('Making %s master frame for %s %s' % (kind, ifuslot_key, amp))
-            _info = build_master_frame(filename_dict[kind], tarinfo_dict[kind],
-                                       ifuslot, amp, kind, args.log, args.folder,
-                                       specid, ifuid, contid)
-            if _info is None:
-                args.log.error("Can't complete reduction for %s %s because of lack of %s files." % (ifuslot_key, amp, kind))
-                return None
-            _masterdark = _info[0] * 1.
-            args.log.info('Getting pixel mask %03d %s' % (int(ifuslot), amp))
-            _pixelmask = get_pixelmask(_masterdark)
-            return _masterdark, _pixelmask, _info
-        
-        def step_flt_trace(curr_pixelmask):
-            kind = 'flt'
-            args.log.info('Making %s master frame for %s %s' % (kind, ifuslot_key, amp))
-            _info = build_master_frame(filename_dict[kind], tarinfo_dict[kind],
-                                       ifuslot, amp, kind, args.log, args.folder,
-                                       specid, ifuid, contid)
-            if _info is None:
-                args.log.error("Can't complete reduction for %s %s because of lack of %s files." % (ifuslot_key, amp, kind))
-                return None
-            _masterflt = _info[0] * 1.
-            pixelmask2 = get_pixelmask_flt(_masterflt)
-            _pixelmask = np.array(pixelmask2 + curr_pixelmask > 0, dtype=int)
-            args.log.info('Getting trace for %s %s' % (ifuslot_key, amp))
-            _trace = np.zeros((112, 1032))
-            try:
-                _specid, _ifuSlot, _ifuid = ['%03d' % int(z) for z in [_info[3], ifuslot, _info[4]]]
-                _trace, _ref = get_trace(_info[0], _specid, _ifuSlot, _ifuid, amp, _info[2][:8], dirname)
-                _flt_spec = get_spectra(_info[0], _trace)
-                cm, cl, ch = measure_contrast(_info[0], _flt_spec, _trace)
-                if cm is not None:
-                    args.log.info('Contrast 5th, 50th, and 95th percentiles for %s %s: %0.2f, %0.2f, %0.2f' % (ifuslot_key, amp, cl, cm, ch))
-            except Exception:
-                args.log.error('Trace Failed for %s %s.' % (ifuslot_key, amp))
-            return _masterflt, _pixelmask, _trace, _info
-        
-        def step_cmp_wave(curr_trace):
-            kind = 'cmp'
-            args.log.info('Making %s master frame for %s %s' % (kind, ifuslot_key, amp))
-            _info = build_master_frame(filename_dict[kind], tarinfo_dict[kind],
-                                       ifuslot, amp, kind, args.log, args.folder,
-                                       specid, ifuid, contid)
-            if _info is None:
-                args.log.error("Can't complete reduction for %s %s because of lack of %s files." % (ifuslot_key, amp, kind))
-                return None
-            _mastercmp = _info[0] * 1.
-            _cmp_spec = get_spectra(_info[0], curr_trace)
-            _wave = np.zeros((112, 1032))
-            _wave_valid = False
-            try:
-                _wave = get_wave(_cmp_spec, curr_trace, T_array)
-                if _wave is None or not np.isfinite(_wave).any():
-                    _wave = np.zeros((112, 1032))
-                    args.log.error('Wavelength Failed for %s %s.' % (ifuslot_key, amp))
-                wmin = float(np.nanmin(_wave)) if np.isfinite(_wave).any() else 0.0
-                wmax = float(np.nanmax(_wave)) if np.isfinite(_wave).any() else 0.0
-                _wave_valid = (np.isfinite(_wave).sum() > 0.5 * _wave.size) and (wmax > wmin)
-                args.log.info('Min/Max wavelength for %03d %s: %0.2f, %0.2f' % (int(ifuslot), amp, wmin, wmax))
-            except Exception:
-                args.log.error('Wavelength Failed for %s %s.' % (ifuslot_key, amp))
-                _wave_valid = False
-            return _mastercmp, _cmp_spec, _wave, _wave_valid, _info
-        
-        def step_twi(curr_trace):
-            kind = 'twi'
-            args.log.info('Making %s master frame for %s %s' % (kind, ifuslot_key, amp))
-            _info = build_master_frame(filename_dict[kind], tarinfo_dict[kind],
-                                       ifuslot, amp, kind, args.log, args.folder,
-                                       specid, ifuid, contid)
-            if _info is None:
-                args.log.error("Can't complete reduction for %s %s because of lack of %s files." % (ifuslot_key, amp, kind))
-                return None
-            _mastertwi = _info[0] * 1.
-            try:
-                _twi_spectra = get_spectra(_mastertwi, curr_trace)
-            except Exception:
-                _twi_spectra = None
-            return _mastertwi, _twi_spectra, _info
-        
-        def step_sci_and_mask(curr_trace, curr_wave, wave_ok, twi_spectra_local):
-            kind = 'sci'
-            args.log.info('Making %s master frame for %s %s' % (kind, ifuslot_key, amp))
-            _info = build_master_frame(filename_dict[kind], tarinfo_dict[kind],
-                                       ifuslot, amp, kind, args.log, args.folder,
-                                       specid, ifuid, contid)
-            if _info is None:
-                args.log.error("Can't complete reduction for %s %s because of lack of %s files." % (ifuslot_key, amp, kind))
-                return None
-            _mastersci = _info[0] * 1.
-            _spec = get_spectra(_info[0], curr_trace)
-            _maskspec = np.zeros_like(_spec, dtype='float32')
-            if not wave_ok:
-                args.log.info('Skipping SCI model/mask for %s %s due to invalid wavelength solution.' % (ifuslot_key, amp))
-                return _mastersci, _spec, _maskspec, _info
-            try:
-                base_spectra = twi_spectra_local if twi_spectra_local is not None else _spec
-                good_solutions = np.isfinite(curr_wave).sum(axis=1) > (0.8 * curr_wave.shape[1])
-                sci_interp, sci_model, sci_image, _ = build_model_spectra(base_spectra, curr_wave, good_solutions)
-                msci_model_spec = sci_interp(curr_wave)
-                _maskspec = make_spectral_mask(_spec, msci_model_spec).astype('float32')
-            except Exception as e:
-                args.log.warning('SCI model/mask generation failed for %s %s: %s' % (ifuslot_key, amp, e))
-            return _mastersci, _spec, _maskspec, _info
+
         
         # --- Execute the fixed calibration recipe ---
         row = imagetable.row
