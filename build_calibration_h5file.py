@@ -7,7 +7,6 @@ Created on Mon Jun 11 11:32:27 2018
 
 import os.path as op
 import numpy as np
-import subprocess
 import sys
 import tarfile
 import warnings
@@ -16,10 +15,9 @@ import glob
 
 from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.io import fits
-from astropy.stats import mad_std
 from astropy.table import Table
 from datetime import datetime, timedelta
-from distutils.dir_util import mkpath
+from pathlib import Path
 from fiber_utils import base_reduction, get_trace, get_spectra, get_spectra_error
 from fiber_utils import get_powerlaw, get_ifucenfile, get_wave, get_pixelmask
 from fiber_utils import get_pixelmask_flt
@@ -28,8 +26,6 @@ from input_utils import setup_parser, set_daterange, setup_logging
 from math_utils import biweight
 from scipy.interpolate import interp1d
 
-karl_tarlist = '/work/00115/gebhardt/maverick/gettar/%starlist'
-karl_scilist = '/work/00115/gebhardt/maverick/gettar/%ssci'
 
 warnings.filterwarnings("ignore")
 
@@ -86,58 +82,6 @@ def append_fibers_to_table(row, wave, trace, ifupos, ifuslot, ifuid, specid,
     row['amp'] = amp
     row.append()
     return True
-
-
-def get_filenames(args, daterange, kind):
-    filenames = []
-    ifuslot = '%03d' % int(args.ifuslot)
-    dates = []
-    for date in daterange:
-        date = '%04d%02d' % (date.year, date.month)
-        if date not in dates:
-            dates.append(date)
-    
-    for date in dates:
-        tname = karl_tarlist % date
-        for daten in daterange:
-            daten = '%04d%02d%02d' % (daten.year, daten.month, daten.day)
-            process = subprocess.Popen('cat %s | grep %s | grep _%sLL | '
-                                       'grep %s' %
-                                       (tname, kind, ifuslot, daten),
-                                       stdout=subprocess.PIPE, shell=True)
-            while True:
-                line = process.stdout.readline()
-                if not line:
-                    break
-                b = line.rstrip().decode("utf-8")
-                c = op.join(args.rootdir, b)
-                filenames.append(c[:-14])
-    return filenames
-
-def get_scifilenames(args, daterange, kind):
-    filenames = []
-    dates = []
-    for date in daterange:
-        date = '%04d%02d' % (date.year, date.month)
-        if date not in dates:
-            dates.append(date)
-    
-    for date in dates:
-        tname = karl_scilist % date
-        for daten in daterange:
-            daten = '%04d%02d%02d' % (daten.year, daten.month, daten.day)
-            process = subprocess.Popen('cat %s | grep %s | grep %s ' %
-                                       (tname, daten, 'DEX'),
-                                       stdout=subprocess.PIPE, shell=True)
-            while True:
-                line = process.stdout.readline()
-                if not line:
-                    break
-                b = line.rstrip().decode("utf-8")
-                b = b.split(' ')[0].split('maverick/')[1]
-                c = op.join(args.rootdir, b)
-                filenames.append(c[:-14])
-    return filenames
 
 def get_tarfiles(filenames):
     tarnames = []
@@ -412,7 +356,7 @@ args = parser.parse_args(args=None)
 args.log = setup_logging(logname='build_master_bias')
 args = set_daterange(args)
 kinds = ['zro', 'drk', 'flt', 'cmp', 'twi', 'sci']
-mkpath(args.folder)
+Path(args.folder).mkdir(parents=True, exist_ok=True)
 dirname = get_script_path()
 
 filename_dict = {}
