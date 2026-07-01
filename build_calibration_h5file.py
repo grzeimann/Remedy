@@ -182,9 +182,9 @@ def _get_objects_ratarmountcore(daterange, instrument='virus', rootdir='/work/03
     try:
         from ratarmountcore import SQLiteIndexedTar
         import io
-    except Exception:
+    except Exception as e:
         # ratarmountcore not available; fall back
-        args.log.info("[get_objects:rmcore] ratarmountcore not available; using tarfile path.")
+        args.log.warning(f"[get_objects:rmcore] ratarmountcore not available ({e}); falling back to tarfile path.")
         return _get_objects_tarfile(daterange, instrument=instrument, rootdir=rootdir)
 
     start_total = time.time()
