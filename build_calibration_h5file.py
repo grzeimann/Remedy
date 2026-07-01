@@ -605,6 +605,8 @@ for ifuslot_key in ifuslots:
                                          mastertwi, mastercmp, mastersci,
                                          masterbias, spec, _cmp, maskspec,
                                          contid)
+
+        args.log.info('Appending was successful: %s' % str(success))
         if success:
             imagetable.flush()
             # Optional QA generation per amplifier
@@ -640,9 +642,27 @@ for ifuslot_key in ifuslots:
                             ref_profile = None
                     qa_out_dir = Path(args.qa_folder)
                     qa_out_dir.mkdir(parents=True, exist_ok=True)
-                    ref_img = plot_ref_profile_quarters(qa_out_dir, ref_profile, None, None,
-                                                         filename=f"ref_profile_quarters_{amp_id}.png")
-                    save_amp_qa_page(qa_out_dir, amp_id, metrics, ref_img)
-                    args.log.info(f"[QA] Wrote QA summary for {amp_id} to {qa_out_dir} in {time.time()-t0qa:.2f}s")
+                    args.log.info(f"[QA] Starting QA for {amp_id} → {qa_out_dir}")
+                    # Create ref profile quarters plot
+                    try:
+                        args.log.info(f"[QA] Creating ref_profile_quarters plot for {amp_id} …")
+                        ref_img = plot_ref_profile_quarters(
+                            qa_out_dir, ref_profile, None, None,
+                            filename=f"ref_profile_quarters_{amp_id}.png"
+                        )
+                        if ref_img is not None:
+                            args.log.info(f"[QA] Saved ref_profile_quarters plot: {ref_img}")
+                        else:
+                            args.log.info(f"[QA] Skipped ref_profile_quarters for {amp_id} (no ref profile available)")
+                    except Exception as e_plot:
+                        ref_img = None
+                        args.log.warning(f"[QA] Failed to create ref_profile_quarters for {amp_id}: {e_plot}")
+                    # Save QA summary page (PNG + JSON sidecar)
+                    try:
+                        png_path = save_amp_qa_page(qa_out_dir, amp_id, metrics, ref_img)
+                        args.log.info(f"[QA] Wrote QA summary page: {png_path}")
+                    except Exception as e_page:
+                        args.log.warning(f"[QA] Failed to write QA page for {amp_id}: {e_page}")
+                    args.log.info(f"[QA] Done QA for {amp_id} in {time.time()-t0qa:.2f}s")
                 except Exception as e:
                     args.log.warning(f"[QA] Failed to generate QA for {ifuslot_key} {amp}: {e}")
