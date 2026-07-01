@@ -16,9 +16,170 @@ from __future__ import annotations
 
 import numpy as np
 from typing import Optional
+from itertools import combinations
+from fiber_utils import find_peaks
 
-# We rely on the robust single-spectrum solver from remedy_get_wave_v2
-from remedy_get_wave_v2 import get_wave_single as _get_wave_single
+# Default pixel length assumption for VIRUS spectra, used in some helpers
+PIXELS = 1032
+
+# Reference arc line list (Hg, Cd, etc.) used for matching
+LINE_LIST = [3610.508, 3650.153, 4046.565, 4358.335, 4678.149, 4799.912, 4916.068, 5085.822, 5460.750]
+
+
+def suppress_close_peaks(peak_x, peak_h, min_sep=10, max_keep=25):
+    peak_x = np.asarray(peak_x, dtype=float)
+    peak_h = np.asarray(peak_h, dtype=float)
+    order = np.argsort(peak_h)[::-1]
+    keep_x = []
+    keep_h = []
+    for idx in order:
+        x = peak_x[idx]
+        h = peak_h[idx]
+        if not any(np.abs(x - xk) <= min_sep for xk in keep_x):
+            keep_x.append(x)
+            keep_h.append(h)
+        if len(keep_x) >= max_keep:
+            break
+    keep_x = np.array(keep_x)
+    keep_h = np.array(keep_h)
+    s = np.argsort(keep_x)
+    return keep_x[s], keep_h[s]
+
+
+def match_with_model(peak_x, line_list, coeff, x_tol=8.0):
+    peak_x = np.asarray(peak_x, dtype=float)
+    line_list = np.asarray(line_list, dtype=float)
+    wave_at_peaks = np.polyval(coeff, peak_x)
+    used = set()
+    matches = []
+    for w in line_list:
+        dw = np.abs(wave_at_peaks - w)
+        p = np.argmin(dw)
+        # local slope of wavelength solution
+        if len(coeff) >= 2:
+            local_slope = np.polyval(np.polyder(coeff), peak_x[p])
+        else:
+            local_slope = coeff[0]
+        local_slope = np.abs(local_slope) if np.isfinite(local_slope) else 0.0
+        if local_slope < 1e-6:
+            local_slope = 1.95
+        x_resid = dw[p] / local_slope
+        if x_resid <= x_tol and p not in used:
+            matches.append({
+                "x_obs": peak_x[p],
+                "wave_ref": w,
+                "wave_fit": wave_at_peaks[p],
+                "wave_resid": wave_at_peaks[p] - w,
+                "x_resid": x_resid,
+                "peak_index": p,
+            })
+            used.add(p)
+    return matches
+
+
+def sigma_clip_matches(matches, nsig=3.0):
+    if not matches:
+        return matches
+    import numpy as _np
+    resid = _np.array([m["wave_resid"] for m in matches], dtype=float)
+    med = _np.median(resid)
+    mad = _np.median(_np.abs(resid - med))
+    s = 1.4826 * mad if mad > 0 else _np.std(resid) if resid.size > 1 else 1.0
+    if not _np.isfinite(s) or s <= 0:
+        return matches
+    good = _np.abs(resid - med) <= nsig * s
+    return [m for m, g in zip(matches, good) if g]
+
+
+def refit_from_matches(matches, degree=4):
+    if not matches:
+        # fallback linear
+        return np.array([2.0, 0.0]), 0
+    x_obs = np.array([m["x_obs"] for m in matches], dtype=float)
+    wave_ref = np.array([m["wave_ref"] for m in matches], dtype=float)
+    coeff = np.polyfit(x_obs, wave_ref, degree)
+    return coeff, len(matches)
+
+
+def identify_arc(
+    peak_x,
+    peak_h,
+    line_list,
+    min_sep=10,
+    max_keep=12,
+    anchor_tol_pix=12.0,
+    Nbrightest=6,
+    final_order=4,
+):
+    peak_x, peak_h = suppress_close_peaks(peak_x, peak_h, min_sep=min_sep, max_keep=max_keep)
+    line_list = np.sort(np.asarray(line_list, dtype=float))
+    top_peaks = np.argsort(peak_h)[::-1][:Nbrightest]
+    top_peaks_x = np.sort(peak_x[top_peaks])
+    best_rms = np.inf
+    best_coeff = None
+    for combo in combinations(line_list, Nbrightest):
+        combo = np.sort(combo)
+        coeff = np.polyfit(top_peaks_x, combo, 2)
+        wave_pred = np.polyval(coeff, top_peaks_x)
+        resid = np.empty_like(wave_pred)
+        for i, w in enumerate(wave_pred):
+            j = np.argmin(np.abs(line_list - w))
+            resid[i] = line_list[j] - w
+        rms = np.sqrt(np.mean(resid ** 2))
+        if rms < best_rms:
+            best_coeff = coeff
+            best_rms = rms
+    coeff = best_coeff
+    matches = match_with_model(peak_x, line_list, coeff, x_tol=anchor_tol_pix)
+    matches = sigma_clip_matches(matches, nsig=3.0)
+    coeff_fit, _ = refit_from_matches(matches, degree=final_order)
+    matches_final = match_with_model(peak_x, line_list, coeff_fit, x_tol=anchor_tol_pix)
+    resid = np.array([m["wave_resid"] for m in matches_final], dtype=float)
+    rms = np.sqrt(np.mean(resid ** 2))
+    best = {
+        "coeff": coeff_fit,
+        "matches": matches_final,
+        "nmatch": len(matches_final),
+        "rms": rms,
+    }
+    return best, len(matches)
+
+
+def get_wave_single(fiber_arc_spectrum, final_order=4):
+    """
+    Derive a per-fiber wavelength solution from an arc spectrum.
+
+    Detected arc peaks are matched to a fixed reference line list (``LINE_LIST``)
+    and a polynomial wavelength model is fit in pixel space.
+
+    Args:
+        fiber_arc_spectrum (array-like): 1D arc spectrum for a single fiber
+            with length equal to the number of spectral pixels (e.g., 1032).
+        final_order (int, optional): Final polynomial degree to fit for the
+            wavelength model. Defaults to 4.
+
+    Returns:
+        tuple[np.ndarray, float]:
+            - ``wave``: 1D array giving the wavelength (same units as
+              ``LINE_LIST``) for each pixel index.
+            - ``rms``: RMS of residuals (in wavelength units) across matched
+              lines.
+    """
+    x_indices = np.arange(len(fiber_arc_spectrum))
+    fiber_arc_spectrum_clean = np.array(fiber_arc_spectrum, dtype=float).copy()
+    fiber_arc_spectrum_clean[~np.isfinite(fiber_arc_spectrum_clean)] = 0.0
+    peak_loc, peaks = find_peaks(fiber_arc_spectrum_clean, thresh=1)
+    best, _ = identify_arc(
+        peak_loc,
+        peaks,
+        LINE_LIST,
+        min_sep=10,
+        max_keep=15,
+        anchor_tol_pix=12.0,
+        final_order=final_order,
+    )
+    wave = np.polyval(best["coeff"], x_indices)
+    return wave, best["rms"]
 
 
 def get_wave(spec: np.ndarray,
@@ -59,7 +220,7 @@ def get_wave(spec: np.ndarray,
             j0 = max(0, j - 2)
             j1 = min(nrows, j + 3)
             S = np.nanmedian(spec[j0:j1], axis=0)
-            wave_j, res = _get_wave_single(S, final_order=order)
+            wave_j, res = get_wave_single(S, final_order=order)
             w_seed[j] = wave_j
             rms[j] = res
         except Exception:
