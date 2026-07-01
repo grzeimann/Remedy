@@ -208,7 +208,7 @@ def _get_objects_ratarmountcore(daterange, instrument='virus', rootdir='/work/03
             total_tars += 1
             t0 = time.time()
             try:
-                sit = SQLiteIndexedTar(tarpath, writeIndex=False)
+                sit = SQLiteIndex(tarpath, writeIndex=False)
                 names_list = [n for n in sit.getNames() if n.endswith('.fits')]
                 total_fits += len(names_list)
                 # Build filename list filtering by ifuslot
