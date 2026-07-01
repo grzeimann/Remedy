@@ -609,7 +609,7 @@ for ifuslot_key in ifuslots:
         if success:
             imagetable.flush()
             # Optional QA generation per amplifier
-            if getattr(args, 'make_qa', False):
+            if args.make_qa:
                 try:
                     t0qa = time.time()
                     amp_id = f"{ifuslot}_{amp}"
