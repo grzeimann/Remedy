@@ -180,13 +180,130 @@ def _get_objects_tarfile(daterange, instrument='virus', rootdir='/work/03946/het
 def _get_objects_ratarmountcore(daterange, instrument='virus', rootdir='/work/03946/hetdex/maverick'):
     # Fast path using in-Python tar indexing via ratarmountcore (no OS mounts needed)
     try:
-        from ratarmountcore import SQLiteIndex
+        import importlib
         import io
+        rmc = importlib.import_module('ratarmountcore')
     except Exception as e:
         # ratarmountcore not available; fall back
         args.log.warning(f"[get_objects:rmcore] ratarmountcore not available ({e}); falling back to tarfile path.")
         return _get_objects_tarfile(daterange, instrument=instrument, rootdir=rootdir)
 
+    # --- ratarmountcore compatibility shim ---------------------------------
+    def _resolve_rmc_class():
+        """Return a constructor and a human-readable name for logging.
+        Tries several class locations across ratarmountcore versions.
+        """
+        candidates = [
+            ('SQLiteIndexedTarFsspec', None),
+            ('SQLiteIndexedTar', None),
+            ('SQLiteIndexedTarFile', None),
+            ('SQLiteIndex', None),
+            ('core', 'SQLiteIndexedTar'),
+        ]
+        for attr, subattr in candidates:
+            try:
+                obj = getattr(rmc, attr)
+                if subattr is not None:
+                    obj = getattr(obj, subattr)
+                # Some installs expose a module named SQLiteIndex; skip if not a type
+                if isinstance(obj, type):
+                    return obj, f"ratarmountcore.{attr + ('.' + subattr if subattr else '')}"
+            except Exception:
+                continue
+        return None, None
+
+    def _rmc_open(tarpath):
+        Constructor, cname = _resolve_rmc_class()
+        if Constructor is None:
+            raise ImportError('No compatible ratarmountcore class found')
+        # Try a few constructor signatures
+        last_err = None
+        for kwargs in (
+            dict(writeIndex=False),
+            dict(readOnly=True),
+            dict(),
+        ):
+            try:
+                inst = Constructor(tarpath, **kwargs) if kwargs else Constructor(tarpath)
+                args.log.info(f"[get_objects:rmcore] Using {cname} with kwargs {list(kwargs.keys()) if kwargs else '()'}")
+                return inst, cname
+            except Exception as e:
+                last_err = e
+                continue
+        raise TypeError(f"Failed to construct {cname}: {last_err}")
+
+    def _rmc_list_fits(inst):
+        # Prefer a direct name listing
+        try:
+            names = inst.getNames()
+            # Some APIs may yield bytes
+            names = [n.decode() if isinstance(n, (bytes, bytearray)) else n for n in names]
+            return [n for n in names if isinstance(n, str) and n.endswith('.fits')]
+        except Exception:
+            pass
+        # Try listDir style APIs at the root
+        try:
+            names = []
+            def _walk(path):
+                try:
+                    entries = inst.listDir(path)
+                except Exception:
+                    entries = []
+                for e in entries:
+                    # entry may be dict-like or tuple; try to extract name and isDir
+                    name = e.get('name') if isinstance(e, dict) else (e[0] if isinstance(e, (list, tuple)) else None)
+                    isdir = e.get('type') == 'directory' if isinstance(e, dict) else (e[1] if isinstance(e, (list, tuple)) and len(e) > 1 else False)
+                    if name is None:
+                        continue
+                    full = path.rstrip('/') + '/' + name if path != '' else name
+                    if isdir:
+                        _walk(full)
+                    else:
+                        if full.endswith('.fits'):
+                            names.append(full)
+            _walk('')
+            return names
+        except Exception:
+            pass
+        # Try getFileInfos if available
+        try:
+            infos = inst.getFileInfos()
+            names = []
+            for info in infos:
+                name = info.get('path') if isinstance(info, dict) else getattr(info, 'path', None)
+                if name and name.endswith('.fits'):
+                    names.append(name)
+            return names
+        except Exception:
+            pass
+        raise AttributeError('Could not list FITS entries from ratarmountcore index')
+
+    def _rmc_get_bytes(inst, name):
+        # getContent
+        try:
+            return inst.getContent(name)
+        except Exception:
+            pass
+        # getFile(...).read()
+        try:
+            fobj = inst.getFile(name)
+            try:
+                return fobj.read()
+            finally:
+                try:
+                    fobj.close()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # readFile(name)
+        try:
+            return inst.readFile(name)
+        except Exception:
+            pass
+        raise AttributeError('Could not read file bytes from ratarmountcore index')
+
+    # -----------------------------------------------------------------------
     start_total = time.time()
     dates = []
     for date in daterange:
@@ -208,8 +325,16 @@ def _get_objects_ratarmountcore(daterange, instrument='virus', rootdir='/work/03
             total_tars += 1
             t0 = time.time()
             try:
-                sit = SQLiteIndex(tarpath, writeIndex=False)
-                names_list = [n for n in sit.getNames() if n.endswith('.fits')]
+                sit, cname = _rmc_open(tarpath)
+                try:
+                    names_list = _rmc_list_fits(sit)
+                except Exception as e_list:
+                    # Ensure close before raising
+                    try:
+                        sit.close()
+                    except Exception:
+                        pass
+                    raise e_list
                 total_fits += len(names_list)
                 # Build filename list filtering by ifuslot
                 for name in names_list:
@@ -222,7 +347,7 @@ def _get_objects_ratarmountcore(daterange, instrument='virus', rootdir='/work/03
                 Target = ''
                 if len(names_list) > 0:
                     try:
-                        by = sit.getContent(names_list[0])
+                        by = _rmc_get_bytes(sit, names_list[0])
                         with fits.open(io.BytesIO(by)) as hdul:
                             Target = hdul[0].header.get('OBJECT', '')
                     except Exception:
