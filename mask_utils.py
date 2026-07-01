@@ -190,18 +190,92 @@ def build_model_spectra(twi_spectra, wave, good_solutions, nbins=2000):
     Returns:
         tuple: (twi_interp, twi_model, twi_image, residual)
     """
-    twi_image = twi_spectra.copy()
-    wave_unravel = wave[good_solutions].ravel()
-    ind_unravel = np.argsort(wave_unravel)
-    twi_unravel = twi_spectra[good_solutions].ravel()
-    # Split sorted wavelengths into bins and take robust biweight of flux in each bin
-    twi_highres = [biweight(chunk, ignore_nan=True) for chunk in np.array_split(twi_unravel[ind_unravel], nbins)]
-    wave_highres = [np.mean(w) for w in np.array_split(wave_unravel[ind_unravel], nbins)]
-    twi_interp = interp1d(wave_highres, twi_highres, bounds_error=False, fill_value=np.nan, kind='quadratic')
-    twi_model = np.zeros_like(twi_spectra)
-    some_obj = twi_interp(wave[good_solutions])
-    twi_model[good_solutions] = some_obj
-    twi_image[~good_solutions] = 0.0
+    twi_image = np.array(twi_spectra, dtype=float, copy=True)
+    wave_arr = np.array(wave, dtype=float)
+    if twi_image.ndim != 2 or wave_arr.ndim != 2 or twi_image.shape != wave_arr.shape:
+        # Shape mismatch; return a do-nothing interpolator
+        def _nan_interp(x):
+            return np.full_like(x, np.nan, dtype=float)
+        return _nan_interp, np.zeros_like(twi_image), twi_image, twi_image * np.nan
+
+    # Flatten finite values from good rows only
+    mask_rows = np.asarray(good_solutions, dtype=bool)
+    if mask_rows.size != wave_arr.shape[0]:
+        mask_rows = np.ones(wave_arr.shape[0], dtype=bool)
+    w_flat = wave_arr[mask_rows].ravel()
+    f_flat = twi_image[mask_rows].ravel()
+    finite = np.isfinite(w_flat) & np.isfinite(f_flat)
+    w_flat = w_flat[finite]
+    f_flat = f_flat[finite]
+
+    if w_flat.size < 4:
+        # Not enough points to build a template
+        def _nan_interp(x):
+            return np.full_like(x, np.nan, dtype=float)
+        twi_model = np.zeros_like(twi_image)
+        residual = twi_image - twi_model
+        return _nan_interp, twi_model, twi_image, residual
+
+    # Sort by wavelength
+    order = np.argsort(w_flat)
+    w_sorted = w_flat[order]
+    f_sorted = f_flat[order]
+
+    # Bin into nbins across the finite wavelength range
+    wmin, wmax = np.nanmin(w_sorted), np.nanmax(w_sorted)
+    if not np.isfinite(wmin) or not np.isfinite(wmax) or wmax <= wmin:
+        def _nan_interp(x):
+            return np.full_like(x, np.nan, dtype=float)
+        twi_model = np.zeros_like(twi_image)
+        residual = twi_image - twi_model
+        return _nan_interp, twi_model, twi_image, residual
+
+    bin_edges = np.linspace(wmin, wmax, nbins + 1)
+    bin_idx = np.clip(np.searchsorted(bin_edges, w_sorted, side='right') - 1, 0, nbins - 1)
+
+    wave_highres = np.zeros(nbins, dtype=float)
+    twi_highres = np.zeros(nbins, dtype=float)
+    for i in range(nbins):
+        sel = bin_idx == i
+        if not np.any(sel):
+            wave_highres[i] = np.nan
+            twi_highres[i] = np.nan
+        else:
+            wave_highres[i] = np.nanmean(w_sorted[sel])
+            # Use biweight where possible; fallback to nanmedian
+            try:
+                twi_highres[i] = biweight(f_sorted[sel], ignore_nan=True)
+            except Exception:
+                twi_highres[i] = np.nanmedian(f_sorted[sel])
+
+    # Drop NaN bins and ensure strictly increasing x without duplicates
+    finite_bins = np.isfinite(wave_highres) & np.isfinite(twi_highres)
+    x = wave_highres[finite_bins]
+    y = twi_highres[finite_bins]
+    if x.size < 2:
+        def _nan_interp(v):
+            return np.full_like(v, np.nan, dtype=float)
+        twi_model = np.zeros_like(twi_image)
+        residual = twi_image - twi_model
+        return _nan_interp, twi_model, twi_image, residual
+
+    # Unique and sorted x
+    xu, idx = np.unique(x, return_index=True)
+    yu = y[idx]
+    if xu.size >= 3:
+        kind = 'quadratic'
+    else:
+        kind = 'linear'
+    twi_interp = interp1d(xu, yu, bounds_error=False, fill_value=np.nan, kind=kind, assume_sorted=True)
+
+    twi_model = np.zeros_like(twi_image)
+    try:
+        some_obj = twi_interp(wave_arr[mask_rows])
+        twi_model[mask_rows] = some_obj
+    except Exception:
+        # If evaluation fails, leave model zeros for those rows
+        pass
+    twi_image[~mask_rows] = 0.0
     residual = twi_image - twi_model
     return twi_interp, twi_model, twi_image, residual
 
