@@ -180,7 +180,7 @@ def _get_objects_tarfile(daterange, instrument='virus', rootdir='/work/03946/het
 def _get_objects_ratarmountcore(daterange, instrument='virus', rootdir='/work/03946/hetdex/maverick'):
     # Fast path using in-Python tar indexing via ratarmountcore (no OS mounts needed)
     try:
-        from ratarmountcore import SQLiteIndexedTar
+        from ratarmountcore import SQLiteIndex
         import io
     except Exception as e:
         # ratarmountcore not available; fall back
