@@ -436,10 +436,15 @@ def plot_fibernorm_compare(
 ) -> Optional[Path]:
     """Compare fiber-normalization between twilight and science.
 
-    For each fiber, compute a robust central value of the normalization by taking
-    the biweight location of the middle band (central column +/- band_halfwidth),
-    separately for the twilight-derived and the science-derived normalization.
-    Then plot both curves as a function of fiber index.
+    Extends the comparison to three spectral regions to check for color terms:
+    - Blue edge (low columns)
+    - Central band (existing behavior)
+    - Red edge (high columns)
+
+    For each region and for each fiber, compute a robust scalar by taking the
+    biweight location over a band of width ~2*band_halfwidth+1 columns, then
+    plot the twilight vs science normalization (each normalized to its median)
+    as a function of fiber index. Simple Δ(sci−twi) stats are annotated.
     """
     if fibernorm_twi is None or fibernorm_sci is None:
         return None
@@ -450,66 +455,110 @@ def plot_fibernorm_compare(
     Nfib, Npix = Ft.shape
     if Nfib == 0 or Npix == 0:
         return None
-    c = int(Npix // 2)
+
     hw = int(max(1, band_halfwidth))
-    lo = max(0, c - hw)
-    hi = min(Npix, c + hw + 1)
-    band_t = Ft[:, lo:hi]
-    band_s = Fs[:, lo:hi]
+    width = 2 * hw + 1
 
-    # Robust scalar per fiber via biweight over the band
-    vals_t = np.full(Nfib, np.nan, dtype=float)
-    vals_s = np.full(Nfib, np.nan, dtype=float)
+    # Define slices for blue, central, red bands of equal width where possible
+    c = int(Npix // 2)
+    # Central band
+    c_lo = max(0, c - hw)
+    c_hi = min(Npix, c + hw + 1)
+    # Blue band near start
+    b_lo = 0
+    b_hi = min(Npix, width)
+    # Red band near end
+    r_hi = Npix
+    r_lo = max(0, Npix - width)
+
+    bands = {
+        'Blue edge': (slice(None), slice(b_lo, b_hi)),
+        'Central': (slice(None), slice(c_lo, c_hi)),
+        'Red edge': (slice(None), slice(r_lo, r_hi)),
+    }
+
     from math_utils import biweight as _biw
-    for f in range(Nfib):
-        yt = band_t[f]
-        ys = band_s[f]
-        if np.isfinite(yt).any():
-            try:
-                vals_t[f] = float(_biw(yt[np.isfinite(yt)]))
-            except Exception:
-                vals_t[f] = float(np.nanmedian(yt))
-        if np.isfinite(ys).any():
-            try:
-                vals_s[f] = float(_biw(ys[np.isfinite(ys)]))
-            except Exception:
-                vals_s[f] = float(np.nanmedian(ys))
 
-    # Normalize both curves to their medians for clarity
-    def _norm(v):
+    def band_biweight(Fregion: np.ndarray) -> np.ndarray:
+        vals = np.full(Nfib, np.nan, dtype=float)
+        for f in range(Nfib):
+            y = Fregion[f]
+            if np.isfinite(y).any():
+                try:
+                    vals[f] = float(_biw(y[np.isfinite(y)]))
+                except Exception:
+                    vals[f] = float(np.nanmedian(y))
+        return vals
+
+    def _norm(v: np.ndarray) -> np.ndarray:
         med = np.nanmedian(v[np.isfinite(v)]) if np.isfinite(v).any() else 1.0
         if not np.isfinite(med) or med == 0:
             med = 1.0
         return v / med
 
-    vn_t = _norm(vals_t)
-    vn_s = _norm(vals_s)
+    # Compute per-band normalized curves for twi and sci
+    per_band = {}
+    for name, sl in bands.items():
+        row_sl, col_sl = sl
+        Bt = Ft[row_sl, col_sl]
+        Bs = Fs[row_sl, col_sl]
+        vt = band_biweight(Bt)
+        vs = band_biweight(Bs)
+        per_band[name] = (_norm(vt), _norm(vs))
 
     import matplotlib.pyplot as plt
-    fig, ax = plt.subplots(1, 1, figsize=(10.5, 3.8))
+    fig, axes = plt.subplots(1, 3, figsize=(15.5, 3.8), sharey=True)
+    if not isinstance(axes, (list, tuple, np.ndarray)):
+        axes = [axes]
     x = np.arange(Nfib, dtype=int)
-    mt = np.isfinite(vn_t)
-    ms = np.isfinite(vn_s)
-    if np.count_nonzero(mt) > 1:
-        ax.plot(x[mt], vn_t[mt], '-', lw=1.4, alpha=0.9, label='twilight')
-    if np.count_nonzero(ms) > 1:
-        ax.plot(x[ms], vn_s[ms], '-', lw=1.4, alpha=0.9, label='science')
 
-    # Display simple difference stats
-    mdiff = vn_s - vn_t
-    md = mdiff[np.isfinite(mdiff)]
-    if md.size:
-        mu = float(np.nanmedian(md))
-        sc = float(np.nanstd(md))
-        ax.text(0.01, 0.97, f"Δ(sci - twi): median={mu:.4f}, std={sc:.4f}", transform=ax.transAxes, va='top', ha='left', fontsize=9)
+    # Determine a common y-limit across panels for consistent comparison
+    all_vals = []
+    for name in ['Blue edge', 'Central', 'Red edge']:
+        vn_t, vn_s = per_band[name]
+        all_vals.append(vn_t[np.isfinite(vn_t)])
+        all_vals.append(vn_s[np.isfinite(vn_s)])
+    if any(v.size for v in all_vals):
+        cat = np.concatenate([v for v in all_vals if v.size])
+        if cat.size:
+            lo, hi = np.nanpercentile(cat, [2, 98])
+            if np.isfinite(lo) and np.isfinite(hi) and hi > lo:
+                ylim = (lo - 0.1 * (hi - lo), hi + 0.1 * (hi - lo))
+            else:
+                ylim = None
+        else:
+            ylim = None
+    else:
+        ylim = None
 
-    ax.set_xlabel('Fiber index')
-    ax.set_ylabel('Normalized fibernorm (unitless)')
-    ax.set_title(title)
-    ax.grid(alpha=0.25)
-    ax.legend(loc='best', frameon=False)
+    for ax, name in zip(axes, ['Blue edge', 'Central', 'Red edge']):
+        vn_t, vn_s = per_band[name]
+        mt = np.isfinite(vn_t)
+        ms = np.isfinite(vn_s)
+        if np.count_nonzero(mt) > 1:
+            ax.plot(x[mt], vn_t[mt], '-', lw=1.3, alpha=0.9, label='twilight')
+        if np.count_nonzero(ms) > 1:
+            ax.plot(x[ms], vn_s[ms], '-', lw=1.3, alpha=0.9, label='science')
+        mdiff = vn_s - vn_t
+        md = mdiff[np.isfinite(mdiff)]
+        if md.size:
+            mu = float(np.nanmedian(md))
+            sc = float(np.nanstd(md))
+            ax.text(0.02, 0.97, f"Δ: med={mu:.4f}, σ={sc:.4f}", transform=ax.transAxes, va='top', ha='left', fontsize=9)
+        ax.set_title(name)
+        ax.grid(alpha=0.25)
+        ax.set_xlabel('Fiber index')
+        if ylim is not None:
+            ax.set_ylim(*ylim)
 
-    fig.tight_layout()
+    axes[0].set_ylabel('Normalized fibernorm (unitless)')
+    # Only one legend to avoid clutter
+    handles, labels = axes[1].get_legend_handles_labels()
+    if handles:
+        axes[1].legend(loc='best', frameon=False)
+
+    fig.suptitle(title)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
     out_folder = Path(out_folder)
     out_folder.mkdir(parents=True, exist_ok=True)
     out = out_folder / filename
