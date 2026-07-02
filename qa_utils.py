@@ -23,6 +23,8 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg", force=True)
 import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
+from matplotlib.patches import Patch
 
 
 def _mad(a: np.ndarray) -> float:
@@ -225,22 +227,107 @@ def plot_identify_arc_summary(
     return out
 
 
+def plot_specmask_overlay(
+    out_folder: Path,
+    spec2d: Optional[np.ndarray],
+    maskspec: Optional[np.ndarray],
+    filename: str = "specmask_overlay.png",
+    title: str = "Spectral mask overlay",
+) -> Optional[Path]:
+    """Render a diagnostic image of the 2D spectra with a mask overlay.
+
+    The spectrum is shown with a robust grayscale colormap, and pixels flagged
+    by the spectral mask are overlaid in semi-transparent red so masked regions
+    are visually obvious.
+
+    Args:
+        out_folder: Directory to save the image.
+        spec2d: 2D array (Nrows x Npix) of extracted spectra.
+        maskspec: 2D mask array (same shape). Nonzero/True indicates masked.
+        filename: Output file name.
+        title: Title for the plot.
+
+    Returns:
+        Path to the saved PNG, or None if inputs are invalid.
+    """
+    if spec2d is None or maskspec is None:
+        return None
+    A = np.asarray(spec2d, dtype=float)
+    M = np.asarray(maskspec)
+    if A.ndim != 2 or M.ndim != 2 or A.shape != M.shape:
+        return None
+    nrows, npix = A.shape
+    if nrows == 0 or npix == 0:
+        return None
+
+    # Robust display range ignoring NaNs and infs
+    finite = np.isfinite(A)
+    if not np.any(finite):
+        vmin, vmax = 0.0, 1.0
+    else:
+        vals = A[finite]
+        lo, hi = np.percentile(vals, [5, 99.5])
+        if not np.isfinite(lo):
+            lo = np.nanmin(vals)
+        if not np.isfinite(hi):
+            hi = np.nanmax(vals)
+        if hi <= lo:
+            hi = lo + 1e-6
+        vmin, vmax = float(lo), float(hi)
+
+    fig, ax = plt.subplots(1, 1, figsize=(10, 4.2))
+    ax.imshow(A, aspect='auto', origin='lower', cmap='gray', vmin=vmin, vmax=vmax)
+
+    # Build a transparent/solid red colormap for mask overlay
+    mask_bool = np.array(M > 0)
+    overlay = np.zeros_like(mask_bool, dtype=float)
+    overlay[mask_bool] = 1.0
+    cmap_overlay = ListedColormap([
+        (1, 1, 1, 0.0),   # fully transparent for unmasked
+        (1, 0.0, 0.0, 0.45),  # semi-transparent red for masked
+    ])
+    ax.imshow(overlay, aspect='auto', origin='lower', cmap=cmap_overlay, interpolation='nearest')
+
+    ax.set_xlabel('Pixel')
+    ax.set_ylabel('Fiber/row')
+    ax.set_title(title)
+
+    # Add simple legend proxies
+    handles = [
+        Patch(facecolor='gray', edgecolor='none', alpha=0.6, label='spectrum'),
+        Patch(facecolor=(1, 0, 0, 0.45), edgecolor='none', label='masked'),
+    ]
+    ax.legend(handles=handles, loc='upper right', frameon=False)
+
+    fig.tight_layout()
+    out_folder = Path(out_folder)
+    out_folder.mkdir(parents=True, exist_ok=True)
+    out = out_folder / filename
+    fig.savefig(out, dpi=160)
+    plt.close(fig)
+    return out
+
+
 def save_amp_qa_page(
     out_folder: Path,
     amp_id: str,
     metrics: Dict[str, Any],
     ref_profile_img: Optional[Path] = None,
+    specmask_img: Optional[Path] = None,
 ) -> Path:
-    """Create a compact PNG QA page with key metrics and an optional image.
+    """Create a compact PNG QA page with key metrics and optional images.
 
     Also writes a JSON sidecar with the metrics.
     """
     out_folder = Path(out_folder)
     out_folder.mkdir(parents=True, exist_ok=True)
 
-    # Prepare figure
-    fig = plt.figure(figsize=(10, 6), constrained_layout=True)
-    gs = fig.add_gridspec(2, 2, height_ratios=[1, 2])
+    # Prepare figure with dynamic columns based on available images
+    fig = plt.figure(figsize=(11, 6.5), constrained_layout=True)
+    has_ref = bool(ref_profile_img) and Path(ref_profile_img).exists()
+    has_mask = bool(specmask_img) and Path(specmask_img).exists()
+    ncols = 2 if (has_ref and has_mask) else 1
+    gs = fig.add_gridspec(2, ncols, height_ratios=[1, 2])
 
     # Title and metrics panel
     ax0 = fig.add_subplot(gs[0, :])
@@ -262,14 +349,44 @@ def save_amp_qa_page(
     ax0.text(0.01, 0.10, "\n".join(lines), family='monospace', fontsize=11, va='bottom')
 
     # Image panel(s)
-    ax_img = fig.add_subplot(gs[1, :])
-    ax_img.axis('off')
-    if ref_profile_img and Path(ref_profile_img).exists():
-        img = plt.imread(ref_profile_img)
-        ax_img.imshow(img)
-        ax_img.set_title('Arc identification summary')
+    if ncols == 2:
+        ax1 = fig.add_subplot(gs[1, 0])
+        ax2 = fig.add_subplot(gs[1, 1])
+        for ax in (ax1, ax2):
+            ax.axis('off')
+        # Left: arc identification summary
+        if has_ref:
+            try:
+                img1 = plt.imread(ref_profile_img)
+                ax1.imshow(img1)
+                ax1.set_title('Arc identification summary')
+            except Exception:
+                ax1.text(0.5, 0.5, 'Arc ID image unavailable', ha='center', va='center', color='0.5')
+        else:
+            ax1.text(0.5, 0.5, 'Arc ID image unavailable', ha='center', va='center', color='0.5')
+        # Right: specmask overlay
+        if has_mask:
+            try:
+                img2 = plt.imread(specmask_img)
+                ax2.imshow(img2)
+                ax2.set_title('Spectral mask overlay')
+            except Exception:
+                ax2.text(0.5, 0.5, 'Specmask image unavailable', ha='center', va='center', color='0.5')
+        else:
+            ax2.text(0.5, 0.5, 'Specmask image unavailable', ha='center', va='center', color='0.5')
     else:
-        ax_img.text(0.5, 0.5, 'No diagnostic image available', ha='center', va='center', color='0.5')
+        ax_img = fig.add_subplot(gs[1, :])
+        ax_img.axis('off')
+        chosen = specmask_img if has_mask else ref_profile_img
+        if chosen and Path(chosen).exists():
+            try:
+                img = plt.imread(chosen)
+                ax_img.imshow(img)
+                ax_img.set_title('Spectral mask overlay' if has_mask else 'Arc identification summary')
+            except Exception:
+                ax_img.text(0.5, 0.5, 'No diagnostic image available', ha='center', va='center', color='0.5')
+        else:
+            ax_img.text(0.5, 0.5, 'No diagnostic image available', ha='center', va='center', color='0.5')
 
     # Save
     png_path = out_folder / f"QA_{amp_id}.png"

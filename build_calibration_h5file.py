@@ -28,7 +28,7 @@ from fiber_utils import measure_contrast, get_bigW, get_bigF
 from input_utils import setup_parser, set_daterange, setup_logging
 from math_utils import biweight
 from scipy.interpolate import interp1d
-from qa_utils import summarize_amp_metrics, save_amp_qa_page
+from qa_utils import summarize_amp_metrics, save_amp_qa_page, plot_specmask_overlay
 
 
 warnings.filterwarnings("ignore")
@@ -648,7 +648,15 @@ for ifuslot_key in ifuslots:
                     args.log.info(f"[QA] Starting QA for {amp_id} → {qa_out_dir}")
                     # Save QA summary page (PNG + JSON sidecar) using ref_img from get_wave
                     try:
-                        png_path = save_amp_qa_page(qa_out_dir, amp_id, metrics, ref_img)
+                        # Build specmask overlay image (if available)
+                        specmask_png = None
+                        try:
+                            if spec is not None and maskspec is not None and np.size(spec) and np.size(maskspec):
+                                fname = f"specmask_overlay_{amp_id}.png"
+                                specmask_png = plot_specmask_overlay(qa_out_dir, spec, maskspec, filename=fname)
+                        except Exception as e_sm:
+                            args.log.warning(f"[QA] Failed to make specmask overlay for {amp_id}: {e_sm}")
+                        png_path = save_amp_qa_page(qa_out_dir, amp_id, metrics, ref_img, specmask_png)
                         args.log.info(f"[QA] Wrote QA summary page: {png_path}")
                     except Exception as e_page:
                         args.log.warning(f"[QA] Failed to write QA page for {amp_id}: {e_page}")
