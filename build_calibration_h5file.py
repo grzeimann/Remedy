@@ -125,7 +125,6 @@ def get_tarinfo(tarnames, filenames):
 
 def _get_objects_tarfile(daterange, instrument='virus', rootdir='/work/03946/hetdex/maverick'):
     start_total = time.time()
-    dtstr = datetime.now().strftime('%Y-%m-%d')
     dates = []
     for date in daterange:
         date = '%04d%02d%02d' % (date.year, date.month, date.day)
@@ -140,11 +139,12 @@ def _get_objects_tarfile(daterange, instrument='virus', rootdir='/work/03946/het
             tarfolders.append(t)
     objectdict = {}
     filename_list = []
-    args.log.info(f"[{dtstr}] [get_objects:tarfile] Start scan: {len(dates)} dates, IFUSLOT={ifuslot}, {len(tarfolders)} tar files")
+    args.log.info(f"[get_objects:tarfile] Start scan: {len(dates)} dates, IFUSLOT={ifuslot}, {len(tarfolders)} tar files")
     total_fits = 0
     for tarfolder in tarfolders:
         t0 = time.time()
         date = tarfolder.split('/')[-3]
+        dtstr = date
         obsnum = int(tarfolder[-11:-4])
         NEXP = 1
         try:
@@ -175,7 +175,7 @@ def _get_objects_tarfile(daterange, instrument='virus', rootdir='/work/03946/het
             objectdict['%s_%07d_%02d' % (date, obsnum, NEXP)] = ''
             continue
     elapsed = time.time() - start_total
-    args.log.info(f"[{dtstr}] [get_objects:tarfile] Done. Files: {len(filename_list)} (total FITS seen {total_fits}), t={elapsed:.2f}s")
+    args.log.info(f"[get_objects:tarfile] Done. Files: {len(filename_list)} (total FITS seen {total_fits}), t={elapsed:.2f}s")
     return objectdict, filename_list
 
 
