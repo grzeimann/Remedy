@@ -223,11 +223,10 @@ def save_amp_qa_page(
     # Title and metrics panel
     ax0 = fig.add_subplot(gs[0, :])
     ax0.axis('off')
-    title = f"QA Summary — Amp: {metrics.get('amp', amp_id)}"
-    ax0.text(0.01, 0.85, title, fontsize=14, fontweight='bold')
 
     # Build multiline metrics text
     lines = [
+        f"QA Summary — Amp: {metrics.get('amp', amp_id)}",
         f"readnoise: {metrics.get('readnoise_e', np.nan):.2f} e-",
         f"bias median/MAD: {metrics.get('bias_median', np.nan):.2f} / {metrics.get('bias_mad', np.nan):.2f}",
         f"dark median/MAD: {metrics.get('dark_median', np.nan):.2f} / {metrics.get('dark_mad', np.nan):.2f}",
@@ -253,8 +252,6 @@ def save_amp_qa_page(
     # Save
     png_path = out_folder / f"QA_{amp_id}.png"
     fig.savefig(png_path, dpi=150)
-    plt.close(fig)
-
     # Write JSON sidecar
     sidecar = out_folder / f"QA_{amp_id}.json"
     try:

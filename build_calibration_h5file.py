@@ -433,8 +433,16 @@ def step_cmp_wave(curr_trace):
     _cmp_spec = get_spectra(_info[0], curr_trace)
     _wave = np.zeros((112, 1032))
     _wave_valid = False
+    ref_img = None
     try:
-        _wave = get_wave(_cmp_spec, curr_trace, T_array)
+        qa_dict = None
+        if args.make_qa:
+            amp_id = f"{ifuslot}_{amp}"
+            qa_dict = {
+                "out_folder": Path(args.qa_folder),
+                "ref_plot_name": f"ref_profile_quarters_{amp_id}.png",
+            }
+        _wave, ref_img = get_wave(_cmp_spec, curr_trace, T_array, qa=qa_dict)
         if _wave is None or not np.isfinite(_wave).any():
             _wave = np.zeros((112, 1032))
             args.log.error('Wavelength Failed for %s %s.' % (ifuslot_key, amp))
@@ -445,7 +453,7 @@ def step_cmp_wave(curr_trace):
     except Exception:
         args.log.error('Wavelength Failed for %s %s.' % (ifuslot_key, amp))
         _wave_valid = False
-    return _mastercmp, _cmp_spec, _wave, _wave_valid, _info
+    return _mastercmp, _cmp_spec, _wave, _wave_valid, ref_img, _info
 
 def step_twi(curr_trace):
     kind = 'twi'
@@ -463,7 +471,7 @@ def step_twi(curr_trace):
         _twi_spectra = None
     return _mastertwi, _twi_spectra, _info
 
-def step_sci_and_mask(curr_trace, curr_wave, wave_ok, twi_spectra_local):
+def step_sci_and_mask(curr_trace, curr_wave, wave_ok):
     kind = 'sci'
     args.log.info('Making %s master frame for %s %s' % (kind, ifuslot_key, amp))
     _info = build_master_frame(filename_dict[kind], tarinfo_dict[kind],
@@ -479,7 +487,7 @@ def step_sci_and_mask(curr_trace, curr_wave, wave_ok, twi_spectra_local):
         args.log.info('Skipping SCI model/mask for %s %s due to invalid wavelength solution.' % (ifuslot_key, amp))
         return _mastersci, _spec, _maskspec, _info
     try:
-        base_spectra = twi_spectra_local if twi_spectra_local is not None else _spec
+        base_spectra = _spec
         good_solutions = np.isfinite(curr_wave).sum(axis=1) > (0.8 * curr_wave.shape[1])
         sci_interp, sci_model, sci_image, _ = build_model_spectra(base_spectra, curr_wave, good_solutions)
         msci_model_spec = sci_interp(curr_wave)
@@ -562,6 +570,7 @@ for ifuslot_key in ifuslots:
         pixelmask = np.zeros((1032, 1032))
         wave_valid = False
         twi_spectra = None
+        ref_img = None
         
         # zro
         out = step_zro()
@@ -583,7 +592,7 @@ for ifuslot_key in ifuslots:
         if np.isfinite(trace).any():
             out = step_cmp_wave(trace)
             if out is not None:
-                mastercmp, _cmp, wave, wave_valid, info_cmp = out
+                mastercmp, _cmp, wave, wave_valid, ref_img, info_cmp = out
         else:
             args.log.error('Trace not available for %s %s. Skipping wavelength.' % (ifuslot_key, amp))
         
@@ -595,7 +604,7 @@ for ifuslot_key in ifuslots:
         
         # sci + mask
         if np.isfinite(trace).any():
-            out = step_sci_and_mask(trace, wave, wave_valid, twi_spectra)
+            out = step_sci_and_mask(trace, wave, wave_valid)
             if out is not None:
                 mastersci, spec, maskspec, info_sci = out
         
@@ -632,31 +641,10 @@ for ifuslot_key in ifuslots:
                             "contid": contid,
                         },
                     )
-                    # Derive a simple reference profile from lampspec (median over rows)
-                    ref_profile = None
-                    if _cmp is not None and np.isfinite(_cmp).any():
-                        try:
-                            ref_profile = np.nanmedian(_cmp, axis=0)
-                        except Exception:
-                            ref_profile = None
                     qa_out_dir = Path(args.qa_folder)
                     qa_out_dir.mkdir(parents=True, exist_ok=True)
                     args.log.info(f"[QA] Starting QA for {amp_id} → {qa_out_dir}")
-                    # Create ref profile quarters plot
-                    try:
-                        args.log.info(f"[QA] Creating ref_profile_quarters plot for {amp_id} …")
-                        ref_img = plot_ref_profile_quarters(
-                            qa_out_dir, ref_profile, None, None,
-                            filename=f"ref_profile_quarters_{amp_id}.png"
-                        )
-                        if ref_img is not None:
-                            args.log.info(f"[QA] Saved ref_profile_quarters plot: {ref_img}")
-                        else:
-                            args.log.info(f"[QA] Skipped ref_profile_quarters for {amp_id} (no ref profile available)")
-                    except Exception as e_plot:
-                        ref_img = None
-                        args.log.warning(f"[QA] Failed to create ref_profile_quarters for {amp_id}: {e_plot}")
-                    # Save QA summary page (PNG + JSON sidecar)
+                    # Save QA summary page (PNG + JSON sidecar) using ref_img from get_wave
                     try:
                         png_path = save_amp_qa_page(qa_out_dir, amp_id, metrics, ref_img)
                         args.log.info(f"[QA] Wrote QA summary page: {png_path}")

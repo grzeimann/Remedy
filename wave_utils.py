@@ -15,9 +15,11 @@ smooth polynomials across rows and along dispersion to deliver a complete
 from __future__ import annotations
 
 import numpy as np
-from typing import Optional
+from typing import Optional, Tuple
 from itertools import combinations
 from fiber_utils import find_peaks
+from qa_utils import plot_ref_profile_quarters
+from pathlib import Path
 
 # Default pixel length assumption for VIRUS spectra, used in some helpers
 PIXELS = 1032
@@ -136,16 +138,20 @@ def identify_arc(
     matches_final = match_with_model(peak_x, line_list, coeff_fit, x_tol=anchor_tol_pix)
     resid = np.array([m["wave_resid"] for m in matches_final], dtype=float)
     rms = np.sqrt(np.mean(resid ** 2))
+    detected_x = np.array([m["x_obs"] for m in matches_final], dtype=float)
     best = {
         "coeff": coeff_fit,
         "matches": matches_final,
         "nmatch": len(matches_final),
         "rms": rms,
+        "top_peaks_x": top_peaks_x,
+        "peak_x_all": np.array(peak_x, dtype=float),
+        "detected_x": detected_x,
     }
     return best, len(matches)
 
 
-def get_wave_single(fiber_arc_spectrum, final_order=4):
+def get_wave_single(fiber_arc_spectrum, final_order=4, qa: Optional[dict] = None):
     """
     Derive a per-fiber wavelength solution from an arc spectrum.
 
@@ -186,7 +192,8 @@ def get_wave(spec: np.ndarray,
              trace: np.ndarray,
              T_array: Optional[np.ndarray] = None,
              res_lim: float = 1.0,
-             order: int = 4) -> Optional[np.ndarray]:
+             order: int = 4,
+             qa: Optional[dict] = None) -> Tuple[Optional[np.ndarray], Optional[Path]]:
     """
     Build a 2D wavelength solution using robust per-row arc fitting.
 
@@ -199,11 +206,12 @@ def get_wave(spec: np.ndarray,
         order: Polynomial order used for cross-row and along-dispersion fits.
 
     Returns:
-        2D array of shape (Nrows x Npix) with wavelength at each pixel, or
-        None if insufficient good rows are found.
+        Tuple (wave, ref_img):
+        - wave: 2D array (Nrows x Npix) with wavelength at each pixel, or None if insufficient good rows are found.
+        - ref_img: Path to the QA ref_profile_quarters image produced (if any), otherwise None.
     """
     if spec is None or trace is None:
-        return None
+        return None, None
 
     nrows, npix = spec.shape
     w_seed = np.zeros_like(spec, dtype=float)
@@ -214,6 +222,8 @@ def get_wave(spec: np.ndarray,
     try_rows = np.unique(np.clip(try_rows, 0, nrows - 1))
 
     # Solve per selected row using robust single-fiber routine
+    qa_plotted = False
+    ref_img: Optional[Path] = None
     for j in try_rows:
         try:
             # Robustify by median-combining a small window of rows, as before
@@ -223,13 +233,44 @@ def get_wave(spec: np.ndarray,
             wave_j, res = get_wave_single(S, final_order=order)
             w_seed[j] = wave_j
             rms[j] = res
+
+            # Optionally create a QA plot for one representative fiber arc spectrum
+            if (not qa_plotted) and (qa is not None):
+                try:
+                    out_folder = qa.get("out_folder") if isinstance(qa, dict) else None
+                    if out_folder is not None:
+                        # Detect peaks and run identification to gather candidates and matches
+                        peak_loc, peaks = find_peaks(np.asarray(S, dtype=float), thresh=1)
+                        best, _ = identify_arc(
+                            peak_loc,
+                            peaks,
+                            LINE_LIST,
+                            min_sep=10,
+                            max_keep=15,
+                            anchor_tol_pix=12.0,
+                            final_order=order,
+                        )
+                        # Compose filename to indicate which row window was used
+                        fname = qa.get("ref_plot_name", f"ref_profile_quarters_row{int(j)}.png") if isinstance(qa, dict) else f"ref_profile_quarters_row{int(j)}.png"
+                        ref_img = plot_ref_profile_quarters(
+                            out_folder=out_folder,
+                            ref_profile=S,
+                            arc_pixel_guesses=best.get("peak_x_all"),
+                            ref_detected=best.get("detected_x"),
+                            filename=fname,
+                        )
+                        # Mark that we've produced one plot
+                        qa_plotted = True
+                except Exception:
+                    # Do not let QA plotting affect core wavelength solution
+                    pass
         except Exception:
             # Leave defaults (zeros), continue
             pass
 
     good = (rms > 0) & (rms < res_lim)
     if np.count_nonzero(good) < 7:
-        return None
+        return None, ref_img
 
     # Initialize final wavelength array
     wave = np.zeros_like(spec, dtype=float)
@@ -260,6 +301,6 @@ def get_wave(spec: np.ndarray,
                 jj = int(np.argmin(np.abs(np.where(good)[0] - j)))
                 wave[j] = wave[np.where(good)[0][jj]]
             else:
-                return None
+                return None, ref_img
 
-    return wave
+    return wave, ref_img
