@@ -434,6 +434,7 @@ def step_cmp_wave(curr_trace):
     _wave = np.zeros((112, 1032))
     _wave_valid = False
     ref_img = None
+    rms_rows = None
     try:
         qa_dict = None
         if args.make_qa:
@@ -442,7 +443,7 @@ def step_cmp_wave(curr_trace):
                 "out_folder": Path(args.qa_folder),
                 "ref_plot_name": f"ref_profile_quarters_{amp_id}.png",
             }
-        _wave, ref_img = get_wave(_cmp_spec, curr_trace, T_array, qa=qa_dict)
+        _wave, ref_img, rms_rows = get_wave(_cmp_spec, curr_trace, T_array, qa=qa_dict)
         if _wave is None or not np.isfinite(_wave).any():
             _wave = np.zeros((112, 1032))
             args.log.error('Wavelength Failed for %s %s.' % (ifuslot_key, amp))
@@ -453,7 +454,7 @@ def step_cmp_wave(curr_trace):
     except Exception:
         args.log.error('Wavelength Failed for %s %s.' % (ifuslot_key, amp))
         _wave_valid = False
-    return _mastercmp, _cmp_spec, _wave, _wave_valid, ref_img, _info
+    return _mastercmp, _cmp_spec, _wave, _wave_valid, ref_img, rms_rows, _info
 
 def step_twi(curr_trace):
     kind = 'twi'
@@ -592,7 +593,7 @@ for ifuslot_key in ifuslots:
         if np.isfinite(trace).any():
             out = step_cmp_wave(trace)
             if out is not None:
-                mastercmp, _cmp, wave, wave_valid, ref_img, info_cmp = out
+                mastercmp, _cmp, wave, wave_valid, ref_img, rms_rows, info_cmp = out
         else:
             args.log.error('Trace not available for %s %s. Skipping wavelength.' % (ifuslot_key, amp))
         
@@ -640,6 +641,7 @@ for ifuslot_key in ifuslots:
                             "ifuid": ifuid,
                             "contid": contid,
                         },
+                        arc_rms_array=rms_rows,
                     )
                     qa_out_dir = Path(args.qa_folder)
                     qa_out_dir.mkdir(parents=True, exist_ok=True)

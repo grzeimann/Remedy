@@ -44,6 +44,7 @@ def summarize_amp_metrics(
     lampspec: Optional[np.ndarray],
     maskspec: Optional[np.ndarray],
     extra: Optional[Dict[str, Any]] = None,
+    arc_rms_array: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
     """Compute scalar QA metrics for an amplifier.
 
@@ -95,20 +96,14 @@ def summarize_amp_metrics(
     else:
         metrics["failed_wave_fibers"] = int(112)
 
-    # Median arc RMS (placeholder): if residuals of wavelength fit aren't available,
-    # we estimate a proxy as robust std of high-pass-filtered lampspec across pixels,
-    # then take the median over rows. If lampspec missing, set NaN.
+    # Median arc RMS: prefer provided per-row residuals from wavelength fit.
     arc_rms = np.nan
-    if lampspec is not None:
+    if arc_rms_array is not None:
         try:
-            ls = np.asarray(lampspec, dtype=float)
-            # High-pass via median filter approximation using rolling window if available
-            # Fallback: subtract per-row median
-            if ls.ndim == 2 and ls.shape[1] > 5:
-                med = np.nanmedian(ls, axis=1)[:, None]
-                hp = ls - med
-                row_rms = 1.4826 * np.nanmedian(np.abs(hp), axis=1)
-                arc_rms = float(np.nanmedian(row_rms))
+            arr = np.asarray(arc_rms_array, dtype=float)
+            fin = arr[np.isfinite(arr) & (arr > 0)]
+            if fin.size:
+                arc_rms = float(np.nanmedian(fin))
         except Exception:
             arc_rms = np.nan
     metrics["median_arc_rms"] = arc_rms

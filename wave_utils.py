@@ -15,6 +15,7 @@ smooth polynomials across rows and along dispersion to deliver a complete
 from __future__ import annotations
 
 import numpy as np
+import logging
 from typing import Optional, Tuple
 from itertools import combinations
 from fiber_utils import find_peaks
@@ -193,7 +194,7 @@ def get_wave(spec: np.ndarray,
              T_array: Optional[np.ndarray] = None,
              res_lim: float = 1.0,
              order: int = 4,
-             qa: Optional[dict] = None) -> Tuple[Optional[np.ndarray], Optional[Path]]:
+             qa: Optional[dict] = None) -> Tuple[Optional[np.ndarray], Optional[Path], Optional[np.ndarray]]:
     """
     Build a 2D wavelength solution using robust per-row arc fitting.
 
@@ -206,12 +207,13 @@ def get_wave(spec: np.ndarray,
         order: Polynomial order used for cross-row and along-dispersion fits.
 
     Returns:
-        Tuple (wave, ref_img):
+        Tuple (wave, ref_img, rms_rows):
         - wave: 2D array (Nrows x Npix) with wavelength at each pixel, or None if insufficient good rows are found.
         - ref_img: Path to the QA ref_profile_quarters image produced (if any), otherwise None.
+        - rms_rows: 1D array (Nrows,) with per-row RMS residuals from seed fits (0 for rows not attempted), or None if unavailable.
     """
     if spec is None or trace is None:
-        return None, None
+        return None, None, None
 
     nrows, npix = spec.shape
     w_seed = np.zeros_like(spec, dtype=float)
@@ -261,7 +263,8 @@ def get_wave(spec: np.ndarray,
                         )
                         # Mark that we've produced one plot
                         qa_plotted = True
-                except Exception:
+                except Exception as e:
+                    logging.getLogger('build_master_bias').warning(f"[QA] Error producing ref_profile_quarters for row {j}: {e}")
                     # Do not let QA plotting affect core wavelength solution
                     pass
         except Exception:
@@ -270,7 +273,7 @@ def get_wave(spec: np.ndarray,
 
     good = (rms > 0) & (rms < res_lim)
     if np.count_nonzero(good) < 7:
-        return None, ref_img
+        return None, ref_img, rms
 
     # Initialize final wavelength array
     wave = np.zeros_like(spec, dtype=float)
@@ -301,6 +304,6 @@ def get_wave(spec: np.ndarray,
                 jj = int(np.argmin(np.abs(np.where(good)[0] - j)))
                 wave[j] = wave[np.where(good)[0][jj]]
             else:
-                return None, ref_img
+                return None, ref_img, rms
 
-    return wave, ref_img
+    return wave, ref_img, rms
