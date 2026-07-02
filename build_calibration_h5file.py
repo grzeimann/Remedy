@@ -297,73 +297,6 @@ def build_master_frame(file_list, tarinfo_list, ifuslot, amp, kind, log,
                                              d4.hour, d4.minute, d4.second)
     return masterbias, masterstd, avgdate, bia_list[0][1], bia_list[0][4], bia_list[0][5]
 
-def get_specmask(amp, wave, trace, masterbias, masterdark, readnoise,
-                 masterflt, mastersci):
-    def_wave = np.linspace(3470., 5540., 1036*2)
-
-    for i, master in enumerate([masterflt, mastersci]):
-        master[:] -= masterbias
-        if i == 1:
-            master[:] -= masterdark
-        plaw = get_powerlaw(master, trace)
-        master[:] -= plaw
-        spectra = get_spectra(master, trace)
-        scirect = np.zeros((spectra.shape[0], len(def_wave)))
-        for j in np.arange(spectra.shape[0]):
-            scirect[j] = np.interp(def_wave, wave[j], spectra[j], left=np.nan,
-                            right=np.nan)
-        Avgspec = np.nanmedian(scirect, axis=0)
-        avgfiber = np.nanmedian(scirect / Avgspec, axis=1)
-        bigW = get_bigW(wave, trace, master)
-        bigF, F0 = get_bigF(trace, master)
-        sel = np.isfinite(Avgspec)
-        I = interp1d(def_wave[sel], Avgspec[sel], kind='quadratic',
-                     fill_value='extrapolate')
-        modelimage = I(bigW)
-        J = interp1d(F0, avgfiber, kind='quadratic',
-                     fill_value='extrapolate')
-        modelimageF = J(bigF)
-        flatimage = master / modelimage / modelimageF
-        if i == 0:
-            Flat = flatimage * 1.
-        if i == 1:
-            skyimage = Flat * modelimage * modelimageF
-            skysub = master - skyimage
-            error = np.sqrt(readnoise**2 + master)
-            spec = get_spectra(skysub, trace)
-            syserr = spec * 0.
-            for k in np.arange(spec.shape[0]):
-                 dummy = np.interp(wave[k], def_wave, Avgspec, left=0.0,
-                                   right=0.0)
-                 d1 = np.abs(dummy[1:-1] - dummy[:-2])
-                 d2 = np.abs(dummy[2:] - dummy[1:-1])
-                 ad = (d1 + d2) / 2.
-                 syserr[k] = np.hstack([ad[0], ad, ad[-1]])
-            specerr = get_spectra_error(error, trace)
-            toterr = np.sqrt(specerr**2 + (syserr*1.0)**2)
-            G = Gaussian2DKernel(7.)
-            data = spec / toterr
-            imask = np.abs(data) > 0.5
-            data[imask] = np.nan
-            c = convolve(data, G, boundary='extend')
-            data = spec / toterr
-            data[:] -= c
-            imask = np.abs(data) > 0.5
-            data[imask] = np.nan
-            G = Gaussian2DKernel(3.)
-            N = data.shape[0] * 1.
-            arr = np.arange(data.shape[0]-2)
-            if (amp == 'LU') or (amp == 'RL'):
-                data = data[::-1, :]
-            for j in arr:
-                inds = np.where(np.sum(np.isnan(data[j:]), axis=0) > (N-j)/3.)[0]
-                for ind in inds:
-                    if np.isnan(data[j, ind]):
-                        data[j:, ind] = np.nan
-            if (amp == 'LU') or (amp == 'RL'):
-                data = data[::-1, :]
-    return np.array(np.isnan(data), dtype='float32')
-
 # --- Calibration recipe helper functions (scoped to this amp) ---
 def step_zro():
     kind = 'zro'
@@ -407,9 +340,11 @@ def step_flt_trace(curr_pixelmask):
     _pixelmask = np.array(pixelmask2 + curr_pixelmask > 0, dtype=int)
     args.log.info('Getting trace for %s %s' % (ifuslot_key, amp))
     _trace = np.zeros((112, 1032))
+    _xchunks = None
+    _trace_chunks = None
     try:
         _specid, _ifuSlot, _ifuid = ['%03d' % int(z) for z in [_info[3], ifuslot, _info[4]]]
-        _trace, _ref = get_trace(_info[0], _specid, _ifuSlot, _ifuid, amp, _info[2][:8], dirname)
+        _trace, _ref, _xchunks, _trace_chunks = get_trace(_info[0], _specid, _ifuSlot, _ifuid, amp, _info[2][:8], dirname)
         _flt_spec = get_spectra(_info[0], _trace)
         cm, cl, ch = measure_contrast(_info[0], _flt_spec, _trace)
         if cm is not None:
@@ -418,7 +353,7 @@ def step_flt_trace(curr_pixelmask):
                                                                                              cm, ch))
     except Exception:
         args.log.error('Trace Failed for %s %s.' % (ifuslot_key, amp))
-    return _masterflt, _pixelmask, _trace, _info
+    return _masterflt, _pixelmask, _trace, _xchunks, _trace_chunks, _info
 
 def step_cmp_wave(curr_trace):
     kind = 'cmp'
@@ -587,7 +522,7 @@ for ifuslot_key in ifuslots:
         # flt + trace
         out = step_flt_trace(pixelmask)
         if out is not None:
-            masterflt, pixelmask, trace, info_flt = out
+            masterflt, pixelmask, trace, xchunks, trace_chunks, info_flt = out
         
         # cmp + wave
         if np.isfinite(trace).any():
@@ -656,14 +591,16 @@ for ifuslot_key in ifuslots:
                                 specmask_png = plot_specmask_overlay(qa_out_dir, spec, maskspec, filename=fname)
                         except Exception as e_sm:
                             args.log.warning(f"[QA] Failed to make specmask overlay for {amp_id}: {e_sm}")
-                        # Build trace overlay image (if available)
+                        # Build trace chunks diagnostic image (if available)
                         trace_png = None
                         try:
-                            if masterflt is not None and trace is not None and np.size(masterflt) and np.size(trace):
-                                tname = f"trace_overlay_{amp_id}.png"
-                                trace_png = plot_trace_overlay(qa_out_dir, masterflt, trace, filename=tname)
+                            if (trace is not None and np.size(trace) and
+                                xchunks is not None and trace_chunks is not None and
+                                np.size(xchunks) and np.size(trace_chunks)):
+                                tname = f"trace_chunks_{amp_id}.png"
+                                trace_png = plot_trace_overlay(qa_out_dir, xchunks, trace_chunks, trace, filename=tname)
                         except Exception as e_tr:
-                            args.log.warning(f"[QA] Failed to make trace overlay for {amp_id}: {e_tr}")
+                            args.log.warning(f"[QA] Failed to make trace chunks diagnostic for {amp_id}: {e_tr}")
                         png_path = save_amp_qa_page(qa_out_dir, amp_id, metrics, ref_img, specmask_png, trace_png)
                         args.log.info(f"[QA] Wrote QA summary page: {png_path}")
                     except Exception as e_page:

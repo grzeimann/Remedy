@@ -310,77 +310,109 @@ def plot_specmask_overlay(
 
 def plot_trace_overlay(
     out_folder: Path,
-    masterflt: Optional[np.ndarray],
+    xchunks: Optional[np.ndarray],
+    trace_chunks: Optional[np.ndarray],
     trace: Optional[np.ndarray],
-    filename: str = "trace_overlay.png",
-    title: str = "Trace overlay on master flat",
-    step: int = 8,
+    filename: str = "trace_chunks.png",
+    title: str = "Trace chunks diagnostic",
+    fibers: Optional[list] = None,
 ) -> Optional[Path]:
-    """Render master flat with overlaid fiber traces.
+    """Diagnostic plot of trace chunk positions vs. full trace for selected fibers.
 
-    Overlays a subset of fiber traces as polylines on top of the flat-field
-    image to visually confirm the trace solution aligns with the illumination.
+    Uses the outputs from fiber_utils.get_trace (xchunks and trace_chunks) and the
+    final interpolated trace to visualize agreement. For each selected fiber, we:
+    - subtract the mean of that fiber's full trace from both datasets
+    - scatter-plot (xchunks, trace_chunks[f]) and overlay the full trace line
+      (xpix, trace[f]) on the same axes so multiple fibers share a common y-scale.
 
     Args:
         out_folder: Directory to save the image.
-        masterflt: 2D flat image (Ny x Nx), typically 1032x1032.
-        trace: 2D array (Nfibers x Npix) giving detector row (y) vs spectral pixel (x).
-        filename: Output filename.
+        xchunks: 1D array of representative x pixel positions per chunk (length Nchunks).
+        trace_chunks: 2D array (Nfibers x Nchunks) of per-chunk trace estimates.
+        trace: 2D array (Nfibers x Npix) of final trace vs. pixel.
+        filename: Output filename (PNG).
         title: Title for the plot.
-        step: Plot every Nth fiber to reduce clutter (default 8).
+        fibers: Optional list of fiber indices to plot; defaults to [3, 55, 110]
+            (clipped to the available range).
 
     Returns:
         Path to the saved PNG, or None if inputs are invalid.
     """
-    if masterflt is None or trace is None:
+    if xchunks is None or trace_chunks is None or trace is None:
         return None
-    A = np.asarray(masterflt, dtype=float)
+    xc = np.asarray(xchunks, dtype=float).ravel()
+    Trc = np.asarray(trace_chunks, dtype=float)
     Tr = np.asarray(trace, dtype=float)
-    if A.ndim != 2 or Tr.ndim != 2:
+    if Trc.ndim != 2 or Tr.ndim != 2 or xc.ndim != 1:
         return None
-    Ny, Nx = A.shape
-    # Expect trace shape (Nfibers, Npix) with Npix ~ Nx
+    Nfib_c, Nch = Trc.shape
     Nfib, Npix = Tr.shape
-    if Nx <= 1 or Ny <= 1 or Npix <= 1:
+    if Nfib == 0 or Npix == 0 or Nch == 0:
         return None
+    # Ensure sizes are consistent
+    if xc.size != Nch:
+        # try to coerce; otherwise fail
+        try:
+            xc = xc[:Nch]
+        except Exception:
+            return None
+    # Default fibers to plot
+    if fibers is None:
+        fibers = [3, 55, 110]
+    # Clip to available range and unique
+    fibers = sorted(set(int(max(0, min(f, Nfib - 1))) for f in fibers))
+    if len(fibers) == 0:
+        fibers = [min(0, Nfib - 1)]
 
-    # Robust display scaling
-    finite = np.isfinite(A)
-    if not np.any(finite):
-        vmin, vmax = 0.0, 1.0
-    else:
-        vals = A[finite]
-        lo, hi = np.percentile(vals, [5, 99.5])
-        if not np.isfinite(lo):
-            lo = np.nanmin(vals)
-        if not np.isfinite(hi):
-            hi = np.nanmax(vals)
-        if hi <= lo:
-            hi = lo + 1e-6
-        vmin, vmax = float(lo), float(hi)
+    xpix = np.arange(Npix, dtype=float)
 
-    fig, ax = plt.subplots(1, 1, figsize=(10.5, 4.2))
-    ax.imshow(A, aspect='auto', origin='lower', cmap='gray', vmin=vmin, vmax=vmax)
+    # Build the figure
+    fig, ax = plt.subplots(1, 1, figsize=(11.0, 4.2))
 
-    x = np.arange(Npix, dtype=float)
-    # Choose a subset of fibers evenly spaced
-    jj = np.arange(0, Nfib, max(1, int(step)))
-    colors = plt.cm.viridis(np.linspace(0.1, 0.9, len(jj)))
-    for k, j in enumerate(jj):
-        y = Tr[j]
-        if not np.isfinite(y).any():
+    colors = plt.cm.tab10(np.linspace(0, 1, max(10, len(fibers))))
+    for k, f in enumerate(fibers):
+        y_full = Tr[f]
+        if not np.isfinite(y_full).any():
             continue
-        # mask non-finite
-        m = np.isfinite(y)
-        if np.count_nonzero(m) < 5:
-            continue
-        ax.plot(x[m], y[m], '-', lw=0.8, alpha=0.8, color=colors[k])
+        mu = float(np.nanmean(y_full)) if np.isfinite(y_full).any() else 0.0
+        y_off = y_full - mu
+        # chunk samples for this fiber
+        y_chunks = Trc[f]
+        # subtract same mean from chunks
+        y_chunks_off = y_chunks - mu
+        c = colors[k % colors.shape[0]]
+        # line of full trace
+        m_full = np.isfinite(y_off)
+        if np.count_nonzero(m_full) > 3:
+            ax.plot(xpix[m_full], y_off[m_full], '-', lw=1.0, alpha=0.9, color=c, label=f"fiber {f} trace")
+        # scatter of chunk measurements
+        m_chunks = np.isfinite(y_chunks_off) & np.isfinite(xc)
+        if np.count_nonzero(m_chunks) > 0:
+            ax.scatter(xc[m_chunks], y_chunks_off[m_chunks], s=22, marker='o', facecolors='none', edgecolors=c, alpha=0.9, label=f"fiber {f} chunks")
 
-    ax.set_xlim(0, Nx - 1)
-    ax.set_ylim(0, Ny - 1)
+    ax.set_xlim(0, max(1, Npix - 1))
+    # Y-limits: symmetric around 0 to compare fibers
+    y_all = []
+    for f in fibers:
+        if 0 <= f < Nfib:
+            y_full = Tr[f]
+            if np.isfinite(y_full).any():
+                mu = float(np.nanmean(y_full))
+                y_all.append(y_full - mu)
+            y_chunks = Trc[f] if f < Nfib_c else None
+            if y_chunks is not None:
+                y_all.append(y_chunks - mu)
+    if len(y_all):
+        ycat = np.concatenate([a[np.isfinite(a)] for a in y_all if a is not None])
+        if ycat.size:
+            lim = np.nanpercentile(np.abs(ycat), 98)
+            if np.isfinite(lim) and lim > 0:
+                ax.set_ylim(-1.1 * lim, 1.1 * lim)
     ax.set_xlabel('Spectral pixel (x)')
-    ax.set_ylabel('Detector row (y)')
+    ax.set_ylabel('Row offset (pixels) [mean-subtracted]')
     ax.set_title(title)
+    ax.grid(alpha=0.25)
+    ax.legend(loc='upper right', ncol=2, fontsize=9, frameon=False)
 
     fig.tight_layout()
     out_folder = Path(out_folder)
@@ -401,6 +433,7 @@ def save_amp_qa_page(
 ) -> Path:
     """Create a compact PNG QA page with key metrics and optional images.
 
+    Layout: metrics panel on the left; diagnostic plots stacked vertically on the right.
     Also writes a JSON sidecar with the metrics.
     """
     out_folder = Path(out_folder)
@@ -413,16 +446,20 @@ def save_amp_qa_page(
     if specmask_img and Path(specmask_img).exists():
         items.append((Path(specmask_img), 'Spectral mask overlay'))
     if trace_img and Path(trace_img).exists():
-        items.append((Path(trace_img), 'Trace overlay on master flat'))
+        items.append((Path(trace_img), 'Trace chunks diagnostic'))
 
-    # Prepare figure with dynamic columns based on available images
-    ncols = max(1, len(items))
-    fig = plt.figure(figsize=(11, 6.5), constrained_layout=True)
-    gs = fig.add_gridspec(2, ncols, height_ratios=[1, 2])
+    # Ensure at least one row on the right (placeholder if none)
+    nimgs = max(1, len(items))
 
-    # Title and metrics panel
-    ax0 = fig.add_subplot(gs[0, :])
-    ax0.axis('off')
+    # Figure size scales with number of images to keep each readable
+    fig_height = max(6.5, 3.0 * nimgs + 1.0)
+    fig = plt.figure(figsize=(12, fig_height), constrained_layout=True)
+    # 2 columns: left for metrics (spans all rows), right stacks images
+    gs = fig.add_gridspec(nrows=nimgs, ncols=2, width_ratios=[1, 2])
+
+    # Left: metrics panel spanning all rows
+    ax_text = fig.add_subplot(gs[:, 0])
+    ax_text.axis('off')
 
     # Build multiline metrics text
     lines = [
@@ -437,35 +474,24 @@ def save_amp_qa_page(
         f"failed wavelength fibers: {metrics.get('failed_wave_fibers', 0)}",
         f"median arc RMS: {metrics.get('median_arc_rms', np.nan):.3f}",
     ]
-    ax0.text(0.01, 0.10, "\n".join(lines), family='monospace', fontsize=11, va='bottom')
+    ax_text.text(0.02, 0.98, "\n".join(lines), family='monospace', fontsize=11, va='top')
 
-    # Image panel(s)
-    if ncols == 1:
-        ax_img = fig.add_subplot(gs[1, :])
-        ax_img.axis('off')
-        if items:
-            try:
-                img = plt.imread(items[0][0])
-                ax_img.imshow(img)
-                ax_img.set_title(items[0][1])
-            except Exception:
-                ax_img.text(0.5, 0.5, 'No diagnostic image available', ha='center', va='center', color='0.5')
-        else:
-            ax_img.text(0.5, 0.5, 'No diagnostic image available', ha='center', va='center', color='0.5')
+    # Right: stacked images
+    if len(items) == 0:
+        ax = fig.add_subplot(gs[0, 1])
+        ax.axis('off')
+        ax.text(0.5, 0.5, 'No diagnostic image available', ha='center', va='center', color='0.5')
     else:
-        for i in range(ncols):
-            ax = fig.add_subplot(gs[1, i])
+        for i in range(nimgs):
+            ax = fig.add_subplot(gs[i, 1])
             ax.axis('off')
-            if i < len(items):
-                path_i, title_i = items[i]
-                try:
-                    img = plt.imread(path_i)
-                    ax.imshow(img)
-                    ax.set_title(title_i)
-                except Exception:
-                    ax.text(0.5, 0.5, 'Image unavailable', ha='center', va='center', color='0.5')
-            else:
-                ax.text(0.5, 0.5, 'No image', ha='center', va='center', color='0.5')
+            path_i, title_i = items[i]
+            try:
+                img = plt.imread(path_i)
+                ax.imshow(img)
+                ax.set_title(title_i)
+            except Exception:
+                ax.text(0.5, 0.5, 'Image unavailable', ha='center', va='center', color='0.5')
 
     # Save
     png_path = out_folder / f"QA_{amp_id}.png"

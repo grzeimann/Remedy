@@ -366,7 +366,7 @@ def get_trace(twilight, specid, ifuslot, ifuid, amp, obsdate, tr_folder):
         trace[i] = np.polyval(np.polyfit(xchunks[sel], Trace[i, sel], 7), x)
     if (specid == '504') and (ifuid == '018') and (amp == 'RU'):
         return trace[:-1, :], ref[:-1]
-    return trace, ref
+    return trace, ref, xchunks, Trace
 
 
 def get_spectra(array_flt, array_trace, npix=5):
