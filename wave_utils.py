@@ -19,7 +19,7 @@ import logging
 from typing import Optional, Tuple
 from itertools import combinations
 from fiber_utils import find_peaks
-from qa_utils import plot_ref_profile_quarters, plot_identify_arc_summary
+from qa_utils import plot_identify_arc_summary
 from pathlib import Path
 
 # Default pixel length assumption for VIRUS spectra, used in some helpers
@@ -133,12 +133,35 @@ def identify_arc(
             best_coeff = coeff
             best_rms = rms
     coeff = best_coeff
-    matches = match_with_model(peak_x, line_list, coeff, x_tol=anchor_tol_pix)
-    matches = sigma_clip_matches(matches, nsig=3.0)
-    coeff_fit, _ = refit_from_matches(matches, degree=final_order)
+    logger = logging.getLogger('build_master_bias')
+    # Iteratively refine: match -> sigma-clip -> refit, until stable
+    prev_idx = None
+    coeff_fit = coeff
+    matches = []
+    max_iter = 5
+    for it in range(max_iter):
+        matches = match_with_model(peak_x, line_list, coeff_fit, x_tol=anchor_tol_pix)
+        if not matches:
+            logger.debug('[identify_arc] No matches at iter %d', it)
+            break
+        # Sigma-clip residuals in wavelength space
+        clipped = sigma_clip_matches(matches, nsig=3.0)
+        # Ensure we have enough points to fit the desired order
+        if len(clipped) < max(3, final_order + 1):
+            # If clipping is too aggressive, fall back to unclipped matches
+            clipped = matches
+        # Refit coefficients
+        coeff_fit, _ = refit_from_matches(clipped, degree=final_order)
+        # Check for stability of the set of used peaks
+        idx = tuple(sorted(m['peak_index'] for m in clipped))
+        logger.debug('[identify_arc] iter %d: nmatch=%d (clipped=%d)', it, len(matches), len(clipped))
+        if idx == prev_idx:
+            break
+        prev_idx = idx
+    # Final evaluation with the last coefficients
     matches_final = match_with_model(peak_x, line_list, coeff_fit, x_tol=anchor_tol_pix)
     resid = np.array([m["wave_resid"] for m in matches_final], dtype=float)
-    rms = np.sqrt(np.mean(resid ** 2))
+    rms = np.sqrt(np.mean(resid ** 2)) if resid.size else np.inf
     detected_x = np.array([m["x_obs"] for m in matches_final], dtype=float)
     best = {
         "coeff": coeff_fit,
@@ -149,7 +172,7 @@ def identify_arc(
         "peak_x_all": np.array(peak_x, dtype=float),
         "detected_x": detected_x,
     }
-    return best, len(matches)
+    return best, len(matches_final)
 
 
 def get_wave_single(fiber_arc_spectrum, final_order=4, qa: Optional[dict] = None):

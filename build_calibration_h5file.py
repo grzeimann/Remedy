@@ -28,7 +28,7 @@ from fiber_utils import measure_contrast, get_bigW, get_bigF
 from input_utils import setup_parser, set_daterange, setup_logging
 from math_utils import biweight
 from scipy.interpolate import interp1d
-from qa_utils import summarize_amp_metrics, plot_ref_profile_quarters, save_amp_qa_page
+from qa_utils import summarize_amp_metrics, save_amp_qa_page
 
 
 warnings.filterwarnings("ignore")
