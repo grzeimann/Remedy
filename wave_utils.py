@@ -19,7 +19,7 @@ import logging
 from typing import Optional, Tuple
 from itertools import combinations
 from fiber_utils import find_peaks
-from qa_utils import plot_ref_profile_quarters
+from qa_utils import plot_ref_profile_quarters, plot_identify_arc_summary
 from pathlib import Path
 
 # Default pixel length assumption for VIRUS spectra, used in some helpers
@@ -253,18 +253,17 @@ def get_wave(spec: np.ndarray,
                             final_order=order,
                         )
                         # Compose filename to indicate which row window was used
-                        fname = qa.get("ref_plot_name", f"ref_profile_quarters_row{int(j)}.png") if isinstance(qa, dict) else f"ref_profile_quarters_row{int(j)}.png"
-                        ref_img = plot_ref_profile_quarters(
+                        fname = qa.get("ref_plot_name", f"identify_arc_summary_row{int(j)}.png") if isinstance(qa, dict) else f"identify_arc_summary_row{int(j)}.png"
+                        ref_img = plot_identify_arc_summary(
                             out_folder=out_folder,
                             ref_profile=S,
-                            arc_pixel_guesses=best.get("peak_x_all"),
-                            ref_detected=best.get("detected_x"),
+                            best=best,
                             filename=fname,
                         )
                         # Mark that we've produced one plot
                         qa_plotted = True
                 except Exception as e:
-                    logging.getLogger('build_master_bias').warning(f"[QA] Error producing ref_profile_quarters for row {j}: {e}")
+                    logging.getLogger('build_master_bias').warning(f"[QA] Error producing identify_arc_summary for row {j}: {e}")
                     # Do not let QA plotting affect core wavelength solution
                     pass
         except Exception:

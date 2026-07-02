@@ -441,7 +441,7 @@ def step_cmp_wave(curr_trace):
             amp_id = f"{ifuslot}_{amp}"
             qa_dict = {
                 "out_folder": Path(args.qa_folder),
-                "ref_plot_name": f"ref_profile_quarters_{amp_id}.png",
+                "ref_plot_name": f"identify_arc_summary_{amp_id}.png",
             }
         _wave, ref_img, rms_rows = get_wave(_cmp_spec, curr_trace, T_array, qa=qa_dict)
         if _wave is None or not np.isfinite(_wave).any():

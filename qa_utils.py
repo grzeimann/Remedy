@@ -128,10 +128,13 @@ def plot_ref_profile_quarters(
     ref_detected: Optional[np.ndarray] = None,
     filename: str = "ref_profile_quarters.png",
 ) -> Optional[Path]:
-    """Four-row diagnostic: ref_profile split into X-quarters with guesses vs detections.
+    """Four-row diagnostic: ref_profile split into X-quarters with candidates vs matched.
 
-    Standalone version of the provided plotting helper. Inputs may be None; in
-    that case, the function returns without creating a file.
+    Notes on inputs:
+    - arc_pixel_guesses: array of all detected peak candidate pixel positions.
+    - ref_detected: array of matched peak positions (subset of candidates), may be a different length.
+
+    Inputs may be None; in that case, the function returns without creating a file.
     """
     if ref_profile is None:
         return None
@@ -145,11 +148,26 @@ def plot_ref_profile_quarters(
 
     guesses = np.asarray(arc_pixel_guesses, dtype=float).ravel() if arc_pixel_guesses is not None else np.array([])
     det = np.asarray(ref_detected, dtype=float).ravel() if ref_detected is not None else np.array([])
+    # Ensure arrays exist (empty arrays rather than None)
     if guesses.size == 0:
         guesses = np.full(0, np.nan)
     if det.size == 0:
         det = np.full(0, np.nan)
-    missing = ~np.isfinite(det) & np.isfinite(guesses)
+    # Determine which candidate peaks (guesses) are unmatched by proximity to any detected/matched peak.
+    tol_pix = 2.5  # pixel tolerance to consider a candidate as matched
+    if guesses.size > 0 and det.size > 0 and np.isfinite(det).any():
+        # For each candidate, find the minimum distance to any matched peak
+        gfin = np.isfinite(guesses)
+        dfin = np.isfinite(det)
+        if np.any(gfin) and np.any(dfin):
+            dmin = np.full(guesses.shape, np.inf, dtype=float)
+            dmin[gfin] = np.min(np.abs(guesses[gfin, None] - det[dfin][None, :]), axis=1)
+            matched_mask = dmin <= tol_pix
+        else:
+            matched_mask = np.zeros(guesses.shape, dtype=bool)
+    else:
+        matched_mask = np.zeros(guesses.shape, dtype=bool)
+    missing = (~matched_mask) & np.isfinite(guesses)
 
     finite = prof[np.isfinite(prof)]
     if finite.size:
@@ -174,10 +192,10 @@ def plot_ref_profile_quarters(
         ax.plot(x[lo_i:hi_i], slice_y, color='0.2', lw=0.8)
         m_q = np.isfinite(guesses) & (guesses >= lo_i) & (guesses < hi_i)
         if np.any(m_q):
-            ax.vlines(guesses[m_q], lo_p, hi_p, colors='tab:blue', linestyles='--', alpha=0.5, lw=1.0, label='guess')
+            ax.vlines(guesses[m_q], lo_p, hi_p, colors='tab:blue', linestyles='--', alpha=0.5, lw=1.0, label='candidates')
         m_d = np.isfinite(det) & (det >= lo_i) & (det < hi_i)
         if np.any(m_d):
-            ax.vlines(det[m_d], lo_p, hi_p, colors='tab:green', linestyles='-', alpha=0.7, lw=1.2, label='detected')
+            ax.vlines(det[m_d], lo_p, hi_p, colors='tab:green', linestyles='-', alpha=0.7, lw=1.2, label='matched')
         m_miss = missing & (guesses >= lo_i) & (guesses < hi_i)
         if np.any(m_miss):
             gx = guesses[m_miss]
@@ -189,6 +207,111 @@ def plot_ref_profile_quarters(
             ax.legend(ncol=3, frameon=False, loc='upper right')
     axes[-1].set_xlabel('Pixel (dispersion axis)')
     fig.supylabel('Ref profile (arb)')
+    fig.tight_layout(rect=(0.02, 0.02, 1, 1))
+    out_folder = Path(out_folder)
+    out_folder.mkdir(parents=True, exist_ok=True)
+    out = out_folder / filename
+    fig.savefig(out, dpi=160)
+    plt.close(fig)
+    return out
+
+
+def plot_identify_arc_summary(
+    out_folder: Path,
+    ref_profile: Optional[np.ndarray],
+    best: Optional[dict],
+    filename: str = "identify_arc_summary.png",
+) -> Optional[Path]:
+    """Diagnostic for arc identification using identify_arc outputs.
+
+    Panels:
+    - Top: spectrum with candidate peaks (blue dashed), matched peaks (green), and unmatched candidates (red x).
+    - Bottom: residuals (wave_fit - wave_ref) vs wave_ref for matched peaks, annotated with RMS and nmatch.
+
+    Args:
+        out_folder: directory to write the image.
+        ref_profile: reference 1D spectrum used to detect peaks (S).
+        best: dict returned by identify_arc containing keys like
+              'peak_x_all', 'detected_x', 'matches', 'rms', 'nmatch'.
+        filename: output filename.
+    """
+    if ref_profile is None or best is None:
+        return None
+
+    prof = np.asarray(ref_profile, dtype=float).ravel()
+    n = int(prof.size)
+    if n == 0:
+        return None
+    x = np.arange(n)
+
+    guesses = np.asarray(best.get("peak_x_all", []), dtype=float).ravel()
+    det = np.asarray(best.get("detected_x", []), dtype=float).ravel()
+
+    # Determine unmatched candidate peaks
+    tol_pix = 2.5
+    if guesses.size == 0:
+        guesses = np.full(0, np.nan)
+    if det.size == 0:
+        det = np.full(0, np.nan)
+    if guesses.size > 0 and det.size > 0 and np.isfinite(det).any():
+        gfin = np.isfinite(guesses)
+        dfin = np.isfinite(det)
+        if np.any(gfin) and np.any(dfin):
+            dmin = np.full(guesses.shape, np.inf, dtype=float)
+            dmin[gfin] = np.min(np.abs(guesses[gfin, None] - det[dfin][None, :]), axis=1)
+            matched_mask = dmin <= tol_pix
+        else:
+            matched_mask = np.zeros(guesses.shape, dtype=bool)
+    else:
+        matched_mask = np.zeros(guesses.shape, dtype=bool)
+    missing = (~matched_mask) & np.isfinite(guesses)
+
+    # Build figure
+    fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(11, 6.5), gridspec_kw=dict(height_ratios=[2, 1]))
+
+    # Top panel: spectrum and lines
+    finite_prof = prof[np.isfinite(prof)]
+    if finite_prof.size:
+        lo, hi = np.percentile(finite_prof, [1, 99])
+        if hi <= lo:
+            hi = lo + 1e-6
+    else:
+        lo, hi = 0.0, 1.0
+    ax_top.plot(x, prof, color='0.2', lw=0.8)
+    if np.isfinite(guesses).any():
+        ax_top.vlines(guesses[np.isfinite(guesses)], lo, hi, colors='tab:blue', linestyles='--', alpha=0.5, lw=1.0, label='candidates')
+    if np.isfinite(det).any():
+        ax_top.vlines(det[np.isfinite(det)], lo, hi, colors='tab:green', linestyles='-', alpha=0.7, lw=1.2, label='matched')
+    if np.any(missing):
+        gx = guesses[missing]
+        ax_top.plot(gx, np.full_like(gx, hi), 'x', color='tab:red', ms=6, mew=1.2, label='missing')
+    ax_top.set_xlim(0, n - 1)
+    ax_top.set_ylim(lo, hi)
+    ax_top.set_ylabel('Ref profile (arb)')
+    ax_top.legend(ncol=3, frameon=False, loc='upper right')
+    info = f"nmatch={int(best.get('nmatch', 0))}, rms={float(best.get('rms', np.nan)):.3f}"
+    ax_top.text(0.01, 0.95, info, transform=ax_top.transAxes, ha='left', va='top', fontsize=10, bbox=dict(facecolor='white', alpha=0.6, edgecolor='none'))
+
+    # Bottom panel: residuals vs. reference wavelength
+    matches = best.get('matches', []) or []
+    try:
+        wave_ref = np.array([m.get('wave_ref', np.nan) for m in matches], dtype=float)
+        wave_resid = np.array([m.get('wave_resid', np.nan) for m in matches], dtype=float)
+    except Exception:
+        wave_ref = np.array([], dtype=float)
+        wave_resid = np.array([], dtype=float)
+    mfin = np.isfinite(wave_ref) & np.isfinite(wave_resid)
+    if np.any(mfin):
+        ax_bot.axhline(0.0, color='0.5', lw=1.0)
+        ax_bot.scatter(wave_ref[mfin], wave_resid[mfin], s=18, c='tab:purple', alpha=0.8)
+        rms = float(best.get('rms', np.nan))
+        ax_bot.text(0.02, 0.90, f"RMS={rms:.3f}", transform=ax_bot.transAxes, ha='left', va='top', fontsize=10)
+    else:
+        ax_bot.text(0.5, 0.5, 'No matched lines', ha='center', va='center', color='0.5')
+    ax_bot.set_xlabel('Reference wavelength')
+    ax_bot.set_ylabel('Residual (fit - ref)')
+    ax_bot.grid(alpha=0.2)
+
     fig.tight_layout(rect=(0.02, 0.02, 1, 1))
     out_folder = Path(out_folder)
     out_folder.mkdir(parents=True, exist_ok=True)
@@ -240,7 +363,7 @@ def save_amp_qa_page(
     if ref_profile_img and Path(ref_profile_img).exists():
         img = plt.imread(ref_profile_img)
         ax_img.imshow(img)
-        ax_img.set_title('Ref profile quarters')
+        ax_img.set_title('Arc identification summary')
     else:
         ax_img.text(0.5, 0.5, 'No diagnostic image available', ha='center', va='center', color='0.5')
 
