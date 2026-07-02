@@ -28,7 +28,7 @@ from fiber_utils import measure_contrast, get_bigW, get_bigF
 from input_utils import setup_parser, set_daterange, setup_logging
 from math_utils import biweight
 from scipy.interpolate import interp1d
-from qa_utils import summarize_amp_metrics, save_amp_qa_page, plot_specmask_overlay
+from qa_utils import summarize_amp_metrics, save_amp_qa_page, plot_specmask_overlay, plot_trace_overlay
 
 
 warnings.filterwarnings("ignore")
@@ -656,7 +656,15 @@ for ifuslot_key in ifuslots:
                                 specmask_png = plot_specmask_overlay(qa_out_dir, spec, maskspec, filename=fname)
                         except Exception as e_sm:
                             args.log.warning(f"[QA] Failed to make specmask overlay for {amp_id}: {e_sm}")
-                        png_path = save_amp_qa_page(qa_out_dir, amp_id, metrics, ref_img, specmask_png)
+                        # Build trace overlay image (if available)
+                        trace_png = None
+                        try:
+                            if masterflt is not None and trace is not None and np.size(masterflt) and np.size(trace):
+                                tname = f"trace_overlay_{amp_id}.png"
+                                trace_png = plot_trace_overlay(qa_out_dir, masterflt, trace, filename=tname)
+                        except Exception as e_tr:
+                            args.log.warning(f"[QA] Failed to make trace overlay for {amp_id}: {e_tr}")
+                        png_path = save_amp_qa_page(qa_out_dir, amp_id, metrics, ref_img, specmask_png, trace_png)
                         args.log.info(f"[QA] Wrote QA summary page: {png_path}")
                     except Exception as e_page:
                         args.log.warning(f"[QA] Failed to write QA page for {amp_id}: {e_page}")

@@ -308,12 +308,96 @@ def plot_specmask_overlay(
     return out
 
 
+def plot_trace_overlay(
+    out_folder: Path,
+    masterflt: Optional[np.ndarray],
+    trace: Optional[np.ndarray],
+    filename: str = "trace_overlay.png",
+    title: str = "Trace overlay on master flat",
+    step: int = 8,
+) -> Optional[Path]:
+    """Render master flat with overlaid fiber traces.
+
+    Overlays a subset of fiber traces as polylines on top of the flat-field
+    image to visually confirm the trace solution aligns with the illumination.
+
+    Args:
+        out_folder: Directory to save the image.
+        masterflt: 2D flat image (Ny x Nx), typically 1032x1032.
+        trace: 2D array (Nfibers x Npix) giving detector row (y) vs spectral pixel (x).
+        filename: Output filename.
+        title: Title for the plot.
+        step: Plot every Nth fiber to reduce clutter (default 8).
+
+    Returns:
+        Path to the saved PNG, or None if inputs are invalid.
+    """
+    if masterflt is None or trace is None:
+        return None
+    A = np.asarray(masterflt, dtype=float)
+    Tr = np.asarray(trace, dtype=float)
+    if A.ndim != 2 or Tr.ndim != 2:
+        return None
+    Ny, Nx = A.shape
+    # Expect trace shape (Nfibers, Npix) with Npix ~ Nx
+    Nfib, Npix = Tr.shape
+    if Nx <= 1 or Ny <= 1 or Npix <= 1:
+        return None
+
+    # Robust display scaling
+    finite = np.isfinite(A)
+    if not np.any(finite):
+        vmin, vmax = 0.0, 1.0
+    else:
+        vals = A[finite]
+        lo, hi = np.percentile(vals, [5, 99.5])
+        if not np.isfinite(lo):
+            lo = np.nanmin(vals)
+        if not np.isfinite(hi):
+            hi = np.nanmax(vals)
+        if hi <= lo:
+            hi = lo + 1e-6
+        vmin, vmax = float(lo), float(hi)
+
+    fig, ax = plt.subplots(1, 1, figsize=(10.5, 4.2))
+    ax.imshow(A, aspect='auto', origin='lower', cmap='gray', vmin=vmin, vmax=vmax)
+
+    x = np.arange(Npix, dtype=float)
+    # Choose a subset of fibers evenly spaced
+    jj = np.arange(0, Nfib, max(1, int(step)))
+    colors = plt.cm.viridis(np.linspace(0.1, 0.9, len(jj)))
+    for k, j in enumerate(jj):
+        y = Tr[j]
+        if not np.isfinite(y).any():
+            continue
+        # mask non-finite
+        m = np.isfinite(y)
+        if np.count_nonzero(m) < 5:
+            continue
+        ax.plot(x[m], y[m], '-', lw=0.8, alpha=0.8, color=colors[k])
+
+    ax.set_xlim(0, Nx - 1)
+    ax.set_ylim(0, Ny - 1)
+    ax.set_xlabel('Spectral pixel (x)')
+    ax.set_ylabel('Detector row (y)')
+    ax.set_title(title)
+
+    fig.tight_layout()
+    out_folder = Path(out_folder)
+    out_folder.mkdir(parents=True, exist_ok=True)
+    out = out_folder / filename
+    fig.savefig(out, dpi=160)
+    plt.close(fig)
+    return out
+
+
 def save_amp_qa_page(
     out_folder: Path,
     amp_id: str,
     metrics: Dict[str, Any],
     ref_profile_img: Optional[Path] = None,
     specmask_img: Optional[Path] = None,
+    trace_img: Optional[Path] = None,
 ) -> Path:
     """Create a compact PNG QA page with key metrics and optional images.
 
@@ -322,11 +406,18 @@ def save_amp_qa_page(
     out_folder = Path(out_folder)
     out_folder.mkdir(parents=True, exist_ok=True)
 
+    # Determine which images exist and build a list of (path, title)
+    items = []
+    if ref_profile_img and Path(ref_profile_img).exists():
+        items.append((Path(ref_profile_img), 'Arc identification summary'))
+    if specmask_img and Path(specmask_img).exists():
+        items.append((Path(specmask_img), 'Spectral mask overlay'))
+    if trace_img and Path(trace_img).exists():
+        items.append((Path(trace_img), 'Trace overlay on master flat'))
+
     # Prepare figure with dynamic columns based on available images
+    ncols = max(1, len(items))
     fig = plt.figure(figsize=(11, 6.5), constrained_layout=True)
-    has_ref = bool(ref_profile_img) and Path(ref_profile_img).exists()
-    has_mask = bool(specmask_img) and Path(specmask_img).exists()
-    ncols = 2 if (has_ref and has_mask) else 1
     gs = fig.add_gridspec(2, ncols, height_ratios=[1, 2])
 
     # Title and metrics panel
@@ -349,44 +440,32 @@ def save_amp_qa_page(
     ax0.text(0.01, 0.10, "\n".join(lines), family='monospace', fontsize=11, va='bottom')
 
     # Image panel(s)
-    if ncols == 2:
-        ax1 = fig.add_subplot(gs[1, 0])
-        ax2 = fig.add_subplot(gs[1, 1])
-        for ax in (ax1, ax2):
-            ax.axis('off')
-        # Left: arc identification summary
-        if has_ref:
-            try:
-                img1 = plt.imread(ref_profile_img)
-                ax1.imshow(img1)
-                ax1.set_title('Arc identification summary')
-            except Exception:
-                ax1.text(0.5, 0.5, 'Arc ID image unavailable', ha='center', va='center', color='0.5')
-        else:
-            ax1.text(0.5, 0.5, 'Arc ID image unavailable', ha='center', va='center', color='0.5')
-        # Right: specmask overlay
-        if has_mask:
-            try:
-                img2 = plt.imread(specmask_img)
-                ax2.imshow(img2)
-                ax2.set_title('Spectral mask overlay')
-            except Exception:
-                ax2.text(0.5, 0.5, 'Specmask image unavailable', ha='center', va='center', color='0.5')
-        else:
-            ax2.text(0.5, 0.5, 'Specmask image unavailable', ha='center', va='center', color='0.5')
-    else:
+    if ncols == 1:
         ax_img = fig.add_subplot(gs[1, :])
         ax_img.axis('off')
-        chosen = specmask_img if has_mask else ref_profile_img
-        if chosen and Path(chosen).exists():
+        if items:
             try:
-                img = plt.imread(chosen)
+                img = plt.imread(items[0][0])
                 ax_img.imshow(img)
-                ax_img.set_title('Spectral mask overlay' if has_mask else 'Arc identification summary')
+                ax_img.set_title(items[0][1])
             except Exception:
                 ax_img.text(0.5, 0.5, 'No diagnostic image available', ha='center', va='center', color='0.5')
         else:
             ax_img.text(0.5, 0.5, 'No diagnostic image available', ha='center', va='center', color='0.5')
+    else:
+        for i in range(ncols):
+            ax = fig.add_subplot(gs[1, i])
+            ax.axis('off')
+            if i < len(items):
+                path_i, title_i = items[i]
+                try:
+                    img = plt.imread(path_i)
+                    ax.imshow(img)
+                    ax.set_title(title_i)
+                except Exception:
+                    ax.text(0.5, 0.5, 'Image unavailable', ha='center', va='center', color='0.5')
+            else:
+                ax.text(0.5, 0.5, 'No image', ha='center', va='center', color='0.5')
 
     # Save
     png_path = out_folder / f"QA_{amp_id}.png"
