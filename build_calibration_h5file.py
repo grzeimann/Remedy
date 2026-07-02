@@ -28,7 +28,7 @@ from fiber_utils import measure_contrast, get_bigW, get_bigF
 from input_utils import setup_parser, set_daterange, setup_logging
 from math_utils import biweight
 from scipy.interpolate import interp1d
-from qa_utils import summarize_amp_metrics, save_amp_qa_page, plot_specmask_overlay, plot_trace_overlay, plot_fibernorm_diagnostic
+from qa_utils import summarize_amp_metrics, save_amp_qa_page, plot_specmask_overlay, plot_trace_overlay, plot_fibernorm_diagnostic, plot_fibernorm_compare
 
 
 warnings.filterwarnings("ignore")
@@ -407,74 +407,29 @@ def step_twi(curr_trace):
         _twi_spectra = None
     return _mastertwi, _twi_spectra, _info
 
-def step_fiber_normalization(twi_spectra, curr_wave, mastersci):
-    """Compute per-fiber smooth normalization from twilight spectra.
+from fibernorm_utils import compute_fiber_normalization
+
+def step_fiber_normalization(twi_spectra, curr_wave, sci_spec):
+    """Compute per-fiber smooth normalization for twilight and science spectra.
 
     Args:
         twi_spectra: 2D array (Nfib x Npix) of twilight-extracted spectra.
         curr_wave: 2D array (Nfib x Npix) wavelength solution.
-        mastersci: 2D array (image) of master science frame (unused here but
-                   accepted for future extensions; retained to match request).
+        sci_spec: 2D array (Nfib x Npix) of science-extracted spectra.
 
     Returns:
-        fibernorm: 2D array (Nfib x Npix) smooth fiber normalization curves.
-        ratio: 2D array (Nfib x Npix) raw ratio twi_spectra / twi_model.
+        F_twi, R_twi, F_sci, R_sci where F_* are smooth fibernorm arrays and R_* raw ratios.
     """
     try:
-        if twi_spectra is None or curr_wave is None:
-            return None, None
-        S = np.asarray(twi_spectra, dtype=float)
-        W = np.asarray(curr_wave, dtype=float)
-        if S.ndim != 2 or W.ndim != 2 or S.shape != W.shape:
-            return None, None
-        nrows, npix = S.shape
-        # Build twilight model on the current wavelength grid
-        good_solutions = np.isfinite(W).sum(axis=1) > (0.8 * W.shape[1])
-        twi_interp, twi_model_spec, twi_image, _ = build_model_spectra(S, W, good_solutions)
-        M = twi_interp(W)  # same shape as S
-        # Compute ratio safely
-        eps = 1e-6
-        denom = np.where(np.isfinite(M) & (M != 0), M, np.nan)
-        R = S / denom
-        R[~np.isfinite(R)] = np.nan
-        # Fit smooth per-fiber model via binned robust averages + cubic interp
-        xpix = np.arange(npix, dtype=float)
-        nbins = 25
-        edges = np.linspace(-0.5, npix - 0.5, nbins + 1)
-        centers = 0.5 * (edges[:-1] + edges[1:])
-        F = np.full_like(S, np.nan, dtype=float)
-        for f in range(nrows):
-            y = R[f]
-            if not np.isfinite(y).any():
-                continue
-            yb = np.full(nbins, np.nan, dtype=float)
-            for i in range(nbins):
-                lo, hi = edges[i], edges[i + 1]
-                m = (xpix >= lo) & (xpix < hi) & np.isfinite(y)
-                if np.count_nonzero(m) == 0:
-                    continue
-                vals = y[m]
-                try:
-                    yb[i] = float(biweight(vals))
-                except Exception:
-                    yb[i] = float(np.nanmedian(vals))
-            mb = np.isfinite(centers) & np.isfinite(yb)
-            if np.count_nonzero(mb) >= 4:
-                try:
-                    fi = interp1d(centers[mb], yb[mb], kind='cubic', bounds_error=False, fill_value='extrapolate', assume_sorted=True)
-                except Exception:
-                    fi = interp1d(centers[mb], yb[mb], kind='linear', bounds_error=False, fill_value='extrapolate', assume_sorted=True)
-                F[f] = fi(xpix)
-            elif np.count_nonzero(mb) >= 2:
-                fi = interp1d(centers[mb], yb[mb], kind='linear', bounds_error=False, fill_value='extrapolate', assume_sorted=True)
-                F[f] = fi(xpix)
-            else:
-                mu = np.nanmedian(y[np.isfinite(y)])
-                if np.isfinite(mu):
-                    F[f] = np.full(npix, mu, dtype=float)
-        return F, R
-    except Exception:
-        return None, None
+        Ft, Rt = compute_fiber_normalization(twi_spectra, curr_wave)
+        Fs, Rs = compute_fiber_normalization(sci_spec, curr_wave)
+        return Ft, Rt, Fs, Rs
+    except Exception as e:
+        try:
+            args.log.warning('Fiber normalization failed for %s %s: %s' % (ifuslot_key, amp, e))
+        except Exception:
+            pass
+        return None, None, None, None
 
 def step_sci_and_mask(curr_trace, curr_wave, wave_ok):
     kind = 'sci'
@@ -611,13 +566,13 @@ for ifuslot_key in ifuslots:
         if np.isfinite(trace).any():
             out = step_sci_and_mask(trace, wave, wave_valid)
             if out is not None:
-                mastersci, spec, maskspec, info_sci = out
+                mastersci, sci_spec, maskspec, info_sci = out
         
         success = append_fibers_to_table(row, wave, trace, ifupos, ifuslot,
                                          ifuid, specid, amp, readnoise,
                                          pixelmask, masterdark, masterflt,
                                          mastertwi, mastercmp, mastersci,
-                                         masterbias, spec, _cmp, maskspec,
+                                         masterbias, sci_spec, _cmp, maskspec,
                                          contid)
 
         if success:
@@ -655,9 +610,9 @@ for ifuslot_key in ifuslots:
                         # Build specmask overlay image (if available)
                         specmask_png = None
                         try:
-                            if spec is not None and maskspec is not None and np.size(spec) and np.size(maskspec):
+                            if sci_spec is not None and maskspec is not None and np.size(sci_spec) and np.size(maskspec):
                                 fname = f"specmask_overlay_{amp_id}.png"
-                                specmask_png = plot_specmask_overlay(qa_out_dir, spec, maskspec, filename=fname)
+                                specmask_png = plot_specmask_overlay(qa_out_dir, sci_spec, maskspec, filename=fname)
                         except Exception as e_sm:
                             args.log.warning(f"[QA] Failed to make specmask overlay for {amp_id}: {e_sm}")
                         # Build trace chunks diagnostic image (if available)
@@ -675,13 +630,18 @@ for ifuslot_key in ifuslots:
                         try:
                             if (twi_spectra is not None and np.size(twi_spectra) and
                                 wave is not None and np.size(wave)):
-                                Fnorm, Rratio = step_fiber_normalization(twi_spectra, wave, mastersci)
-                                if Fnorm is not None and Rratio is not None:
+                                Ftwi, Rtwi, Fsci, Rsci = step_fiber_normalization(twi_spectra, wave, sci_spec)
+                                if Ftwi is not None and Rtwi is not None:
                                     fname_fn = f"fiber_norm_{amp_id}.png"
-                                    fibernorm_png = plot_fibernorm_diagnostic(qa_out_dir, Rratio, Fnorm, filename=fname_fn)
+                                    fibernorm_png = plot_fibernorm_diagnostic(qa_out_dir, Rtwi, Ftwi, filename=fname_fn)
+                                # Compare twi vs sci fibernorm (if available)
+                                fibernorm_cmp_png = None
+                                if Ftwi is not None and Fsci is not None:
+                                    fname_cmp = f"fiber_norm_compare_{amp_id}.png"
+                                    fibernorm_cmp_png = plot_fibernorm_compare(qa_out_dir, Ftwi, Fsci, filename=fname_cmp)
                         except Exception as e_fn:
                             args.log.warning(f"[QA] Failed to make fiber normalization diagnostic for {amp_id}: {e_fn}")
-                        png_path = save_amp_qa_page(qa_out_dir, amp_id, metrics, ref_img, specmask_png, trace_png, fibernorm_png)
+                        png_path = save_amp_qa_page(qa_out_dir, amp_id, metrics, ref_img, specmask_png, trace_png, fibernorm_png, fibernorm_cmp_png if 'fibernorm_cmp_png' in locals() else None)
                         args.log.info(f"[QA] Wrote QA summary page: {png_path}")
                     except Exception as e_page:
                         args.log.warning(f"[QA] Failed to write QA page for {amp_id}: {e_page}")

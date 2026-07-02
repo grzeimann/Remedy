@@ -426,6 +426,98 @@ def plot_fibernorm_diagnostic(
     return out
 
 
+def plot_fibernorm_compare(
+    out_folder: Path,
+    fibernorm_twi: Optional[np.ndarray],
+    fibernorm_sci: Optional[np.ndarray],
+    band_halfwidth: int = 100,
+    filename: str = "fiber_norm_compare.png",
+    title: str = "Fiber normalization: twilight vs science",
+) -> Optional[Path]:
+    """Compare fiber-normalization between twilight and science.
+
+    For each fiber, compute a robust central value of the normalization by taking
+    the biweight location of the middle band (central column +/- band_halfwidth),
+    separately for the twilight-derived and the science-derived normalization.
+    Then plot both curves as a function of fiber index.
+    """
+    if fibernorm_twi is None or fibernorm_sci is None:
+        return None
+    Ft = np.asarray(fibernorm_twi, dtype=float)
+    Fs = np.asarray(fibernorm_sci, dtype=float)
+    if Ft.ndim != 2 or Fs.ndim != 2 or Ft.shape != Fs.shape:
+        return None
+    Nfib, Npix = Ft.shape
+    if Nfib == 0 or Npix == 0:
+        return None
+    c = int(Npix // 2)
+    hw = int(max(1, band_halfwidth))
+    lo = max(0, c - hw)
+    hi = min(Npix, c + hw + 1)
+    band_t = Ft[:, lo:hi]
+    band_s = Fs[:, lo:hi]
+
+    # Robust scalar per fiber via biweight over the band
+    vals_t = np.full(Nfib, np.nan, dtype=float)
+    vals_s = np.full(Nfib, np.nan, dtype=float)
+    from math_utils import biweight as _biw
+    for f in range(Nfib):
+        yt = band_t[f]
+        ys = band_s[f]
+        if np.isfinite(yt).any():
+            try:
+                vals_t[f] = float(_biw(yt[np.isfinite(yt)]))
+            except Exception:
+                vals_t[f] = float(np.nanmedian(yt))
+        if np.isfinite(ys).any():
+            try:
+                vals_s[f] = float(_biw(ys[np.isfinite(ys)]))
+            except Exception:
+                vals_s[f] = float(np.nanmedian(ys))
+
+    # Normalize both curves to their medians for clarity
+    def _norm(v):
+        med = np.nanmedian(v[np.isfinite(v)]) if np.isfinite(v).any() else 1.0
+        if not np.isfinite(med) or med == 0:
+            med = 1.0
+        return v / med
+
+    vn_t = _norm(vals_t)
+    vn_s = _norm(vals_s)
+
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(1, 1, figsize=(10.5, 3.8))
+    x = np.arange(Nfib, dtype=int)
+    mt = np.isfinite(vn_t)
+    ms = np.isfinite(vn_s)
+    if np.count_nonzero(mt) > 1:
+        ax.plot(x[mt], vn_t[mt], '-', lw=1.4, alpha=0.9, label='twilight')
+    if np.count_nonzero(ms) > 1:
+        ax.plot(x[ms], vn_s[ms], '-', lw=1.4, alpha=0.9, label='science')
+
+    # Display simple difference stats
+    mdiff = vn_s - vn_t
+    md = mdiff[np.isfinite(mdiff)]
+    if md.size:
+        mu = float(np.nanmedian(md))
+        sc = float(np.nanstd(md))
+        ax.text(0.01, 0.97, f"Δ(sci - twi): median={mu:.4f}, std={sc:.4f}", transform=ax.transAxes, va='top', ha='left', fontsize=9)
+
+    ax.set_xlabel('Fiber index')
+    ax.set_ylabel('Normalized fibernorm (unitless)')
+    ax.set_title(title)
+    ax.grid(alpha=0.25)
+    ax.legend(loc='best', frameon=False)
+
+    fig.tight_layout()
+    out_folder = Path(out_folder)
+    out_folder.mkdir(parents=True, exist_ok=True)
+    out = out_folder / filename
+    fig.savefig(out, dpi=160)
+    plt.close(fig)
+    return out
+
+
 def plot_trace_overlay(
     out_folder: Path,
     xchunks: Optional[np.ndarray],
@@ -549,6 +641,7 @@ def save_amp_qa_page(
     specmask_img: Optional[Path] = None,
     trace_img: Optional[Path] = None,
     fibernorm_img: Optional[Path] = None,
+    fibernorm_cmp_img: Optional[Path] = None,
 ) -> Path:
     """Create a compact PNG QA page with key metrics and optional images.
 
@@ -568,6 +661,8 @@ def save_amp_qa_page(
         items.append((Path(trace_img), 'Trace chunks diagnostic'))
     if fibernorm_img and Path(fibernorm_img).exists():
         items.append((Path(fibernorm_img), 'Fiber normalization diagnostic'))
+    if fibernorm_cmp_img and Path(fibernorm_cmp_img).exists():
+        items.append((Path(fibernorm_cmp_img), 'Fiber normalization compare (twi vs sci)'))
 
     # Ensure at least one row on the right (placeholder if none)
     nimgs = max(1, len(items))
