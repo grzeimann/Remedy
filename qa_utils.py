@@ -308,6 +308,124 @@ def plot_specmask_overlay(
     return out
 
 
+def plot_fibernorm_diagnostic(
+    out_folder: Path,
+    ratio: Optional[np.ndarray],
+    fibernorm: Optional[np.ndarray],
+    fibers: Optional[list] = None,
+    nbins: int = 25,
+    filename: str = "fiber_normalization.png",
+    title: str = "Fiber normalization diagnostic",
+) -> Optional[Path]:
+    """Diagnostic plot for fiber-to-fiber normalization.
+
+    For selected fibers, show:
+    - raw ratio (twi_spectra / twi_model) as a faint line
+    - binned robust averages as scatter points
+    - smooth interpolated normalization curve as a solid line
+
+    The y-axis is normalized per fiber by its median for readability.
+    """
+    if ratio is None or fibernorm is None:
+        return None
+    R = np.asarray(ratio, dtype=float)
+    Nfib, Npix = R.shape if R.ndim == 2 else (0, 0)
+    F = np.asarray(fibernorm, dtype=float)
+    if R.ndim != 2 or F.ndim != 2 or R.shape != F.shape or Nfib == 0:
+        return None
+    xpix = np.arange(Npix, dtype=float)
+    if fibers is None:
+        fibers = [3, 55, 110]
+    fibers = sorted(set(int(max(0, min(f, Nfib - 1))) for f in fibers))
+    if len(fibers) == 0:
+        fibers = [min(0, Nfib - 1)]
+
+    # Prepare bin edges and centers for reference scatter positions
+    nbins = int(max(5, nbins))
+    edges = np.linspace(-0.5, Npix - 0.5, nbins + 1)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(1, 1, figsize=(11, 4.2))
+    colors = plt.cm.tab10(np.linspace(0, 1, max(10, len(fibers))))
+
+    for k, f in enumerate(fibers):
+        y_raw = R[f].copy()
+        y_mod = F[f].copy()
+        # Normalize by median for clarity
+        med = np.nanmedian(y_raw[np.isfinite(y_raw)]) if np.isfinite(y_raw).any() else 1.0
+        if not np.isfinite(med) or med == 0:
+            med = 1.0
+        y_raw_n = y_raw / med
+        y_mod_n = y_mod / med
+        c = colors[k % colors.shape[0]]
+        # raw curve
+        mraw = np.isfinite(y_raw_n)
+        if np.count_nonzero(mraw) > 3:
+            ax.plot(xpix[mraw], y_raw_n[mraw], '-', color=c, alpha=0.25, lw=0.8, label=f"fiber {f} ratio")
+        # binned robust means
+        # compute within bins ignoring NaNs
+        yb = []
+        xb = []
+        for i in range(nbins):
+            lo, hi = edges[i], edges[i + 1]
+            m = (xpix >= lo) & (xpix < hi) & np.isfinite(y_raw_n)
+            if np.count_nonzero(m) == 0:
+                yb.append(np.nan)
+                xb.append(centers[i])
+                continue
+            vals = y_raw_n[m]
+            # robust center via median if biweight unavailable here
+            try:
+                from math_utils import biweight as _biw
+                yb.append(float(_biw(vals)))
+            except Exception:
+                yb.append(float(np.nanmedian(vals)))
+            xb.append(centers[i])
+        xb = np.array(xb, dtype=float)
+        yb = np.array(yb, dtype=float)
+        mb = np.isfinite(xb) & np.isfinite(yb)
+        if np.count_nonzero(mb) > 0:
+            ax.scatter(xb[mb], yb[mb], s=26, facecolors='none', edgecolors=c, alpha=0.9, label=f"fiber {f} bins")
+        # smooth curve from model
+        mmod = np.isfinite(y_mod_n)
+        if np.count_nonzero(mmod) > 3:
+            ax.plot(xpix[mmod], y_mod_n[mmod], '-', color=c, lw=1.3, label=f"fiber {f} smooth")
+
+    ax.set_xlim(0, max(1, Npix - 1))
+    # Y-limits around 1
+    ycat = []
+    for f in fibers:
+        y = R[f]
+        mu = np.nanmedian(y[np.isfinite(y)]) if np.isfinite(y).any() else 1.0
+        if not np.isfinite(mu) or mu == 0:
+            mu = 1.0
+        if np.isfinite(y).any():
+            ycat.append(y / mu)
+        if np.isfinite(F[f]).any():
+            ycat.append(F[f] / mu)
+    if len(ycat):
+        allv = np.concatenate([a[np.isfinite(a)] for a in ycat if a is not None])
+        if allv.size:
+            lo, hi = np.nanpercentile(allv, [2, 98])
+            if np.isfinite(lo) and np.isfinite(hi) and hi > lo:
+                pad = 0.1 * (hi - lo)
+                ax.set_ylim(lo - pad, hi + pad)
+    ax.set_xlabel('Spectral pixel (x)')
+    ax.set_ylabel('Ratio / median (unitless)')
+    ax.set_title(title)
+    ax.grid(alpha=0.25)
+    ax.legend(loc='upper right', ncol=2, fontsize=9, frameon=False)
+
+    fig.tight_layout()
+    out_folder = Path(out_folder)
+    out_folder.mkdir(parents=True, exist_ok=True)
+    out = out_folder / filename
+    fig.savefig(out, dpi=160)
+    plt.close(fig)
+    return out
+
+
 def plot_trace_overlay(
     out_folder: Path,
     xchunks: Optional[np.ndarray],
@@ -430,6 +548,7 @@ def save_amp_qa_page(
     ref_profile_img: Optional[Path] = None,
     specmask_img: Optional[Path] = None,
     trace_img: Optional[Path] = None,
+    fibernorm_img: Optional[Path] = None,
 ) -> Path:
     """Create a compact PNG QA page with key metrics and optional images.
 
@@ -447,6 +566,8 @@ def save_amp_qa_page(
         items.append((Path(specmask_img), 'Spectral mask overlay'))
     if trace_img and Path(trace_img).exists():
         items.append((Path(trace_img), 'Trace chunks diagnostic'))
+    if fibernorm_img and Path(fibernorm_img).exists():
+        items.append((Path(fibernorm_img), 'Fiber normalization diagnostic'))
 
     # Ensure at least one row on the right (placeholder if none)
     nimgs = max(1, len(items))
