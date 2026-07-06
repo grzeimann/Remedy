@@ -320,6 +320,7 @@ def get_trace_reference(specid, ifuslot, ifuid, amp, obsdate,
 def get_trace(twilight, specid, ifuslot, ifuid, amp, obsdate, tr_folder):
     ref = get_trace_reference(specid, ifuslot, ifuid, amp, obsdate,
                               virusconfig=tr_folder)
+    # Number of not dead fibers (aka, good fibers)
     N1 = (ref[:, 1] == 0.).sum()
     good = np.where(ref[:, 1] == 0.)[0]
 
@@ -344,9 +345,17 @@ def get_trace(twilight, specid, ifuslot, ifuid, amp, obsdate, tr_folder):
     for flat, x in zip(flats, xchunks):
         diff_array = flat[1:] - flat[:-1]
         loc = np.where((diff_array[:-1] > 0.) * (diff_array[1:] < 0.))[0]
-        
         peaks = flat[loc+1]
-        loc = loc[peaks > 0.2 * np.median(peaks)]+1
+        
+        # Dynamically choose a cut that yields N1 peaks (number of good fibers)
+        if len(peaks) >= N1 and N1 > 0:
+            # take the indices of the top-N1 peaks by amplitude
+            top_idx = np.argsort(peaks)[::-1][:N1]
+            # preserve spatial ordering along the cross-dispersion axis
+            loc = np.sort(loc[top_idx]) + 1
+        else:
+            # Fallback: take all detected peaks if fewer than N1 were found
+            loc = np.sort(loc) + 1
         trace = get_trace_chunk(flat, loc)
         T = np.zeros((len(ref)))
         if len(trace) == N1:
@@ -355,10 +364,12 @@ def get_trace(twilight, specid, ifuslot, ifuid, amp, obsdate, tr_folder):
                 gind = np.argmin(np.abs(missing - good))
                 T[missing] = (T[good[gind]] + ref[missing, 0] -
                               ref[good[gind], 0])
+        # Dead Fibers found case
         if len(trace) == len(ref):
             T = trace
         Trace[:, k] = T
         k += 1
+
     x = np.arange(twilight.shape[1])
     trace = np.zeros((Trace.shape[0], twilight.shape[1]))
     for i in np.arange(Trace.shape[0]):
