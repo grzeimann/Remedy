@@ -11,7 +11,7 @@ from mask_utils import build_model_spectra
 def compute_fiber_normalization(
     spectra: Optional[np.ndarray],
     wave2d: Optional[np.ndarray],
-    nbins: int = 25,
+    nbins: int = 51,
 ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
     """Compute per-fiber smooth normalization from input spectra.
 
