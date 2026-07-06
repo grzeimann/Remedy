@@ -28,7 +28,7 @@ from fiber_utils import measure_contrast, get_bigW, get_bigF
 from input_utils import setup_parser, set_daterange, setup_logging
 from math_utils import biweight
 from scipy.interpolate import interp1d
-from qa_utils import summarize_amp_metrics, save_amp_qa_page, plot_specmask_overlay, plot_trace_overlay, plot_fibernorm_diagnostic, plot_fibernorm_compare
+from qa_utils import summarize_amp_metrics, save_amp_qa_page, plot_specmask_overlay, plot_trace_overlay, plot_fibernorm_diagnostic, plot_fibernorm_compare, compute_fibernorm_band_residuals
 
 
 warnings.filterwarnings("ignore")
@@ -582,7 +582,22 @@ for ifuslot_key in ifuslots:
                 try:
                     t0qa = time.time()
                     amp_id = f"{ifuslot}_{amp}"
-                    # Build metrics
+
+                    # Compute fiber normalization early so its residuals can be summarized
+                    Ftwi = Rtwi = Fsci = Rsci = None
+                    if (twi_spectra is not None and np.size(twi_spectra) and
+                        wave is not None and np.size(wave)):
+                        Ftwi, Rtwi, Fsci, Rsci = step_fiber_normalization(twi_spectra, wave, sci_spec)
+
+                    # Prepare fibernorm band residual metrics (blue/central/red)
+                    fibernorm_bands = None
+                    try:
+                        if Ftwi is not None and Fsci is not None:
+                            fibernorm_bands = compute_fibernorm_band_residuals(Ftwi, Fsci, band_halfwidth=100)
+                    except Exception as e_fb:
+                        args.log.warning(f"[QA] Failed to compute fibernorm band residuals for {amp_id}: {e_fb}")
+
+                    # Build metrics now that fibernorm residuals are available
                     metrics = summarize_amp_metrics(
                         amp_id=amp_id,
                         masterbias=masterbias,
@@ -601,50 +616,48 @@ for ifuslot_key in ifuslots:
                             "contid": contid,
                         },
                         arc_rms_array=rms_rows,
+                        fibernorm_bands=fibernorm_bands,
                     )
+
                     qa_out_dir = Path(args.qa_folder)
                     qa_out_dir.mkdir(parents=True, exist_ok=True)
                     args.log.info(f"[QA] Starting QA for {amp_id} → {qa_out_dir}")
-                    # Save QA summary page (PNG + JSON sidecar) using ref_img from get_wave
+
+                    # Helper to safely generate QA images and return their paths
+                    def _gen_qa_images():
+                        specmask_png = trace_png = fibernorm_png = fibernorm_cmp_png = None
+                        # Specmask overlay
+                        if sci_spec is not None and maskspec is not None and np.size(sci_spec) and np.size(maskspec):
+                            try:
+                                specmask_png = plot_specmask_overlay(qa_out_dir, sci_spec, maskspec, filename=f"specmask_overlay_{amp_id}.png")
+                            except Exception as e_sm:
+                                args.log.warning(f"[QA] Specmask overlay failed for {amp_id}: {e_sm}")
+                        # Trace overlay
+                        if (trace is not None and np.size(trace) and xchunks is not None and trace_chunks is not None and np.size(xchunks) and np.size(trace_chunks)):
+                            try:
+                                trace_png = plot_trace_overlay(qa_out_dir, xchunks, trace_chunks, trace, filename=f"trace_chunks_{amp_id}.png")
+                            except Exception as e_tr:
+                                args.log.warning(f"[QA] Trace overlay failed for {amp_id}: {e_tr}")
+                        # Fiber normalization diagnostic plots, using previously computed Ftwi/Fsci
+                        if Ftwi is not None and Rtwi is not None:
+                            try:
+                                fibernorm_png = plot_fibernorm_diagnostic(qa_out_dir, Rtwi, Ftwi, filename=f"fiber_norm_{amp_id}.png")
+                            except Exception as e_fn1:
+                                args.log.warning(f"[QA] Fibernorm diagnostic failed for {amp_id}: {e_fn1}")
+                        if Ftwi is not None and Fsci is not None:
+                            try:
+                                fibernorm_cmp_png = plot_fibernorm_compare(qa_out_dir, Ftwi, Fsci, filename=f"fiber_norm_compare_{amp_id}.png")
+                            except Exception as e_fn2:
+                                args.log.warning(f"[QA] Fibernorm compare failed for {amp_id}: {e_fn2}")
+                        return specmask_png, trace_png, fibernorm_png, fibernorm_cmp_png
+
                     try:
-                        # Build specmask overlay image (if available)
-                        specmask_png = None
-                        try:
-                            if sci_spec is not None and maskspec is not None and np.size(sci_spec) and np.size(maskspec):
-                                fname = f"specmask_overlay_{amp_id}.png"
-                                specmask_png = plot_specmask_overlay(qa_out_dir, sci_spec, maskspec, filename=fname)
-                        except Exception as e_sm:
-                            args.log.warning(f"[QA] Failed to make specmask overlay for {amp_id}: {e_sm}")
-                        # Build trace chunks diagnostic image (if available)
-                        trace_png = None
-                        try:
-                            if (trace is not None and np.size(trace) and
-                                xchunks is not None and trace_chunks is not None and
-                                np.size(xchunks) and np.size(trace_chunks)):
-                                tname = f"trace_chunks_{amp_id}.png"
-                                trace_png = plot_trace_overlay(qa_out_dir, xchunks, trace_chunks, trace, filename=tname)
-                        except Exception as e_tr:
-                            args.log.warning(f"[QA] Failed to make trace chunks diagnostic for {amp_id}: {e_tr}")
-                        # Build fiber normalization diagnostic (if available)
-                        fibernorm_png = None
-                        try:
-                            if (twi_spectra is not None and np.size(twi_spectra) and
-                                wave is not None and np.size(wave)):
-                                Ftwi, Rtwi, Fsci, Rsci = step_fiber_normalization(twi_spectra, wave, sci_spec)
-                                if Ftwi is not None and Rtwi is not None:
-                                    fname_fn = f"fiber_norm_{amp_id}.png"
-                                    fibernorm_png = plot_fibernorm_diagnostic(qa_out_dir, Rtwi, Ftwi, filename=fname_fn)
-                                # Compare twi vs sci fibernorm (if available)
-                                fibernorm_cmp_png = None
-                                if Ftwi is not None and Fsci is not None:
-                                    fname_cmp = f"fiber_norm_compare_{amp_id}.png"
-                                    fibernorm_cmp_png = plot_fibernorm_compare(qa_out_dir, Ftwi, Fsci, filename=fname_cmp)
-                        except Exception as e_fn:
-                            args.log.warning(f"[QA] Failed to make fiber normalization diagnostic for {amp_id}: {e_fn}")
-                        png_path = save_amp_qa_page(qa_out_dir, amp_id, metrics, ref_img, specmask_png, trace_png, fibernorm_png, fibernorm_cmp_png if 'fibernorm_cmp_png' in locals() else None)
+                        specmask_png, trace_png, fibernorm_png, fibernorm_cmp_png = _gen_qa_images()
+                        png_path = save_amp_qa_page(qa_out_dir, amp_id, metrics, ref_img, specmask_png, trace_png, fibernorm_png, fibernorm_cmp_png)
                         args.log.info(f"[QA] Wrote QA summary page: {png_path}")
                     except Exception as e_page:
                         args.log.warning(f"[QA] Failed to write QA page for {amp_id}: {e_page}")
+
                     args.log.info(f"[QA] Done QA for {amp_id} in {time.time()-t0qa:.2f}s")
                 except Exception as e:
                     args.log.warning(f"[QA] Failed to generate QA for {ifuslot_key} {amp}: {e}")

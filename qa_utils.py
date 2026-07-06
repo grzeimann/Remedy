@@ -47,6 +47,7 @@ def summarize_amp_metrics(
     maskspec: Optional[np.ndarray],
     extra: Optional[Dict[str, Any]] = None,
     arc_rms_array: Optional[np.ndarray] = None,
+    fibernorm_bands: Optional[Dict[str, Dict[str, float]]] = None,
 ) -> Dict[str, Any]:
     """Compute scalar QA metrics for an amplifier.
 
@@ -117,6 +118,14 @@ def summarize_amp_metrics(
         metrics["masked_detector_frac"] = np.nan
     else:
         metrics["masked_detector_frac"] = np.nan
+
+    # Include fibernorm band residual summaries, if provided
+    if fibernorm_bands:
+        for band_name, vals in fibernorm_bands.items():
+            # sanitize key
+            key = band_name.lower().replace(' ', '_')
+            for stat_name, v in vals.items():
+                metrics[f"fibernorm_{key}_{stat_name}"] = float(v) if v is not None and np.isfinite(v) else np.nan
 
     if extra:
         metrics.update(extra)
@@ -423,6 +432,79 @@ def plot_fibernorm_diagnostic(
     out = out_folder / filename
     fig.savefig(out, dpi=160)
     plt.close(fig)
+    return out
+
+
+def compute_fibernorm_band_residuals(
+    fibernorm_twi: Optional[np.ndarray],
+    fibernorm_sci: Optional[np.ndarray],
+    band_halfwidth: int = 100,
+) -> Optional[Dict[str, Dict[str, float]]]:
+    """Compute residual summary stats between sci and twi fibernorm in three bands.
+
+    Returns a dict keyed by band name (Blue edge, Central, Red edge) with per-band
+    summary statistics over fibers for Δ = (sci_norm − twi_norm):
+    - median, std, mad
+    The per-band normalization follows plot_fibernorm_compare.
+    """
+    if fibernorm_twi is None or fibernorm_sci is None:
+        return None
+    Ft = np.asarray(fibernorm_twi, dtype=float)
+    Fs = np.asarray(fibernorm_sci, dtype=float)
+    if Ft.ndim != 2 or Fs.ndim != 2 or Ft.shape != Fs.shape:
+        return None
+    Nfib, Npix = Ft.shape
+    if Nfib == 0 or Npix == 0:
+        return None
+    hw = int(max(1, band_halfwidth))
+    width = 2 * hw + 1
+    c = int(Npix // 2)
+    c_lo = max(0, c - hw)
+    c_hi = min(Npix, c + hw + 1)
+    b_lo = 0
+    b_hi = min(Npix, width)
+    r_hi = Npix
+    r_lo = max(0, Npix - width)
+    bands = {
+        'Blue edge': (slice(None), slice(b_lo, b_hi)),
+        'Central': (slice(None), slice(c_lo, c_hi)),
+        'Red edge': (slice(None), slice(r_lo, r_hi)),
+    }
+    from math_utils import biweight as _biw
+    def band_biweight(Fregion: np.ndarray) -> np.ndarray:
+        vals = np.full(Nfib, np.nan, dtype=float)
+        for f in range(Nfib):
+            y = Fregion[f]
+            if np.isfinite(y).any():
+                try:
+                    vals[f] = float(_biw(y[np.isfinite(y)]))
+                except Exception:
+                    vals[f] = float(np.nanmedian(y))
+        return vals
+    def _norm(v: np.ndarray) -> np.ndarray:
+        med = np.nanmedian(v[np.isfinite(v)]) if np.isfinite(v).any() else 1.0
+        if not np.isfinite(med) or med == 0:
+            med = 1.0
+        return v / med
+    out: Dict[str, Dict[str, float]] = {}
+    for name, sl in bands.items():
+        row_sl, col_sl = sl
+        Bt = Ft[row_sl, col_sl]
+        Bs = Fs[row_sl, col_sl]
+        vt = band_biweight(Bt)
+        vs = band_biweight(Bs)
+        vn_t = _norm(vt)
+        vn_s = _norm(vs)
+        mdiff = vn_s - vn_t
+        md = mdiff[np.isfinite(mdiff)]
+        if md.size:
+            out[name] = {
+                'median': float(np.nanmedian(md)),
+                'std': float(np.nanstd(md)),
+                'mad': float(_mad(md)),
+            }
+        else:
+            out[name] = {'median': np.nan, 'std': np.nan, 'mad': np.nan}
     return out
 
 
@@ -761,6 +843,90 @@ def save_amp_qa_page(
     # Save
     png_path = out_folder / f"QA_{amp_id}.png"
     fig.savefig(png_path, dpi=150)
+    
+    # Build structured QA record (augment metrics in-place for backward-compatibility)
+    def _status_from_thresholds(value: float, thr: dict) -> str:
+        try:
+            v = float(value)
+        except Exception:
+            return "fail"
+        warn = thr.get('warn', None)
+        fail = thr.get('fail', None)
+        mode = thr.get('mode', 'high_is_bad')  # or 'low_is_bad'
+        if not np.isfinite(v):
+            return "fail"
+        if mode == 'high_is_bad':
+            if fail is not None and v >= fail:
+                return 'fail'
+            if warn is not None and v >= warn:
+                return 'warn'
+            return 'pass'
+        else:  # low_is_bad
+            if fail is not None and v <= fail:
+                return 'fail'
+            if warn is not None and v <= warn:
+                return 'warn'
+            return 'pass'
+    
+    # Default thresholds; can be tuned later or overridden downstream
+    thresholds = {
+        'readnoise_e': {'warn': 4.5, 'fail': 6.0, 'mode': 'high_is_bad'},
+        'bad_wavelength_frac': {'warn': 0.05, 'fail': 0.20, 'mode': 'high_is_bad'},
+        'failed_traces': {'warn': 5, 'fail': 20, 'mode': 'high_is_bad'},
+        'median_arc_rms': {'warn': 0.20, 'fail': 0.50, 'mode': 'high_is_bad'},
+        'masked_spectral_frac': {'warn': 0.05, 'fail': 0.20, 'mode': 'high_is_bad'},
+        # Fiber norm band residuals (absolute median difference)
+        'fibernorm_blue_edge_std': {'warn': 0.05, 'fail': 0.10, 'mode': 'high_is_bad'},
+        'fibernorm_central_std': {'warn': 0.05, 'fail': 0.10, 'mode': 'high_is_bad'},
+        'fibernorm_red_edge_std': {'warn': 0.05, 'fail': 0.10, 'mode': 'high_is_bad'},
+    }
+
+    # Plot paths to embed in JSON
+    plots = {
+        'qa_page': str(png_path),
+        'arc_identify': str(ref_profile_img) if ref_profile_img else None,
+        'specmask_overlay': str(specmask_img) if specmask_img else None,
+        'trace_overlay': str(trace_img) if trace_img else None,
+        'fibernorm_diagnostic': str(fibernorm_img) if fibernorm_img else None,
+        'fibernorm_compare': str(fibernorm_cmp_img) if fibernorm_cmp_img else None,
+    }
+
+    # Compute checks and overall status
+    check_keys = [
+        'readnoise_e',
+        'bad_wavelength_frac',
+        'failed_traces',
+        'median_arc_rms',
+        'masked_spectral_frac',
+    ]
+    # Include fibernorm keys if present
+    for fk in ('fibernorm_blue_edge_std', 'fibernorm_central_std', 'fibernorm_red_edge_std'):
+        if fk in metrics and np.isfinite(metrics.get(fk, np.nan)):
+            check_keys.append(fk)
+    checks = {}
+    worst = 'pass'
+    order = {'pass': 0, 'warn': 1, 'fail': 2}
+    for key in check_keys:
+        val = metrics.get(key, np.nan)
+        thr = thresholds.get(key, {})
+        # use absolute for fibernorm residual medians
+        if 'fibernorm_' in key and np.isfinite(val):
+            val = abs(float(val))
+        status = _status_from_thresholds(val, thr)
+        checks[key] = {
+            'value': float(val) if np.isfinite(val) else None,
+            'status': status,
+            'thresholds': thr,
+        }
+        if order[status] > order[worst]:
+            worst = status
+
+    # Augment metrics dict with structured info
+    metrics['__plots__'] = plots
+    metrics['__checks__'] = checks
+    metrics['__overall_status__'] = worst
+    metrics['__thresholds__'] = thresholds
+
     # Write JSON sidecar
     sidecar = out_folder / f"QA_{amp_id}.json"
     try:
