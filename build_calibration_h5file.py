@@ -507,7 +507,7 @@ T = Table.read(op.join(dirname, 'Lines_list/virus_lines.dat'),
                format='ascii.no_header')
 T_array = np.array(T['col1'])
 
-for ifuslot_key in ifuslots[:10]:
+for ifuslot_key in ifuslots:
     ifuslot, specid, ifuid, contid = ifuslot_key.split('_')
     for amp in ['LL', 'LU', 'RL', 'RU']:
 
