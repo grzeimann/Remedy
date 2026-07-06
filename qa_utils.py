@@ -933,6 +933,7 @@ def save_amp_qa_page(
         f"bad wavelength %: {100.0 * metrics.get('bad_wavelength_frac', np.nan):.2f}",
         f"failed traces: {metrics.get('failed_traces', 0)}",
         f"failed wavelength fibers: {metrics.get('failed_wave_fibers', 0)}",
+        f"median trace RMS: {metrics.get('trace_rms_median', np.nan):.3f}",
         f"median arc RMS: {metrics.get('median_arc_rms', np.nan):.3f}",
     ]
     ax_text.text(0.02, 0.98, "\n".join(lines), family='monospace', fontsize=11, va='top')
@@ -988,6 +989,7 @@ def save_amp_qa_page(
         'bad_wavelength_frac': {'warn': 0.05, 'fail': 0.20, 'mode': 'high_is_bad'},
         'failed_traces': {'warn': 5, 'fail': 20, 'mode': 'high_is_bad'},
         'median_arc_rms': {'warn': 0.20, 'fail': 0.50, 'mode': 'high_is_bad'},
+        'trace_rms_median': {'warn': 0.20, 'fail': 0.50, 'mode': 'high_is_bad'},
         'masked_spectral_frac': {'warn': 0.05, 'fail': 0.20, 'mode': 'high_is_bad'},
         # Fiber norm band residuals (absolute median difference)
         'fibernorm_blue_edge_std': {'warn': 0.05, 'fail': 0.10, 'mode': 'high_is_bad'},
@@ -1011,6 +1013,7 @@ def save_amp_qa_page(
         'readnoise_e',
         'bad_wavelength_frac',
         'failed_traces',
+        'trace_rms_median',
         'median_arc_rms',
         'masked_spectral_frac',
     ]

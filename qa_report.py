@@ -157,7 +157,7 @@ def render_html(records: List[Dict[str, Any]], template_str: str) -> str:
     # Collect union of known check keys from thresholds and present checks
     # Assume thresholds are the same across records; fallback to known keys
     default_keys = [
-        'readnoise_e', 'bad_wavelength_frac', 'failed_traces', 'median_arc_rms', 'masked_spectral_frac',
+        'readnoise_e', 'bad_wavelength_frac', 'failed_traces', 'trace_rms_median', 'median_arc_rms', 'masked_spectral_frac',
         'fibernorm_blue_edge_median', 'fibernorm_central_median', 'fibernorm_red_edge_median'
     ]
     thresholds = {}
