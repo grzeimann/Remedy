@@ -48,7 +48,9 @@ def summarize_amp_metrics(
     extra: Optional[Dict[str, Any]] = None,
     arc_rms_array: Optional[np.ndarray] = None,
     fibernorm_bands: Optional[Dict[str, Dict[str, float]]] = None,
-) -> Dict[str, Any]:
+    trace_rms_per_fiber: Optional[np.ndarray] = None,
+    wave_rms_per_fiber: Optional[np.ndarray] = None,
+) -> Dict[str, Any]: 
     """Compute scalar QA metrics for an amplifier.
 
     Returns a dict with numeric values and small counts; values may be NaN when
@@ -87,19 +89,59 @@ def summarize_amp_metrics(
     total_w = bad_w.size if bad_w.size else 1
     metrics["bad_wavelength_frac"] = float(np.sum(bad_w) / total_w)
 
-    # Failed traces: rows with too few finite entries
+    # Trace and wavelength failure counts based on per-fiber RMS when available
+    # Trace failures: count fibers with RMS > 0.5 (fail), warn at > 0.2
     tr = np.asarray(trace, dtype=float)
-    row_good = np.isfinite(tr).sum(axis=1) > (0.5 * tr.shape[1]) if tr.ndim == 2 else np.array([])
-    metrics["failed_traces"] = int((~row_good).sum()) if row_good.size else int(112)
-
-    # Failed wavelength fibers: rows with insufficient finite wavelengths
-    if w.ndim == 2 and w.size:
-        w_row_good = np.isfinite(w).sum(axis=1) > (0.8 * w.shape[1])
-        metrics["failed_wave_fibers"] = int((~w_row_good).sum())
+    fail_thr = 0.5
+    warn_thr = 0.2
+    if trace_rms_per_fiber is not None:
+        try:
+            trr = np.asarray(trace_rms_per_fiber, dtype=float).ravel()
+            trr_fin = trr[np.isfinite(trr)]
+            metrics["trace_rms_median"] = float(np.nanmedian(trr_fin)) if trr_fin.size else np.nan
+            metrics["trace_rms_warn_count"] = int(np.sum(trr_fin > warn_thr)) if trr_fin.size else 112
+            metrics["failed_traces"] = int(np.sum(trr_fin > fail_thr)) if trr_fin.size else 112
+        except Exception:
+            # Fallback to finite fraction method if RMS not usable
+            row_good = np.isfinite(tr).sum(axis=1) > (0.5 * tr.shape[1]) if tr.ndim == 2 else np.array([])
+            metrics["failed_traces"] = int((~row_good).sum()) if row_good.size else int(112)
+            metrics["trace_rms_median"] = np.nan
+            metrics["trace_rms_warn_count"] = 112
     else:
-        metrics["failed_wave_fibers"] = int(112)
+        # Legacy behavior fallback
+        row_good = np.isfinite(tr).sum(axis=1) > (0.5 * tr.shape[1]) if tr.ndim == 2 else np.array([])
+        metrics["failed_traces"] = int((~row_good).sum()) if row_good.size else int(112)
+        metrics["trace_rms_median"] = np.nan
+        metrics["trace_rms_warn_count"] = 112
 
-    # Median arc RMS: prefer provided per-row residuals from wavelength fit.
+    # Wavelength failures: prefer per-fiber RMS array (wave_rms_per_fiber),
+    # else use arc_rms_array if provided, else fallback to finite count.
+    if wave_rms_per_fiber is not None or arc_rms_array is not None:
+        try:
+            wr = wave_rms_per_fiber if wave_rms_per_fiber is not None else arc_rms_array
+            wr = np.asarray(wr, dtype=float).ravel()
+            wr_fin = wr[np.isfinite(wr) & (wr > 0)]
+            metrics["wave_rms_median"] = float(np.nanmedian(wr_fin)) if wr_fin.size else np.nan
+            metrics["wave_rms_warn_count"] = int(np.sum(wr_fin > warn_thr)) if wr_fin.size else 112
+            metrics["failed_wave_fibers"] = int(np.sum(wr_fin > fail_thr)) if wr_fin.size else 112
+        except Exception:
+            if w.ndim == 2 and w.size:
+                w_row_good = np.isfinite(w).sum(axis=1) > (0.8 * w.shape[1])
+                metrics["failed_wave_fibers"] = int((~w_row_good).sum())
+            else:
+                metrics["failed_wave_fibers"] = int(112)
+            metrics["wave_rms_median"] = np.nan
+            metrics["wave_rms_warn_count"] = 112
+    else:
+        if w.ndim == 2 and w.size:
+            w_row_good = np.isfinite(w).sum(axis=1) > (0.8 * w.shape[1])
+            metrics["failed_wave_fibers"] = int((~w_row_good).sum())
+        else:
+            metrics["failed_wave_fibers"] = int(112)
+        metrics["wave_rms_median"] = np.nan
+        metrics["wave_rms_warn_count"] = 112
+
+    # Median arc RMS (for display): prefer provided per-row residuals.
     arc_rms = np.nan
     if arc_rms_array is not None:
         try:

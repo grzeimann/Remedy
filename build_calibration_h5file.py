@@ -597,6 +597,37 @@ for ifuslot_key in ifuslots:
                     except Exception as e_fb:
                         args.log.warning(f"[QA] Failed to compute fibernorm band residuals for {amp_id}: {e_fb}")
 
+                    # Compute per-fiber trace RMS using chunk residuals vs fitted trace at xchunks
+                    trace_rms_per_fiber = None
+                    try:
+                        if (trace is not None and np.size(trace) and
+                            xchunks is not None and np.size(xchunks) and
+                            trace_chunks is not None and np.size(trace_chunks)):
+                            xc = np.asarray(xchunks, dtype=float).ravel()
+                            Trc = np.asarray(trace_chunks, dtype=float)
+                            Tr = np.asarray(trace, dtype=float)
+                            Nfib_c, Nch = Trc.shape
+                            Nfib, Npix = Tr.shape
+                            # Evaluate fitted trace at chunk x positions using nearest integer indexing
+                            xi = np.clip(np.round(xc).astype(int), 0, max(0, Npix-1))
+                            yfit = Tr[:, xi] if Nfib > 0 and xi.size > 0 else np.zeros_like(Trc)
+                            resid = Trc - yfit
+                            # Mask invalids and zeros in Trc (zeros denote missing)
+                            m = np.isfinite(resid) & np.isfinite(Trc) & (Trc != 0)
+                            # Compute per-fiber RMS across chunks
+                            rms = np.full(Nfib_c, np.nan, dtype=float)
+                            for f in range(Nfib_c):
+                                mm = m[f]
+                                if np.count_nonzero(mm) > 2:
+                                    r = resid[f, mm]
+                                    rms[f] = float(np.sqrt(np.nanmean(r*r)))
+                            trace_rms_per_fiber = rms
+                    except Exception as e_trr:
+                        try:
+                            args.log.warning(f"[QA] Failed to compute trace RMS for {amp_id}: {e_trr}")
+                        except Exception:
+                            pass
+
                     # Build metrics now that fibernorm residuals are available
                     metrics = summarize_amp_metrics(
                         amp_id=amp_id,
@@ -617,6 +648,8 @@ for ifuslot_key in ifuslots:
                         },
                         arc_rms_array=rms_rows,
                         fibernorm_bands=fibernorm_bands,
+                        trace_rms_per_fiber=trace_rms_per_fiber,
+                        wave_rms_per_fiber=rms_rows,
                     )
 
                     qa_out_dir = Path(args.qa_folder)
