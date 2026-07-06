@@ -28,7 +28,7 @@ from fiber_utils import measure_contrast, get_bigW, get_bigF
 from input_utils import setup_parser, set_daterange, setup_logging
 from math_utils import biweight
 from scipy.interpolate import interp1d
-from qa_utils import summarize_amp_metrics, save_amp_qa_page, plot_specmask_overlay, plot_trace_overlay, plot_fibernorm_diagnostic, plot_fibernorm_compare, compute_fibernorm_band_residuals
+from qa_utils import summarize_amp_metrics, save_amp_qa_page, plot_specmask_overlay, plot_trace_overlay, plot_fibernorm_diagnostic, plot_fibernorm_compare, compute_fibernorm_band_residuals, plot_bias_dark_profile
 
 
 warnings.filterwarnings("ignore")
@@ -653,7 +653,13 @@ for ifuslot_key in ifuslots:
 
                     try:
                         specmask_png, trace_png, fibernorm_png, fibernorm_cmp_png = _gen_qa_images()
-                        png_path = save_amp_qa_page(qa_out_dir, amp_id, metrics, ref_img, specmask_png, trace_png, fibernorm_png, fibernorm_cmp_png)
+                        # Bias/Dark central collapse plot
+                        biasdark_png = None
+                        try:
+                            biasdark_png = plot_bias_dark_profile(qa_out_dir, masterbias, masterdark, ncenter=100, filename=f"bias_dark_{amp_id}.png")
+                        except Exception as e_bd:
+                            args.log.warning(f"[QA] Bias/Dark profile failed for {amp_id}: {e_bd}")
+                        png_path = save_amp_qa_page(qa_out_dir, amp_id, metrics, ref_img, specmask_png, trace_png, fibernorm_png, fibernorm_cmp_png, biasdark_png)
                         args.log.info(f"[QA] Wrote QA summary page: {png_path}")
                     except Exception as e_page:
                         args.log.warning(f"[QA] Failed to write QA page for {amp_id}: {e_page}")

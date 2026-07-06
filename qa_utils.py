@@ -649,6 +649,75 @@ def plot_fibernorm_compare(
     return out
 
 
+def plot_bias_dark_profile(
+    out_folder: Path,
+    masterbias: Optional[np.ndarray],
+    masterdark: Optional[np.ndarray],
+    ncenter: int = 100,
+    filename: str = "bias_dark_profile.png",
+    title: str = "Master bias/dark central collapse",
+) -> Optional[Path]:
+    """Plot central-column collapsed row profiles for master bias and dark.
+
+    Takes approximately the central ncenter columns (or as many as available)
+    from each 2D image, computes the median across columns to obtain a 1D
+    profile vs. detector row, and plots bias and dark on the same axes.
+    """
+    if masterbias is None and masterdark is None:
+        return None
+    mb = np.asarray(masterbias) if masterbias is not None else None
+    md = np.asarray(masterdark) if masterdark is not None else None
+    # Determine central slice based on available shape (assume square ~1032)
+    def center_collapse(img: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        if img is None or img.ndim != 2 or img.size == 0:
+            return None
+        ny, nx = img.shape
+        if nx <= 0 or ny <= 0:
+            return None
+        w = int(max(1, min(ncenter, nx)))
+        c = nx // 2
+        x0 = max(0, c - w // 2)
+        x1 = min(nx, x0 + w)
+        sl = img[:, x0:x1]
+        with np.errstate(invalid='ignore'):
+            prof = np.nanmedian(sl, axis=1)
+        return prof.astype(float)
+    pb = center_collapse(mb)
+    pd = center_collapse(md)
+    if (pb is None or not np.isfinite(pb).any()) and (pd is None or not np.isfinite(pd).any()):
+        return None
+    # Build plot
+    fig, ax = plt.subplots(1, 1, figsize=(10.0, 4.0))
+    if pb is not None and np.isfinite(pb).any():
+        ax.plot(np.arange(pb.size), pb, label='Bias', color='tab:blue', lw=1.0)
+    if pd is not None and np.isfinite(pd).any():
+        ax.plot(np.arange(pd.size), pd, label='Dark', color='tab:orange', lw=1.0)
+    # Scale
+    vals = []
+    if pb is not None: vals.append(pb[np.isfinite(pb)])
+    if pd is not None: vals.append(pd[np.isfinite(pd)])
+    if len(vals):
+        allv = np.concatenate(vals) if len(vals) > 1 else vals[0]
+        if allv.size:
+            lo, hi = np.nanpercentile(allv, [1, 99])
+            if np.isfinite(lo) and np.isfinite(hi) and hi > lo:
+                pad = 0.1 * (hi - lo)
+                ax.set_ylim(lo - pad, hi + pad)
+    ax.set_xlabel('Detector row (y)')
+    ax.set_ylabel('Collapsed counts (median of central columns)')
+    ax.set_title(title)
+    ax.grid(alpha=0.25)
+    ax.legend(loc='best', frameon=False)
+
+    fig.tight_layout()
+    out_folder = Path(out_folder)
+    out_folder.mkdir(parents=True, exist_ok=True)
+    out = out_folder / filename
+    fig.savefig(out, dpi=160)
+    plt.close(fig)
+    return out
+
+
 def plot_trace_overlay(
     out_folder: Path,
     xchunks: Optional[np.ndarray],
@@ -773,6 +842,7 @@ def save_amp_qa_page(
     trace_img: Optional[Path] = None,
     fibernorm_img: Optional[Path] = None,
     fibernorm_cmp_img: Optional[Path] = None,
+    biasdark_img: Optional[Path] = None,
 ) -> Path:
     """Create a compact PNG QA page with key metrics and optional images.
 
@@ -794,6 +864,8 @@ def save_amp_qa_page(
         items.append((Path(fibernorm_img), 'Fiber normalization diagnostic'))
     if fibernorm_cmp_img and Path(fibernorm_cmp_img).exists():
         items.append((Path(fibernorm_cmp_img), 'Fiber normalization compare (twi vs sci)'))
+    if biasdark_img and Path(biasdark_img).exists():
+        items.append((Path(biasdark_img), 'Bias/Dark central collapse'))
 
     # Ensure at least one row on the right (placeholder if none)
     nimgs = max(1, len(items))
@@ -889,6 +961,7 @@ def save_amp_qa_page(
         'trace_overlay': str(trace_img) if trace_img else None,
         'fibernorm_diagnostic': str(fibernorm_img) if fibernorm_img else None,
         'fibernorm_compare': str(fibernorm_cmp_img) if fibernorm_cmp_img else None,
+        'biasdark_profile': str(biasdark_img) if biasdark_img else None,
     }
 
     # Compute checks and overall status

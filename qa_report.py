@@ -114,6 +114,7 @@ def get_template(template_path: Optional[Path]) -> str:
           {% if p.get('trace_overlay') %} · <a class="plot" href="{{ p.get('trace_overlay') }}">Trace</a>{% endif %}
           {% if p.get('fibernorm_diagnostic') %} · <a class="plot" href="{{ p.get('fibernorm_diagnostic') }}">FN</a>{% endif %}
           {% if p.get('fibernorm_compare') %} · <a class="plot" href="{{ p.get('fibernorm_compare') }}">FNcmp</a>{% endif %}
+          {% if p.get('biasdark_profile') %} · <a class="plot" href="{{ p.get('biasdark_profile') }}">Bias/Dark</a>{% endif %}
         </td>
       </tr>
       {% endfor %}
