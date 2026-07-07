@@ -17,6 +17,7 @@ from math_utils import biweight
 from datetime import datetime
 from scipy.interpolate import interp2d, interp1d, LinearNDInterpolator, griddata
 from scipy.signal import medfilt
+from scipy.ndimage import percentile_filter
 
 from astropy.modeling.models import Gaussian1D, Polynomial2D
 from astropy.modeling.fitting import LevMarLSQFitter
@@ -343,9 +344,11 @@ def get_trace(twilight, specid, ifuslot, ifuid, amp, obsdate, tr_folder):
     Trace = np.zeros((len(ref), len(chunks)))
     k = 0
     for flat, x in zip(flats, xchunks):
-        diff_array = flat[1:] - flat[:-1]
+        # Preprocess the flat profile to improve S/N for peak detection
+        flat_proc = preprocess_flat_for_detection(flat, perc_window=201, perc=5.0, poly_order=2, gauss_sigma=1.5)
+        diff_array = flat_proc[1:] - flat_proc[:-1]
         loc = np.where((diff_array[:-1] > 0.) * (diff_array[1:] < 0.))[0]
-        peaks = flat[loc+1]
+        peaks = flat_proc[loc+1]
         
         # Dynamically choose a cut that yields N1 peaks (number of good fibers)
         if len(peaks) >= N1 and N1 > 0:
@@ -356,6 +359,7 @@ def get_trace(twilight, specid, ifuslot, ifuid, amp, obsdate, tr_folder):
         else:
             # Fallback: take all detected peaks if fewer than N1 were found
             loc = np.sort(loc) + 1
+        # Use original (unprocessed) flat for sub-pixel peak localization
         trace = get_trace_chunk(flat, loc)
         T = np.zeros((len(ref)))
         if len(trace) == N1:
@@ -1062,3 +1066,63 @@ def measure_contrast(image, spec, trace, xmin=0,
     if not len(contrast):
         return None, None, None
     return np.percentile(contrast, 50), np.percentile(contrast, low_per), np.percentile(contrast, high_per)
+
+
+
+def preprocess_flat_for_detection(flat, perc_window=201, perc=5.0, poly_order=2, gauss_sigma=1.5):
+    """
+    Preprocess a 1D flat (median-collapsed along columns) to aid fiber peak detection.
+
+    Steps:
+    - Estimate a smooth background using a low percentile filter (e.g., 5th) with
+      a wide window (default 201 pixels).
+    - Fit a low-order polynomial (order=2) to the percentile background to model
+      large-scale structure, and subtract it from the original profile.
+    - Smooth the background-subtracted profile with a 1D Gaussian kernel
+      (sigma≈fiber dispersion resolution; default 1.5 pixels) to boost S/N.
+
+    Parameters
+    ----------
+    flat : 1D numpy array
+        Cross-dispersion profile (e.g., median of an image chunk along x).
+    perc_window : int, optional
+        Window size for percentile filter (odd recommended).
+    perc : float, optional
+        Percentile to compute in the filter (e.g., 5.0 for 5th percentile).
+    poly_order : int, optional
+        Polynomial order for background model fit (default: 2).
+    gauss_sigma : float, optional
+        Sigma of the Gaussian kernel used for smoothing (in pixels).
+
+    Returns
+    -------
+    prof_smooth : 1D numpy array
+        Background-subtracted and smoothed profile for robust peak finding.
+        Returns a safe fallback (copy of input or median-filtered) on failure.
+    """
+    try:
+        f = np.asarray(flat, dtype=float).ravel()
+        n = f.size
+        if n == 0:
+            return f
+        # Percentile background with wide window
+        w = int(max(3, perc_window))
+        if w % 2 == 0:
+            w += 1  # prefer odd window
+        bgp = percentile_filter(f, percentile=perc, size=w, mode='nearest')
+        # Poly-2 fit to percentile curve
+        x = np.arange(n, dtype=float)
+        # Guard against singular fit: need >= (poly_order+1) points
+        if n >= (poly_order + 1):
+            coeff = np.polyfit(x, bgp, deg=int(poly_order))
+            bgfit = np.polyval(coeff, x)
+        else:
+            bgfit = bgp
+        resid = f - bgfit
+        # Smooth residuals with Gaussian 1D kernel
+        sig = float(max(0.5, gauss_sigma))
+        kernel = Gaussian1DKernel(stddev=sig)
+        prof_smooth = convolve(resid, kernel, boundary='extend', nan_treatment='interpolate', preserve_nan=False)
+        return prof_smooth
+    except Exception:
+        return np.asarray(flat, dtype=float).ravel()
