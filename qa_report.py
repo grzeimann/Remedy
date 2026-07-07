@@ -93,7 +93,7 @@ def get_template(template_path: Optional[Path]) -> str:
     <tbody>
       {% for r in amps %}
       <tr>
-        <td>{{ r.amp }}</td>
+        <td>{{ r.amp }}{% if r.get('__notes__') == 'suspected_zero_frames' %} <span class="badge fail" title="Readnoise≈0; likely all-zero frames">zero-frames</span>{% endif %}</td>
         {% set overall = r.get('__overall_status__', 'unknown') %}
         <td><span class="badge {{ overall }}">{{ overall }}</span></td>
         {% for ck in check_keys %}

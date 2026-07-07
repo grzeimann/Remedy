@@ -63,6 +63,12 @@ def summarize_amp_metrics(
         metrics["readnoise_e"] = float(readnoise)
     except Exception:
         metrics["readnoise_e"] = np.nan
+    # Flag amps that likely have all-zero frames (e.g., readnoise computed as 0)
+    try:
+        rn = metrics["readnoise_e"]
+        metrics["zero_frames_suspected"] = bool(np.isfinite(rn) and rn <= 1e-6)
+    except Exception:
+        metrics["zero_frames_suspected"] = False
 
     # Bias/Dark/Flat central tendency and scatter
     for name, arr in (
@@ -923,6 +929,7 @@ def save_amp_qa_page(
     ax_text.axis('off')
 
     # Build multiline metrics text
+    zero_flag = bool(metrics.get('zero_frames_suspected', False))
     lines = [
         f"QA Summary — Amp: {metrics.get('amp', amp_id)}",
         f"readnoise: {metrics.get('readnoise_e', np.nan):.2f} e-",
@@ -936,6 +943,8 @@ def save_amp_qa_page(
         f"median trace RMS: {metrics.get('trace_rms_median', np.nan):.3f}",
         f"median arc RMS: {metrics.get('median_arc_rms', np.nan):.3f}",
     ]
+    if zero_flag:
+        lines.append("WARNING: Suspected all-zero frames (readnoise≈0). Metrics suppressed.")
     ax_text.text(0.02, 0.98, "\n".join(lines), family='monospace', fontsize=11, va='top')
 
     # Right: stacked images
@@ -1024,20 +1033,42 @@ def save_amp_qa_page(
     checks = {}
     worst = 'pass'
     order = {'pass': 0, 'warn': 1, 'fail': 2}
-    for key in check_keys:
-        val = metrics.get(key, np.nan)
-        thr = thresholds.get(key, {})
-        # use absolute for fibernorm residual medians
-        if 'fibernorm_' in key and np.isfinite(val):
-            val = abs(float(val))
-        status = _status_from_thresholds(val, thr)
-        checks[key] = {
-            'value': float(val) if np.isfinite(val) else None,
-            'status': status,
-            'thresholds': thr,
-        }
-        if order[status] > order[worst]:
-            worst = status
+    zero_flag = bool(metrics.get('zero_frames_suspected', False))
+    if zero_flag:
+        # Suppress misleading numbers: mark all checks (except readnoise) as fail with no value
+        for key in check_keys:
+            thr = thresholds.get(key, {})
+            if key == 'readnoise_e':
+                val = metrics.get(key, np.nan)
+                status = _status_from_thresholds(val, thr)
+                checks[key] = {
+                    'value': float(val) if np.isfinite(val) else None,
+                    'status': status,
+                    'thresholds': thr,
+                }
+            else:
+                checks[key] = {
+                    'value': None,
+                    'status': 'fail',
+                    'thresholds': thr,
+                }
+        worst = 'fail'
+        metrics['__notes__'] = 'suspected_zero_frames'
+    else:
+        for key in check_keys:
+            val = metrics.get(key, np.nan)
+            thr = thresholds.get(key, {})
+            # use absolute for fibernorm residual medians
+            if 'fibernorm_' in key and np.isfinite(val):
+                val = abs(float(val))
+            status = _status_from_thresholds(val, thr)
+            checks[key] = {
+                'value': float(val) if np.isfinite(val) else None,
+                'status': status,
+                'thresholds': thr,
+            }
+            if order[status] > order[worst]:
+                worst = status
 
     # Augment metrics dict with structured info
     metrics['__plots__'] = plots

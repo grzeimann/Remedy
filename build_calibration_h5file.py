@@ -685,13 +685,15 @@ for ifuslot_key in ifuslots:
                             resid = Trc - yfit
                             # Mask invalids and zeros in Trc (zeros denote missing)
                             m = np.isfinite(resid) & np.isfinite(Trc) & (Trc != 0)
-                            # Compute per-fiber RMS across chunks
+                            # Compute per-fiber robust dispersion across chunks using MAD (more tolerant to outliers)
                             rms = np.full(Nfib_c, np.nan, dtype=float)
                             for f in range(Nfib_c):
                                 mm = m[f]
                                 if np.count_nonzero(mm) > 2:
-                                    r = resid[f, mm]
-                                    rms[f] = float(np.sqrt(np.nanmean(r*r)))
+                                    r = resid[f, mm].astype(float)
+                                    med = np.nanmedian(r)
+                                    mad = np.nanmedian(np.abs(r - med))
+                                    rms[f] = float(1.4826 * mad)
                             trace_rms_per_fiber = rms
                     except Exception as e_trr:
                         try:
