@@ -378,7 +378,7 @@ def get_trace(twilight, specid, ifuslot, ifuid, amp, obsdate, tr_folder):
     trace = np.zeros((Trace.shape[0], twilight.shape[1]))
     for i in np.arange(Trace.shape[0]):
         sel = Trace[i, :] > 0.
-        trace[i] = np.polyval(np.polyfit(xchunks[sel], Trace[i, sel], 7), x)
+        trace[i] = robust_polyfit_predict(np.asarray(xchunks)[sel], Trace[i, sel], x, degree=4)
     if (specid == '504') and (ifuid == '018') and (amp == 'RU'):
         return trace[:-1, :], ref[:-1]
     return trace, ref, xchunks, Trace
@@ -1126,3 +1126,51 @@ def preprocess_flat_for_detection(flat, perc_window=201, perc=5.0, poly_order=2,
         return prof_smooth
     except Exception:
         return np.asarray(flat, dtype=float).ravel()
+
+
+
+def robust_polyfit_predict(x_obs, y_obs, x_pred, degree=4):
+    """
+    Robust polynomial fit y(x) using a low-order polynomial and predict on x_pred.
+
+    Preference order:
+    1) sklearn.linear_model.HuberRegressor with PolynomialFeatures (degree<=4)
+    2) Fallback to numpy.polyfit/ polyval with the same degree (reduced if needed)
+
+    Returns a float array of shape x_pred with NaNs if insufficient data.
+    """
+    import numpy as _np
+    # Coerce inputs
+    x_obs = _np.asarray(x_obs, dtype=float).ravel()
+    y_obs = _np.asarray(y_obs, dtype=float).ravel()
+    x_pred = _np.asarray(x_pred, dtype=float).ravel()
+
+    m = _np.isfinite(x_obs) & _np.isfinite(y_obs)
+    if m.sum() < 2:
+        return _np.full(x_pred.shape, _np.nan, dtype=float)
+
+    x = x_obs[m]
+    y = y_obs[m]
+    # Choose feasible degree
+    deg = int(max(1, min(int(degree), len(x) - 1)))
+
+    # Try robust sklearn fit
+    try:
+        from sklearn.preprocessing import PolynomialFeatures as _Poly
+        from sklearn.linear_model import HuberRegressor as _Huber
+        # Build design matrices
+        PF = _Poly(degree=deg, include_bias=False)
+        X = PF.fit_transform(x.reshape(-1, 1))
+        Xp = PF.transform(x_pred.reshape(-1, 1))
+        model = _Huber(epsilon=1.35, alpha=0.0, fit_intercept=True)
+        model.fit(X, y)
+        yhat = model.predict(Xp)
+        return yhat.astype(float)
+    except Exception:
+        # Numpy fallback
+        try:
+            coeff = _np.polyfit(x, y, deg=deg)
+            yhat = _np.polyval(coeff, x_pred)
+            return yhat.astype(float)
+        except Exception:
+            return _np.full(x_pred.shape, _np.nan, dtype=float)
