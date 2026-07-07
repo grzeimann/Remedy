@@ -238,35 +238,106 @@ def build_master_frame(file_list, tarinfo_list, ifuslot, amp, kind, log,
     # Create empty lists for the left edge jump, right edge jump, and structure
     objnames = ['hg', 'cd-a']
     bia_list = []
+    # Diagnostics: track why frames are being rejected to aid troubleshooting
+    diag = {
+        'total_checked': 0,
+        'not_found': 0,
+        'load_error': 0,
+        'mean_out_of_range': 0,
+        'header_mismatch': 0,
+        'kept': 0,
+        'examples': {
+            'not_found': [],
+            'load_error': [],
+            'mean_out_of_range': [],
+            'header_mismatch': [],
+        },
+        'seen_headers': {
+            'SPECID': set(),
+            'IFUID': set(),
+            'CONTID': set(),
+        }
+    }
+    low_high_limits = {
+        'flt': (50.0, 50000.0),
+        'twi': (50.0, 50000.0),
+        'sci': (1.0, 50000.0),
+    }
     for itm, tinfo in zip(file_list, tarinfo_list):
         fn = itm + '%s%s_%s.fits' % (ifuslot, amp, kind)
-        try:            
+        diag['total_checked'] += 1
+        try:
             I, E, header = base_reduction(fn, tinfo, get_header=True)
-            if (kind == 'flt') or (kind == 'twi'):
-                if (np.mean(I) < 50.) or (np.mean(I) > 50000):
-                    continue
-            if kind == 'sci':
-                if (np.mean(I) < 1.) or (np.mean(I) > 50000):
-                    continue
-            hspecid, hifuid = ['%03d' % int(header[name])
-                               for name in ['SPECID', 'IFUID']]
-            hcontid = header['CONTID']
-            if (hspecid != specid) or (hifuid != ifuid) or (hcontid != contid):
+        except FileNotFoundError:
+            diag['not_found'] += 1
+            if len(diag['examples']['not_found']) < 3:
+                diag['examples']['not_found'].append(fn)
+            continue
+        except Exception:
+            diag['load_error'] += 1
+            if len(diag['examples']['load_error']) < 3:
+                diag['examples']['load_error'].append(fn)
+            log.warning('Could not load %s' % fn)
+            continue
+        # Intensity sanity checks by kind
+        if kind in low_high_limits:
+            lo, hi = low_high_limits[kind]
+            m = float(np.nanmean(I)) if np.isfinite(I).any() else -np.inf
+            if (m < lo) or (m > hi):
+                diag['mean_out_of_range'] += 1
+                if len(diag['examples']['mean_out_of_range']) < 3:
+                    diag['examples']['mean_out_of_range'].append((fn, m, (lo, hi)))
                 continue
+        # Header selection
+        try:
+            hspecid, hifuid = ['%03d' % int(header[name]) for name in ['SPECID', 'IFUID']]
+            hcontid = header['CONTID']
+            # track what we see for diagnosis
+            diag['seen_headers']['SPECID'].add(hspecid)
+            diag['seen_headers']['IFUID'].add('%03d' % int(hifuid))
+            diag['seen_headers']['CONTID'].add(str(hcontid))
+        except Exception:
+            # If headers missing, mark as mismatch
+            diag['header_mismatch'] += 1
+            if len(diag['examples']['header_mismatch']) < 3:
+                diag['examples']['header_mismatch'].append((fn, 'MISSING-HEADERS'))
+            continue
+        if (hspecid != specid) or (hifuid != ifuid) or (hcontid != contid):
+            diag['header_mismatch'] += 1
+            if len(diag['examples']['header_mismatch']) < 3:
+                diag['examples']['header_mismatch'].append((fn, (hspecid, hifuid, hcontid)))
+            continue
+        # Timestamp
+        try:
             date, time = header['DATE'].split('T')
             datelist = date.split('-')
             timelist = time.split(':')
             d = datetime(int(datelist[0]), int(datelist[1]), int(datelist[2]),
                          int(timelist[0]), int(timelist[1]),
                          int(timelist[2].split('.')[0]))
-            bia_list.append([I, header['SPECID'], header['OBJECT'], d,
-                             header['IFUID'], header['CONTID']])
-        except:
-            log.warning('Could not load %s' % fn)
+        except Exception:
+            # Fallback: no DATE; still keep but timestamp unknown
+            d = datetime(1900, 1, 1, 0, 0, 0)
+        bia_list.append([I, header.get('SPECID', -1), header.get('OBJECT', ''), d,
+                         header.get('IFUID', -1), header.get('CONTID', -1)])
+        diag['kept'] += 1
 
-    # Select only the bias frames that match the input amp, e.g., "RU"
+    # If we kept nothing, emit a detailed diagnostic
     if not len(bia_list):
         log.warning('No %s frames found for date range given' % kind)
+        try:
+            seen = {k: sorted(list(v)) for k, v in diag['seen_headers'].items()}
+            log.info('[%s %s %s] Diagnostics for missing %s:' % (ifuslot, specid, ifuid, kind))
+            log.info('  - files checked: %d' % diag['total_checked'])
+            log.info('  - not found: %d (examples: %s)' % (diag['not_found'], diag['examples']['not_found']))
+            log.info('  - load errors: %d (examples: %s)' % (diag['load_error'], diag['examples']['load_error']))
+            if kind in low_high_limits:
+                lo, hi = low_high_limits[kind]
+                log.info('  - rejected by mean threshold [%g, %g]: %d (examples: %s)' % (lo, hi, diag['mean_out_of_range'], diag['examples']['mean_out_of_range']))
+            log.info('  - header mismatch (expected SPECID=%s IFUID=%s CONTID=%s): %d (examples: %s)' % (specid, ifuid, contid, diag['header_mismatch'], diag['examples']['header_mismatch']))
+            log.info('  - headers seen in searched files: %s' % seen)
+        except Exception:
+            pass
         return None
 
     if kind == 'cmp':
