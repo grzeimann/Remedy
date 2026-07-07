@@ -380,7 +380,9 @@ def get_trace(twilight, specid, ifuslot, ifuid, amp, obsdate, tr_folder):
         sel = Trace[i, :] > 0.
         trace[i] = robust_polyfit_predict(np.asarray(xchunks)[sel], Trace[i, sel], x, degree=4)
     if (specid == '504') and (ifuid == '018') and (amp == 'RU'):
-        return trace[:-1, :], ref[:-1]
+        # Preserve legacy behavior of dropping last fiber for this specific amp,
+        # but keep the return signature consistent (4 values)
+        return trace[:-1, :], ref[:-1], xchunks, Trace[:-1, :]
     return trace, ref, xchunks, Trace
 
 
@@ -1133,9 +1135,12 @@ def robust_polyfit_predict(x_obs, y_obs, x_pred, degree=4):
     """
     Robust polynomial fit y(x) using a low-order polynomial and predict on x_pred.
 
+    To avoid numerical blow-up when x spans large pixel ranges (e.g., 0..1031),
+    we normalize x to [-1, 1] for both sklearn and numpy backends.
+
     Preference order:
     1) sklearn.linear_model.HuberRegressor with PolynomialFeatures (degree<=4)
-    2) Fallback to numpy.polyfit/ polyval with the same degree (reduced if needed)
+    2) Fallback to numpy.polyfit/polyval with the same degree (reduced if needed)
 
     Returns a float array of shape x_pred with NaNs if insufficient data.
     """
@@ -1154,23 +1159,34 @@ def robust_polyfit_predict(x_obs, y_obs, x_pred, degree=4):
     # Choose feasible degree
     deg = int(max(1, min(int(degree), len(x) - 1)))
 
+    # Normalize x to [-1, 1] for stability
+    xmin = _np.nanmin(x)
+    xmax = _np.nanmax(x)
+    span = float(xmax - xmin)
+    if not _np.isfinite(span) or span <= 0:
+        # Degenerate x: predict constant = median(y)
+        return _np.full(x_pred.shape, float(_np.nanmedian(y)), dtype=float)
+    def _scale(u):
+        return 2.0 * (u - xmin) / span - 1.0
+    xs = _scale(x)
+    xps = _scale(x_pred)
+
     # Try robust sklearn fit
     try:
         from sklearn.preprocessing import PolynomialFeatures as _Poly
         from sklearn.linear_model import HuberRegressor as _Huber
-        # Build design matrices
         PF = _Poly(degree=deg, include_bias=False)
-        X = PF.fit_transform(x.reshape(-1, 1))
-        Xp = PF.transform(x_pred.reshape(-1, 1))
+        X = PF.fit_transform(xs.reshape(-1, 1))
+        Xp = PF.transform(xps.reshape(-1, 1))
         model = _Huber(epsilon=1.35, alpha=0.0, fit_intercept=True)
         model.fit(X, y)
         yhat = model.predict(Xp)
         return yhat.astype(float)
     except Exception:
-        # Numpy fallback
+        # Numpy fallback on scaled coordinates
         try:
-            coeff = _np.polyfit(x, y, deg=deg)
-            yhat = _np.polyval(coeff, x_pred)
+            coeff = _np.polyfit(xs, y, deg=deg)
+            yhat = _np.polyval(coeff, xps)
             return yhat.astype(float)
         except Exception:
             return _np.full(x_pred.shape, _np.nan, dtype=float)
