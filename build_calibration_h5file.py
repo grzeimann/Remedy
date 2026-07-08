@@ -588,6 +588,50 @@ def step_sci_and_mask(curr_trace, curr_wave, wave_ok):
         args.log.warning('SCI model/mask generation failed for %s %s: %s' % (ifuslot_key, amp, e))
     return _mastersci, _spec, _maskspec, _info
 
+
+def _project_spec_mask_to_ccd(trace: np.ndarray, spec_mask: np.ndarray, half_width: int = 3, ccd_shape: tuple | None = None) -> np.ndarray:
+    """Project a per-fiber spectral mask back into CCD pixel space.
+
+    For each fiber and spectral column x, mark masked pixels within
+    [round(trace[fiber, x]) - half_width, ..., +half_width] on the CCD.
+
+    Args:
+        trace: 2D (Nfib x Npix) array of subpixel fiber traces (y positions).
+        spec_mask: 2D boolean/float (Nfib x Npix) spectral mask, True/1 for masked.
+        half_width: Number of pixels to include on each side of the trace center.
+        ccd_shape: Optional (ny, nx) for the CCD output; defaults inferred from trace if None.
+    Returns:
+        2D boolean array (ny x nx) with True where CCD pixels are masked by spectral mask.
+    """
+    Tr = np.asarray(trace)
+    M = np.asarray(spec_mask)
+    if M.dtype != bool:
+        M = M > 0
+    Nfib, Npix = Tr.shape
+    if ccd_shape is None:
+        ny = int(np.nanmax(np.round(Tr)) + half_width + 1)
+        nx = int(Npix)
+    else:
+        ny, nx = ccd_shape
+    out = np.zeros((ny, nx), dtype=bool)
+    x = np.arange(Npix, dtype=int)
+    for f in range(Nfib):
+        # indices in x where this fiber is masked
+        mx = M[f]
+        if not np.any(mx):
+            continue
+        y_center = np.round(Tr[f]).astype(int)
+        # bound check y_center
+        y_center = np.clip(y_center, 0, ny - 1)
+        xs = x[mx]
+        ys = y_center[mx]
+        for k in range(-half_width, half_width + 1):
+            yk = ys + k
+            valid = (yk >= 0) & (yk < ny) & (xs >= 0) & (xs < nx)
+            if np.any(valid):
+                out[yk[valid], xs[valid]] = True
+    return out
+
 parser = setup_parser()
 parser.add_argument('outfilename', type=str,
                     help='''name of the output file''')
@@ -699,6 +743,19 @@ for ifuslot_key in ifuslots:
             out = step_sci_and_mask(trace, wave, wave_valid)
             if out is not None:
                 mastersci, sci_spec, maskspec, info_sci = out
+                try:
+                    # Build union of spectral mask with mask derived from pixelmask via extraction
+                    maskspec_from_pix = get_spectra((pixelmask > 0).astype(float), trace) > 0
+                    maskspec = ((maskspec > 0) | maskspec_from_pix).astype('float32')
+                    # Project spectral mask back to CCD within +/- 3 pixels of trace
+                    ccd_specmask = _project_spec_mask_to_ccd(trace, maskspec, half_width=3, ccd_shape=pixelmask.shape)
+                    # Union with original pixelmask
+                    pm_before = float(np.mean(pixelmask > 0)) if pixelmask.size else 0.0
+                    pixelmask = np.array(((pixelmask > 0) | ccd_specmask), dtype=int)
+                    pm_after = float(np.mean(pixelmask > 0)) if pixelmask.size else 0.0
+                    args.log.info(f"Updated pixelmask by projecting spec mask: frac before={100*pm_before:.2f}% after={100*pm_after:.2f}%")
+                except Exception as e_um:
+                    args.log.warning(f"Failed to union spec mask with pixelmask for {ifuslot_key} {amp}: {e_um}")
         
         success = append_fibers_to_table(row, wave, trace, ifupos, ifuslot,
                                          ifuid, specid, amp, readnoise,
