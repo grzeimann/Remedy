@@ -915,6 +915,10 @@ def save_amp_qa_page(
     if biasdark_img and Path(biasdark_img).exists():
         items.append((Path(biasdark_img), 'Bias/Dark central collapse'))
 
+    # If zero-frames suspected, suppress potentially misleading diagnostic images
+    if bool(metrics.get('zero_frames_suspected', False)) or metrics.get('__notes__') == 'suspected_zero_frames':
+        items = []
+
     # Ensure at least one row on the right (placeholder if none)
     nimgs = max(1, len(items))
 

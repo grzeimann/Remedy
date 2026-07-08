@@ -108,13 +108,18 @@ def get_template(template_path: Optional[Path]) -> str:
           </td>
         {% endfor %}
         <td class="small">
-          {% set p = r.get('__plots__', {}) %}
-          {% if p.get('qa_page') %}<a class="plot" href="{{ p.get('qa_page') }}">QA</a>{% endif %}
-          {% if p.get('specmask_overlay') %} · <a class="plot" href="{{ p.get('specmask_overlay') }}">Mask</a>{% endif %}
-          {% if p.get('trace_overlay') %} · <a class="plot" href="{{ p.get('trace_overlay') }}">Trace</a>{% endif %}
-          {% if p.get('fibernorm_diagnostic') %} · <a class="plot" href="{{ p.get('fibernorm_diagnostic') }}">FN</a>{% endif %}
-          {% if p.get('fibernorm_compare') %} · <a class="plot" href="{{ p.get('fibernorm_compare') }}">FNcmp</a>{% endif %}
-          {% if p.get('biasdark_profile') %} · <a class="plot" href="{{ p.get('biasdark_profile') }}">Bias/Dark</a>{% endif %}
+          {% set zero = (r.get('__notes__') == 'suspected_zero_frames') or r.get('zero_frames_suspected', False) %}
+          {% if not zero %}
+            {% set p = r.get('__plots__', {}) %}
+            {% if p.get('qa_page') %}<a class="plot" href="{{ p.get('qa_page') }}">QA</a>{% endif %}
+            {% if p.get('specmask_overlay') %} · <a class="plot" href="{{ p.get('specmask_overlay') }}">Mask</a>{% endif %}
+            {% if p.get('trace_overlay') %} · <a class="plot" href="{{ p.get('trace_overlay') }}">Trace</a>{% endif %}
+            {% if p.get('fibernorm_diagnostic') %} · <a class="plot" href="{{ p.get('fibernorm_diagnostic') }}">FN</a>{% endif %}
+            {% if p.get('fibernorm_compare') %} · <a class="plot" href="{{ p.get('fibernorm_compare') }}">FNcmp</a>{% endif %}
+            {% if p.get('biasdark_profile') %} · <a class="plot" href="{{ p.get('biasdark_profile') }}">Bias/Dark</a>{% endif %}
+          {% else %}
+            <span class="small">plots suppressed</span>
+          {% endif %}
         </td>
       </tr>
       {% endfor %}
