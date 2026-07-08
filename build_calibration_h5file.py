@@ -28,6 +28,7 @@ from fiber_utils import measure_contrast, get_bigW, get_bigF
 from input_utils import setup_parser, set_daterange, setup_logging
 from math_utils import biweight
 from scipy.interpolate import interp1d
+from scipy.ndimage import gaussian_filter1d
 from qa_utils import summarize_amp_metrics, save_amp_qa_page, plot_specmask_overlay, plot_trace_overlay, plot_fibernorm_diagnostic, plot_fibernorm_compare, compute_fibernorm_band_residuals, plot_bias_dark_profile
 
 
@@ -426,7 +427,55 @@ def step_flt_trace(curr_pixelmask):
         args.log.error('Trace Failed for %s %s.' % (ifuslot_key, amp))
     return _masterflt, _pixelmask, _trace, _xchunks, _trace_chunks, _info
 
-def step_cmp_wave(curr_trace):
+def _repair_masked_columns(image: np.ndarray, mask: np.ndarray, sigma: float = 1.0) -> np.ndarray:
+    """Fill masked pixels in an IFU arc image using row-wise interpolation and Gaussian smoothing.
+
+    - Operates along spectral columns (x) within each detector row (y).
+    - For rows with masked values, do a nearest-edge linear interpolation between valid
+      pixels, then blend masked spans with a Gaussian-filtered version to avoid sharp edges.
+    - Ensures no NaNs in the result; uses nearest/median fallbacks when needed.
+    """
+    img = np.asarray(image, dtype=float)
+    m = np.asarray(mask).astype(bool)
+    out = img.copy()
+    ny, nx = out.shape
+    # Replace NaNs in the working copy to keep filters stable; keep a finite map
+    finite = np.isfinite(out)
+    # Process each detector row independently
+    for y in range(ny):
+        row = out[y, :]
+        mrow = m[y, :]
+        if not mrow.any():
+            continue
+        # valid points are finite and unmasked
+        good = (~mrow) & np.isfinite(row)
+        if good.sum() >= 2:
+            x = np.arange(nx)
+            # Nearest extrapolation behavior from np.interp is fine for edges
+            interp_vals = np.interp(x, x[good], row[good])
+            # Blend masked spans with a lightly smoothed version to reduce discontinuities
+            smooth = gaussian_filter1d(interp_vals, sigma=max(0.5, float(sigma)), mode='nearest')
+            filled = row.copy()
+            filled[mrow] = smooth[mrow]
+            out[y, :] = filled
+        elif good.sum() == 1:
+            v = float(row[good][0]) if np.isfinite(row[good][0]) else 0.0
+            filled = row.copy()
+            filled[mrow] = v
+            # light smooth to avoid flat plateaus at transitions
+            out[y, :] = gaussian_filter1d(filled, sigma=max(0.5, float(sigma)), mode='nearest')
+        else:
+            # No good samples in this row: use row median (fallback) then smooth
+            med = float(np.nanmedian(row)) if np.isfinite(row).any() else 0.0
+            filled = np.full_like(row, med)
+            out[y, :] = gaussian_filter1d(filled, sigma=max(0.5, float(sigma)), mode='nearest')
+    # Ensure no NaNs
+    bad = ~np.isfinite(out)
+    if bad.any():
+        out[bad] = 0.0
+    return out
+
+def step_cmp_wave(curr_trace, curr_pixelmask):
     kind = 'cmp'
     args.log.info('Making %s master frame for %s %s' % (kind, ifuslot_key, amp))
     _info = build_master_frame(filename_dict[kind], tarinfo_dict[kind],
@@ -436,7 +485,19 @@ def step_cmp_wave(curr_trace):
         args.log.error("Can't complete reduction for %s %s because of lack of %s files." % (ifuslot_key, amp, kind))
         return None
     _mastercmp = _info[0] * 1.
-    _cmp_spec = get_spectra(_info[0], curr_trace)
+    try:
+        # Repair bright columns using combined pixel mask from dark+flat
+        mask = np.asarray(curr_pixelmask).astype(bool)
+        if mask.shape == _mastercmp.shape and mask.any():
+            repaired = _repair_masked_columns(_mastercmp, mask, sigma=1.0)
+            frac_mask = float(mask.mean())
+            args.log.info(f"Interpolated masked CMP pixels for {ifuslot_key} {amp}: {100.0*frac_mask:.2f}% masked")
+        else:
+            repaired = _mastercmp
+    except Exception as e:
+        args.log.warning(f"CMP repair failed for {ifuslot_key} {amp}: {e}")
+        repaired = _mastercmp
+    _cmp_spec = get_spectra(repaired, curr_trace)
     _wave = np.zeros((112, 1032))
     _wave_valid = False
     ref_img = None
@@ -621,7 +682,7 @@ for ifuslot_key in ifuslots:
         
         # cmp + wave
         if np.isfinite(trace).any():
-            out = step_cmp_wave(trace)
+            out = step_cmp_wave(trace, pixelmask)
             if out is not None:
                 mastercmp, _cmp, wave, wave_valid, ref_img, rms_rows, info_cmp = out
         else:
