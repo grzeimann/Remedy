@@ -352,13 +352,16 @@ for jk, h5file in enumerate(h5files):
     Dec = t.root.Survey.cols.dec[0]
     pa = t.root.Survey.cols.pa[0]
     offset = t.root.Survey.cols.offset[0]
-    # Log and ignore offset scaling for now per user request
     if (not np.isfinite(offset)) or (offset == 0):
-        args.log.warning(f'Offset for {op.basename(h5file)} is invalid ({offset}); proceeding without offset scaling.')
+        args.log.warning(f'Offset for {op.basename(h5file)} is invalid ({offset}); proceeding without offset correction.')
+        spectra = t.root.Fibers.cols.spectrum[:]
+        error = t.root.Fibers.cols.error[:]
     else:
-        args.log.info(f'Offset for {op.basename(h5file)}: {offset} (ignored for now)')
-    spectra = t.root.Fibers.cols.spectrum[:]  # do not divide by offset
-    error = t.root.Fibers.cols.error[:]       # do not divide by offset
+        args.log.info(f'Offset for {op.basename(h5file)}: {offset}')
+        # quick_reduction applies this photometric factor before writing the
+        # H5 file.  Divide it back out here, as the historical cube builder did.
+        spectra = t.root.Fibers.cols.spectrum[:] / offset
+        error = t.root.Fibers.cols.error[:] / offset
     for key in mask_dict.keys():
         date1 = int(key.split('-')[0])
         date2 = int(key.split('-')[1])
