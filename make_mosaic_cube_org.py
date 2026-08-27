@@ -8,6 +8,7 @@ Created on Thu Jun 18 13:10:11 2020
 import matplotlib
 matplotlib.use('agg')
 import argparse as ap
+from concurrent.futures import ThreadPoolExecutor
 from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.convolution import Gaussian1DKernel, interpolate_replace_nans
 from astropy.io import fits
@@ -81,10 +82,9 @@ parser.add_argument("-ff", "--filter_file",
                     help='''Filter filename''',
                     default=None, type=str)
 
-# Optional: write individual sub-dither cubes
-parser.add_argument("--write-sub-dithers",
-                    help='''Also write individual cubes/errorcubes per input dither (sub_dither_N)''',
-                    action='store_true')
+parser.add_argument("--wave-workers",
+                    help='''Number of threads used to build wavelength planes (default: 1)''',
+                    default=1, type=int)
 
 def rebin(arr, new_shape):
     """Rebin 2D array arr to shape new_shape by averaging."""
@@ -206,6 +206,8 @@ def make_image(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
     return image, np.sqrt(error), weight
 
 args = parser.parse_args(args=None)
+if args.wave_workers < 1:
+    parser.error('--wave-workers must be at least 1')
 args.log = setup_logging('make_image_from_h5')
 
 def_wave = np.linspace(3470., 5540., 1036)
@@ -228,11 +230,6 @@ xgrid, ygrid = np.meshgrid(xg, yg)
 cube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 ecube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 weightcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
-
-# Optional per-dither products (initialized later once shot_indices known)
-write_sub = args.write_sub_dithers or (len(h5files) == 3)
-sub_cubes = []
-sub_ecubes = []
 
 cnt = 0
 cnt_array = np.zeros((len(h5files), 2), dtype=int)
@@ -510,8 +507,8 @@ args.log.info(f'specarray global stats: finite={_finite_total}/{specarray.size},
 if _nonzero_total == 0:
     args.log.error('specarray is all zeros before imaging. Possible causes: filter response zero everywhere, norms zero/NaN, all spectra flagged.')
 
-Pos = np.zeros((len(raarray), 2))
-for i in np.arange(len(def_wave)):
+def render_wavelength(i):
+    """Build one wavelength plane using the existing imaging calculation."""
     x, y = tp.wcs_world2pix(raarray[:, i], decarray[:, i], 1)
     # Check how many positions fall within xgrid/ygrid bounds
     xmin, xmax = xg.min(), xg.max()
@@ -521,30 +518,27 @@ for i in np.arange(len(def_wave)):
     n_tot = int(len(raarray))
 
     args.log.info('Working on wavelength %0.0f' % def_wave[i])
-    Pos[:, 0], Pos[:, 1] = (x, y)
+    # Keep this per-worker; sharing the old serial-loop Pos array would make
+    # concurrent wavelength workers overwrite one another's positions.
+    Pos = np.column_stack((x, y))
     data = specarray[:, i]
     edata = errarray[:, i]
     # Full combination across all exposures (shots)
     image, errorimage, weight = make_image_interp(Pos, data, edata, xg, yg, 
                                                   xgrid, ygrid, 1.8 / 2.35,
                                                   shot_indices)
-    cube[i, :, :] += image
-    ecube[i, :, :] += errorimage
-    weightcube[i, :, :] += weight
+    return i, image, errorimage, weight
 
-    # Optional per-dither (per-exposure) planes
-    if write_sub:
-        # lazily initialize sub_cubes/ecubes once we know len(shot_indices)
-        if len(sub_cubes) == 0:
-            sub_cubes = [np.zeros_like(cube) for _ in range(len(shot_indices))]
-            sub_ecubes = [np.zeros_like(ecube) for _ in range(len(shot_indices))]
-        for jd in range(len(shot_indices)):
-            sub_window = [shot_indices[jd]]
-            simg, seimg, _swei = make_image_interp(Pos, data, edata, xg, yg,
-                                                   xgrid, ygrid, 1.8 / 2.35,
-                                                   sub_window)
-            sub_cubes[jd][i, :, :] += simg
-            sub_ecubes[jd][i, :, :] += seimg
+
+args.log.info('Using %d wavelength worker(s)' % args.wave_workers)
+with ThreadPoolExecutor(max_workers=args.wave_workers) as executor:
+    # executor.map preserves wavelength order in the returned results.  Each
+    # worker only reads the shared input arrays; cube writes remain here.
+    for i, image, errorimage, weight in executor.map(render_wavelength,
+                                                     range(len(def_wave))):
+        cube[i, :, :] = image
+        ecube[i, :, :] = errorimage
+        weightcube[i, :, :] = weight
 
 name = op.basename('%s_cube.fits' % args.surname)
 scale = args.pixel_scale / 3600.
@@ -606,29 +600,3 @@ header['CUNIT3'] = 'Angstrom'
 header['SPECSYS'] = 'TOPOCENT'
 F = fits.PrimaryHDU(np.array(weightcube, 'float32'), header=header)
 F.writeto(name, overwrite=True)
-
-# Write per-dither cubes if requested/enabled
-if write_sub and len(sub_cubes) > 0:
-    for jd in range(len(sub_cubes)):
-        # Data cube
-        name = op.basename(f"{args.surname}_sub_dither_{jd+1}_cube.fits")
-        header['CRPIX1'] = (N+1) / 2
-        header['CRPIX2'] = (N+1) / 2
-        header['WCSAXES'] = 3
-        header['CDELT3'] = 2.
-        header['CRPIX3'] = 1.
-        header['CRVAL3'] = 3470.
-        header['CTYPE1'] = 'RA---TAN'
-        header['CTYPE2'] = 'DEC--TAN'
-        header['CTYPE3'] = 'WAVE'
-        header['CUNIT1'] = 'deg'
-        header['CUNIT2'] = 'deg'
-        header['CUNIT3'] = 'Angstrom'
-        header['SPECSYS'] = 'TOPOCENT'
-        F = fits.PrimaryHDU(np.array(sub_cubes[jd], 'float32'), header=header)
-        F.writeto(name, overwrite=True)
-        # Error cube
-        name = op.basename(f"{args.surname}_sub_dither_{jd+1}_errorcube.fits")
-        F = fits.PrimaryHDU(np.array(sub_ecubes[jd], 'float32'), header=header)
-        F.writeto(name, overwrite=True)
-    args.log.info(f"Wrote {len(sub_cubes)} per-dither cube/errorcube pairs with pattern {args.surname}_sub_dither_N_*.fits")
