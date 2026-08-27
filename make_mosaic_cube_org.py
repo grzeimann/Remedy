@@ -398,6 +398,10 @@ for jk, h5file in enumerate(h5files):
         gsel = (xc>0) * (xc<len(xg)) * (yc>0) * (yc<len(yg))
         d = np.sqrt(xgrid**2 + ygrid**2)
         skyvalues = (binimage[yc[gsel], xc[gsel]] < 0.01) * (d[yc[gsel], xc[gsel]] > 420.)
+        args.log.info(
+            'Sky diagnostics for %s: gsel=%d, sky=%d, finite_spectra=%d',
+            h5file, int(np.sum(gsel)), int(np.sum(skyvalues)),
+            int(np.isfinite(spectra).sum()))
         backspectra = biweight(spectra[gsel][skyvalues], axis=0)
         args.log.info('Average spectrum residual value: %0.3f' % np.nanmedian(backspectra))
         spectra[:] -= backspectra[np.newaxis, :]
@@ -435,6 +439,14 @@ for jk, h5file in enumerate(h5files):
         for i, v in enumerate(xmax):
             y = (cimage - v) / nimage
             y[~sel] = 0.0
+            if i == 0:
+                norm_sample = y[sel][nimage[sel] > thresh]
+                args.log.info(
+                    'Normalization diagnostics for %s: finite_cimage=%d, '
+                    'nimage_gt_thresh=%d, norm_samples=%d, finite_norm_samples=%d',
+                    h5file, int(np.isfinite(cimage).sum()),
+                    int(np.sum(np.isfinite(nimage) & (nimage > thresh))),
+                    int(norm_sample.size), int(np.isfinite(norm_sample).sum()))
             norm, std = biweight(y[sel][nimage[sel] > thresh], calc_std=True)
             bmax[i] = std / norm
         back = xmax[np.argmin(bmax)]
