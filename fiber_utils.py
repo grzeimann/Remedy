@@ -789,9 +789,16 @@ def get_pixelmask(dark):
     return np.array(mask, dtype=int)
 
 def clean_data(image, mask):
+    """Interpolate masked pixels along each detector row.
+
+    A row with no valid samples cannot be interpolated.  Leave such a row
+    unchanged rather than passing empty sample arrays to ``np.interp``.
+    """
     x = np.arange(image.shape[1])
     for j in np.arange(image.shape[0]):
         sel = mask[j] < 1
+        if not np.any(sel):
+            continue
         image[j, :] = np.interp(x, x[sel], image[j][sel])
     return image
     
