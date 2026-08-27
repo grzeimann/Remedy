@@ -412,9 +412,9 @@ for jk, h5file in enumerate(h5files):
 
 
         
-        cn = np.ones((1, 2))
-        cn[0, 0] = 0
-        cn[0, 1] = len(collapse_image)
+        # make_image_interp interprets tuple/list pairs as [start, stop]
+        # ranges; passing a 2D ndarray here would be treated as two indices.
+        cn = [(0, len(collapse_image))]
         image, errorimage, weight = make_image_interp(Pos, collapse_image, collapse_eimage,
                                                       xg, yg, xgrid, ygrid, 1.8 / 2.35,
                                                       cn)
