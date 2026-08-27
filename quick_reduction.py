@@ -40,6 +40,7 @@ from fiber_utils import detect_sources, get_powerlaw
 from fiber_utils import get_spectra, get_spectra_error, get_spectra_chi2
 from fiber_utils import clean_data
 from fiber_utils import orient_image, base_reduction
+from fiber_utils import open_corral_observation, open_fits_member
 from input_utils import setup_logging
 from math_utils import biweight
 from photutils.detection import DAOStarFinder
@@ -107,6 +108,11 @@ parser.add_argument("-r", "--rootdir",
                     (just before date folders)''',
                     type=str, default='/work/03946/hetdex/maverick')
 
+parser.add_argument("--archived",
+                    help='''Read raw VIRUS data directly from the Corral
+                    archive.''',
+                    action='store_true', default=False)
+
 parser.add_argument("-ra", "--ra",
                     help='''RA of the IFUSLOT to be reduced''',
                     type=float, default=None)
@@ -158,6 +164,47 @@ args = parser.parse_args(args=None)
 
 ###############################################################################
 # FUNCTIONS FOR THE MAIN BODY BELOW                                                       
+
+
+CORRAL_RAW_ROOT = '/corral-repl/utexas/Hobby-Eberly-Telesco/het_raw'
+
+
+def corral_observation_archive(date, observation):
+    """Return the deterministic Corral descriptor for one VIRUS observation."""
+    outer_tar = op.join(CORRAL_RAW_ROOT, '%s.tar' % date)
+    if not op.exists(outer_tar):
+        raise FileNotFoundError('Corral date tar was not found: %s' % outer_tar)
+    return {
+        'outer_tar': outer_tar,
+        'observation_member': '%s/virus/virus%07d.tar' % (date, observation),
+    }
+
+
+def corral_twilight_archive(date, kind='twi'):
+    """Find the nearest prior date tar containing a twilight observation."""
+    date0 = datetime(int(date[:4]), int(date[4:6]), int(date[6:]))
+    for days_back in range(61):
+        candidate_date = date0 - timedelta(days=days_back)
+        candidate = '%04d%02d%02d' % (candidate_date.year,
+                                      candidate_date.month, candidate_date.day)
+        outer_tar = op.join(CORRAL_RAW_ROOT, '%s.tar' % candidate)
+        if not op.exists(outer_tar):
+            continue
+        with tarfile.open(outer_tar, 'r') as outer:
+            observation_members = [member.name for member in outer.getmembers()
+                                   if member.isfile() and
+                                   member.name.endswith('.tar') and
+                                   '/virus/' in member.name]
+        for observation_member in sorted(observation_members):
+            archive = {'outer_tar': outer_tar,
+                       'observation_member': observation_member}
+            with open_corral_observation(archive) as observation:
+                if any(name.endswith('.fits') and name[-8:-5] == kind
+                       for name in observation.getnames()):
+                    return archive
+    raise FileNotFoundError(
+        'No Corral twilight observation containing %r found within 60 days '
+        'before %s' % (kind, date))
 
 
 
@@ -250,28 +297,22 @@ def get_ra_dec_from_header(tfile, fn):
     pa : float
         Parangle
     '''
-    if tfile is not None:
-        t = tarfile.open(tfile,'r')
-        a = fits.open(t.extractfile(fn))
-    else:
-        a = fits.open(fn)
-    try:
-        ra = a[0].header['TRAJCRA'] * 15.
-        dec = a[0].header['TRAJCDEC'] * 1.
-        ra1 = a[0].header['TRAJRA'] * 15.
-        dec1 = a[0].header['TRAJDEC'] * 1.
-        dra = (ra - ra1)*np.cos(dec*np.pi/180.)*3600.
-        ddec = (dec - dec1)*3600.
-        d = np.sqrt(dra**2+ddec**2)
-        if d > 25.:
-            ra = ra1
-            dec = dec1
-    except:
-        ra = a[0].header['TRAJRA'] * 15.
-        dec = a[0].header['TRAJDEC'] * 1.
-    pa = a[0].header['PARANGLE'] * 1.
-    if tfile is not None:
-        t.close()
+    with open_fits_member(fn, tfile=tfile) as a:
+        try:
+            ra = a[0].header['TRAJCRA'] * 15.
+            dec = a[0].header['TRAJCDEC'] * 1.
+            ra1 = a[0].header['TRAJRA'] * 15.
+            dec1 = a[0].header['TRAJDEC'] * 1.
+            dra = (ra - ra1)*np.cos(dec*np.pi/180.)*3600.
+            ddec = (dec - dec1)*3600.
+            d = np.sqrt(dra**2+ddec**2)
+            if d > 25.:
+                ra = ra1
+                dec = dec1
+        except:
+            ra = a[0].header['TRAJRA'] * 15.
+            dec = a[0].header['TRAJDEC'] * 1.
+        pa = a[0].header['PARANGLE'] * 1.
     return ra, dec, pa
 
 
@@ -329,6 +370,25 @@ def get_ifuslots():
         
     file_glob = build_path(args.rootdir, args.date, args.observation,
                            '*', 'LL', exp='exp01', base=args.nametype)
+
+    if args.archived:
+        archive = corral_observation_archive(args.date, args.observation)
+        fnames_glob = op.join(*splitall(file_glob)[-4:])
+        with open_corral_observation(archive) as observation:
+            filenames = fnmatch.filter(observation.getnames(), fnames_glob)
+            if not filenames:
+                raise FileNotFoundError(
+                    'No %s FITS members matching %r were found in Corral '
+                    'observation %s' %
+                    (args.nametype, fnames_glob, archive['observation_member']))
+            mzip = []
+            for filename in filenames:
+                with open_fits_member(filename, archive=archive) as f:
+                    specid = '%03d' % int(f[0].header['SPECID'])
+                    ifuid = '%03d' % int(f[0].header['IFUID'])
+                    ifuslot = '%03d' % int(f[0].header['IFUSLOT'])
+                    mzip.append('%s_%s_%s' % (specid, ifuslot, ifuid))
+        return np.unique(mzip)
         
     filenames = sorted(glob.glob(file_glob))
     
@@ -638,6 +698,20 @@ def get_sci_twi_files(kind='twi'):
     twitarfile : str or None
         name of the tar file containing the fits files if there is one
     '''
+    if args.archived:
+        sciarc = corral_observation_archive(args.date, args.observation)
+        with open_corral_observation(sciarc) as observation:
+            scinames = sorted(observation.getnames())
+        if not any(name.endswith('.fits') for name in scinames):
+            raise FileNotFoundError(
+                'No FITS members were found in Corral observation %s' %
+                sciarc['observation_member'])
+
+        twiarc = corral_twilight_archive(args.date, kind=kind)
+        with open_corral_observation(twiarc) as observation:
+            twinames = sorted(observation.getnames())
+        return scinames, twinames, sciarc, twiarc
+
     file_glob = build_path(args.rootdir, args.date, args.observation,
                            '047', 'LL', base=args.nametype)
     path = splitall(file_glob)
@@ -1231,6 +1305,57 @@ def get_mirror_illumination_throughput(fn=None, default=51.4e4, default_t=1.,
 def get_mirror_illumination_guider(fn, exptime, default=51.4e4, default_t=1.,
                                    default_iq=1.8,
                                    path='/work/03946/hetdex/maverick'):
+    if args.archived:
+        outer_tar = op.join(CORRAL_RAW_ROOT, '%s.tar' % args.date)
+        if not op.exists(outer_tar):
+            raise FileNotFoundError('Corral date tar was not found: %s' %
+                                    outer_tar)
+        try:
+            M = []
+            f = op.basename(fn)
+            DT = f.split('_')[0]
+            y, m, d, h, mi, s = [int(x) for x in [DT[:4], DT[4:6], DT[6:8],
+                                 DT[9:11], DT[11:13], DT[13:15]]]
+            d0 = datetime(y, m, d, h, mi, s)
+            with tarfile.open(outer_tar, 'r') as outer:
+                guide_members = [member.name for member in outer.getmembers()
+                                 if member.isfile() and
+                                 member.name.endswith('.tar') and
+                                 any(part.startswith('gc')
+                                     for part in member.name.split('/'))]
+            for guide_member in sorted(guide_members):
+                guide_archive = {'outer_tar': outer_tar,
+                                 'observation_member': guide_member}
+                with open_corral_observation(guide_archive) as guide_tar:
+                    init_list = sorted([name for name in guide_tar.getnames()
+                                        if name.endswith('.fits')])
+                    final_list = []
+                    for guide_name in init_list:
+                        DT = op.basename(guide_name).split('_')[0]
+                        y, m, d, h, mi, s = [int(x) for x in
+                                             [DT[:4], DT[4:6], DT[6:8],
+                                              DT[9:11], DT[11:13], DT[13:15]]]
+                        d = datetime(y, m, d, h, mi, s)
+                        p = (d - d0).seconds
+                        if (p > -10.) * (p < exptime+10.):
+                            final_list.append(guide_name)
+                    for guide_name in final_list:
+                        fobj = guide_tar.extractfile(guide_tar.getmember(guide_name))
+                        M.append(get_mirror_illumination_throughput(fobj))
+            if not M:
+                log.info('No guide camera FITS members found for archived date')
+                return default, default_t, default_iq
+            M = np.array(M)
+            sel = M[:, 2] != 1.8
+            if sel.sum() > 0.:
+                return np.median(M[sel, 0]), np.median(M[sel, 1]), np.median(M[sel, 2])
+            return default, default_t, default_iq
+        except FileNotFoundError:
+            raise
+        except Exception:
+            log.info('Using default mirror illumination: %0.2f m^2' % (default/1e4))
+            return default, default_t, default_iq
+
     try:
         M = []
         path = op.join(path, args.date)
@@ -1894,6 +2019,8 @@ def catch_ifuslot_swap(ifuslot, date):
 # Setup logging
 # =============================================================================
 log = setup_logging()
+log.info('Raw data source: %s' %
+         ('CORRAL ARCHIVE' if args.archived else 'WORK'))
 if args.hdf5file is None:
     log.error('Please specify an hdf5file.  A default is not yet setup.')
     sys.exit(1)
@@ -2676,14 +2803,8 @@ table.flush()
 
 log.info('Finished writing Fibers')
 
-if tfile is not None:
-    t = tarfile.open(tfile, 'r')
-    a = fits.open(t.extractfile(fn))
-    t.close()
-else:
-    a = fits.open(fn)
-
-he = a[0].header
+with open_fits_member(fn, tfile=tfile) as a:
+    he = a[0].header.copy()
 
 table = h5spec.create_table(h5spec.root, 'Survey', Survey, 
                             "Survey Information")

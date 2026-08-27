@@ -7,10 +7,13 @@ Created on Mon Aug  5 13:36:42 2019
 """
 
 import glob
+import io
 import numpy as np
+import os
 import os.path as op
 import tarfile
 import warnings
+from contextlib import contextmanager
 
 from astropy.io import fits
 from math_utils import biweight
@@ -58,7 +61,112 @@ def orient_image(image, amp, ampname):
     return image
 
 
-def base_reduction(filename, tinfo, get_header=False):
+def _tar_member(tar, filename):
+    """Return the tar member corresponding to a raw-data filename."""
+    names = tar.getnames()
+    candidates = [filename,
+                  '/'.join(filename.split('/')[-4:]),
+                  filename.lstrip('/')]
+    for candidate in candidates:
+        try:
+            return tar.getmember(candidate)
+        except KeyError:
+            pass
+
+    suffix = '/' + filename.lstrip('/')
+    matches = [member for member in tar.getmembers()
+               if member.name.endswith(suffix)]
+    if len(matches) == 1:
+        return matches[0]
+    raise FileNotFoundError(
+        'FITS member %r was not found in tar file (available names: %d)' %
+        (filename, len(names)))
+
+
+@contextmanager
+def open_corral_observation(archive):
+    """Open a nested Corral VIRUS observation tar in memory.
+
+    ``archive`` is a small, pickleable descriptor containing ``outer_tar``
+    and ``observation_member``.  The outer tar is never extracted to disk.
+    """
+    outer_path = archive['outer_tar']
+    observation_member = archive['observation_member']
+    if not op.exists(outer_path):
+        raise FileNotFoundError('Corral date tar was not found: %s' % outer_path)
+
+    with tarfile.open(outer_path, 'r') as outer:
+        try:
+            member = outer.getmember(observation_member)
+        except KeyError as exc:
+            raise FileNotFoundError(
+                'VIRUS observation tar %r was not found in %s' %
+                (observation_member, outer_path)) from exc
+        nested_file = outer.extractfile(member)
+        if nested_file is None:
+            raise FileNotFoundError(
+                'Could not read VIRUS observation tar member %r in %s' %
+                (observation_member, outer_path))
+        nested_bytes = nested_file.read()
+
+    with tarfile.open(fileobj=io.BytesIO(nested_bytes), mode='r') as observation:
+        yield observation
+
+
+@contextmanager
+def open_fits_member(filename, tinfo=None, tfile=None, archive=None):
+    """Open a FITS file from a filesystem tar or a nested Corral archive."""
+    source = archive if archive is not None else (tfile if tfile is not None
+                                                  else tinfo)
+    if isinstance(source, dict) and 'outer_tar' in source:
+        with open_corral_observation(source) as observation:
+            member = _tar_member(observation, filename)
+            fits_file = observation.extractfile(member)
+            if fits_file is None:
+                raise FileNotFoundError(
+                    'FITS member %r could not be opened from Corral archive' %
+                    filename)
+            with fits.open(fits_file, memmap=False) as hdul:
+                yield hdul
+        return
+
+    if isinstance(source, (list, tuple)):
+        # This is the existing build_calibration_h5file.py representation:
+        # [open TarFile, TarInfo list, member-name list].
+        tar = source[0]
+        member = _tar_member(tar, filename)
+        fits_file = tar.extractfile(member)
+        if fits_file is None:
+            raise FileNotFoundError('Could not open FITS member %r' % filename)
+        with fits.open(fits_file, memmap=False) as hdul:
+            yield hdul
+        return
+
+    if isinstance(source, tarfile.TarFile):
+        member = _tar_member(source, filename)
+        fits_file = source.extractfile(member)
+        if fits_file is None:
+            raise FileNotFoundError('Could not open FITS member %r' % filename)
+        with fits.open(fits_file, memmap=False) as hdul:
+            yield hdul
+        return
+
+    if isinstance(source, (str, bytes, os.PathLike)):
+        with tarfile.open(source, 'r') as tar:
+            member = _tar_member(tar, filename)
+            fits_file = tar.extractfile(member)
+            if fits_file is None:
+                raise FileNotFoundError('Could not open FITS member %r' % filename)
+            with fits.open(fits_file, memmap=False) as hdul:
+                yield hdul
+        return
+
+    with fits.open(filename, memmap=False) as hdul:
+        yield hdul
+
+
+def base_reduction(filename, tinfo=None, get_header=False, tfile=None,
+                   rdnoise=None, archive=None):
     '''
     Reduce filename from tarfile or fits file.
     
@@ -75,8 +183,16 @@ def base_reduction(filename, tinfo, get_header=False):
         Filename of the fits file
     get_header : boolean
         Flag to get and return the header
-    tfile : str
-        Tar filename if the fits file is in a tarred file
+    tinfo : list or None
+        Existing calibration-builder tar information tuple/list.
+    tfile : str, dict, or None
+        Tar filename, or a Corral observation descriptor.  This keyword is
+        retained for quick_reduction.py compatibility.
+    rdnoise : ignored
+        Retained for compatibility with quick_reduction.py callers; the raw
+        FITS header remains the source of the read-noise value.
+    archive : dict or None
+        Corral observation descriptor, if supplied separately.
     
     Returns
     -------
@@ -85,42 +201,36 @@ def base_reduction(filename, tinfo, get_header=False):
     e : 2d numpy array
         Associated error frame
     '''
-    # Load fits file
-    tarbase = op.dirname(op.dirname(op.dirname(filename))) + '.tar'
-    if op.exists(tarbase):
-        T = tinfo[0]
-        s = '/'.join(filename.split('/')[-4:])
-        ind = np.where(s == np.array(tinfo[2]))[0][0]
-        a = fits.open(T.extractfile(tinfo[1][ind]))
-    else:
-        a = fits.open(filename)
+    # Load FITS file.  Keep the scientific reduction below unchanged.
+    source = archive if archive is not None else tfile
+    with open_fits_member(filename, tinfo=tinfo, tfile=source) as a:
+        image = np.array(a[0].data, dtype=float)
+        header = a[0].header.copy()
 
-    image = np.array(a[0].data, dtype=float)
-    
+        # Gain multiplication (catch negative cases) needs the raw header,
+        # so perform the image work while the FITS member is still open.
+        gain = a[0].header['GAIN']
+        gain = np.where(gain > 0., gain, 0.85)
+        rdnoise = a[0].header['RDNOISE']
+        rdnoise = np.where(rdnoise > 0., rdnoise, 3.)
+        amp = (a[0].header['CCDPOS'].replace(' ', '') +
+               a[0].header['CCDHALF'].replace(' ', ''))
+        try:
+            ampname = a[0].header['AMPNAME']
+        except:
+            ampname = None
+
     # Overscan subtraction
     overscan_length = int(32 * (image.shape[1] / 1064))
     O = biweight(image[:, -(overscan_length-2):], axis=1)
     image[:] = image - O[:, np.newaxis]
-    
+
     # Trim image
     image = image[:, :-overscan_length]
-    
-    # Gain multiplication (catch negative cases)
-    gain = a[0].header['GAIN']
-    gain = np.where(gain > 0., gain, 0.85)
-    rdnoise = a[0].header['RDNOISE']
-    rdnoise = np.where(rdnoise > 0., rdnoise, 3.)
-    amp = (a[0].header['CCDPOS'].replace(' ', '') +
-           a[0].header['CCDHALF'].replace(' ', ''))
-    try:
-        ampname = a[0].header['AMPNAME']
-    except:
-        ampname = None
-    header = a[0].header
-    
+
     # Orient image
     a = orient_image(image, amp, ampname) * gain
-    
+
     # Calculate error frame
     E = np.sqrt(rdnoise**2 + np.where(a > 0., a, 0.))
     if get_header:
