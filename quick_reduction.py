@@ -33,28 +33,26 @@ from astropy.modeling.fitting import LevMarLSQFitter, FittingWithOutlierRemoval
 from astropy.stats import biweight_location, sigma_clip
 from astropy.stats import sigma_clipped_stats, mad_std
 from astropy.table import Table
-from catalog_search import query_panstarrs, MakeRegionFile
 from datetime import datetime, timedelta
 from extract import Extract
-from fiber_utils import identify_sky_pixels, measure_fiber_profile, get_trace
-from fiber_utils import build_model_image, detect_sources, get_powerlaw
+from fiber_utils import identify_sky_pixels
+from fiber_utils import detect_sources, get_powerlaw
 from fiber_utils import get_spectra, get_spectra_error, get_spectra_chi2
 from fiber_utils import clean_data
+from fiber_utils import orient_image, base_reduction
 from input_utils import setup_logging
 from math_utils import biweight
 from photutils.detection import DAOStarFinder
 from photutils.aperture import aperture_photometry
 from photutils.aperture import CircularAperture
 from photutils.centroids import centroid_com
-from scipy.interpolate import griddata, interp1d, interp2d
-from scipy.signal import savgol_filter
-from sklearn.decomposition import PCA
+from scipy.interpolate import griddata, interp1d
 from tables import open_file, IsDescription, Float32Col, StringCol, Int32Col
 from matplotlib.ticker import MultipleLocator
 from matplotlib.colors import ListedColormap
 import requests
 from astropy.io import ascii
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 # Plot Style
 sns.set_context('notebook')
@@ -134,10 +132,6 @@ parser.add_argument("-nt", "--nametype",
                     help='''nametype''',
                     type=str, default='sci')
 
-parser.add_argument("-s", "--simulate",
-                    help='''Simulate source''',
-                    action="count", default=0)
-
 parser.add_argument("-nm", "--no_masking",
                     help='''No Masking Employed''',
                     action="count", default=0)
@@ -154,22 +148,10 @@ parser.add_argument("-mc", "--make_cube",
                     help='''Make Cube''',
                     action="count", default=0)
 
-parser.add_argument("-sx", "--source_x",
-                    help='''x-position for spectrum to add in cube''',
-                    type=float, default=0.0)
-
-parser.add_argument("-sy", "--source_y",
-                    help='''y-position for spectrum to add in cube''',
-                    type=float, default=0.0)
-
-parser.add_argument("-ss", "--source_seeing",
-                    help='''seeing conditions manually entered''',
-                    type=float, default=1.5)
-
-parser.add_argument("--nproc",
-                    help='''Number of parallel workers for IFU slot reduction (1 = sequential)''',
+# Number of parallel processes for CPU-bound steps (e.g., per-IFU work)
+parser.add_argument("-np", "--nproc",
+                    help='''Number of parallel processes to use (>=1).''',
                     type=int, default=1)
-
 
 args = parser.parse_args(args=None)
 
@@ -293,84 +275,6 @@ def get_ra_dec_from_header(tfile, fn):
     return ra, dec, pa
 
 
-def read_sim(filename):
-    '''
-    Read an ascii simulation file with wavelength (A) and F_lam as columns
-    The columns should not have headers, just an ascii file with wavelength
-    and F_lam (ergs/s/cm^2/A)
-    
-    Parameters
-    ----------
-    filename : str
-        filename of the simulation data
-    def_wave : 1d numpy array [GLOBAL]
-        global variable for the rectified wavelength array
-    
-    Returns
-    -------
-    spectrum : 1d numpy array
-        simulated spectrum interpolated to the rectified wavelength
-    '''
-    T = Table.read(filename, format='ascii')
-    spectrum = np.interp(def_wave, T['col1'], T['col2'])
-    return spectrum
-
-def convert_slot_to_coords(ifuslots):
-    '''
-    Convert ifuslot integer to x, y focal plane coordinates [row, column]
-    
-    Parameters
-    ----------
-    ifuslots : list
-        a list of integers, e.g. 47
-    
-    Returns
-    -------
-    x : 1d numpy array
-        Row in focal plane: 47 --> 4
-    y : 1d numpy array
-        Column in focal plane: 47 --> 7
-    '''
-    x, y = ([], [])
-    for i in ifuslots:
-        s = str(i)
-        if len(s) == 3:
-            x.append(int(s[:2]))
-        else:
-            x.append(int(s[0]))
-        y.append(int(s[-1]))
-    return np.array(x), np.array(y)
-
-
-def get_slot_neighbors(ifuslot, u_ifuslots, dist=1):
-    '''
-    Get ifuslots within square distance, dist, from target ifuslot.
-    
-    A dist = 1 will return a square of 3 x 3 ifuslots (excluding central ifu).
-    A dist = 2 will return an equivalent 5 x 5 box.
-    
-    If an ifu does not occupy an ifuslot, then that slot is not returned.
-    
-    Parameters
-    ----------
-    ifuslot : integer
-        Target IFU slot
-    u_ifuslots : 1d numpy array [type=int]
-        iFU slots in the observation
-    
-    Returns
-    -------
-    u_ifuslots : 1d numpy array [type=int]
-        neighbor ifuslots as explained above
-    '''
-    sel = np.zeros(u_ifuslots.shape, dtype=bool)
-    xi, yi = convert_slot_to_coords([ifuslot])
-    x, y = convert_slot_to_coords(u_ifuslots)
-    sel = (np.abs(xi - x) <= dist) * (np.abs(yi - y) <= dist)
-    unsel = (xi == x) * (yi == y)
-    return u_ifuslots[sel*(~unsel)]
-
-
 def build_path(rootdir, date, obs, ifuslot, amp, base='sci', exp='exp*',
                instrument='virus'):
     '''
@@ -451,132 +355,6 @@ def get_ifuslots():
             sys.exit(1)
     return np.unique(mzip)
 
-def orient_image(image, amp, ampname):
-    '''
-    Orient the images from blue to red (left to right)
-    Fibers are oriented to match configuration files
-    
-    Parameters
-    ----------
-    image : 2d numpy array
-        fits image
-    amp : str
-        Amplifier for the fits image
-    ampname : str
-        Amplifier name is the location of the amplifier
-    
-    Returns
-    -------
-    image : 2d numpy array
-        Oriented fits image correcting for what amplifier it comes from
-        These flips are unique to the VIRUS/LRS2 amplifiers
-    '''
-    if amp == "LU":
-        image[:] = image[::-1, ::-1]
-    if amp == "RL":
-        image[:] = image[::-1, ::-1]
-    if ampname is not None:
-        if ampname == 'LR' or ampname == 'UL':
-            image[:] = image[:, ::-1]
-    return image
-
-
-def base_reduction(filename, get_header=False, tfile=None, rdnoise=None):
-    '''
-    Reduce filename from tarfile or fits file.
-    
-    Reduction steps include:
-        1) Overscan subtraction
-        2) Trim image
-        3) Orientation
-        4) Gain Multiplication
-        5) Error propagation
-    
-    Parameters
-    ----------
-    filename : str
-        Filename of the fits file
-    get_header : boolean
-        Flag to get and return the header
-    tfile : str
-        Tar filename if the fits file is in a tarred file
-    
-    Returns
-    -------
-    a : 2d numpy array
-        Reduced fits image, see steps above
-    e : 2d numpy array
-        Associated error frame
-    '''
-    # Load fits file
-    if tfile is not None:
-        t = tarfile.open(tfile,'r')
-        a = fits.open(t.extractfile(filename))
-    else:
-        a = fits.open(filename)
-
-    image = np.array(a[0].data, dtype=float)
-    
-    # Overscan subtraction
-    overscan_length = int(32 * (image.shape[1] / 1064))
-    O = biweight_location(image[:, -(overscan_length-2):])
-    image[:] = image - O
-    
-    # Trim image
-    image = image[:, :-overscan_length]
-    
-    # Gain multiplication (catch negative cases)
-    gain = a[0].header['GAIN']
-    gain = np.where(gain > 0., gain, 0.85)
-    if rdnoise is None:
-        rdnoise = a[0].header['RDNOISE']
-    rdnoise = np.where(rdnoise > 0., rdnoise, 3.)
-    amp = (a[0].header['CCDPOS'].replace(' ', '') +
-           a[0].header['CCDHALF'].replace(' ', ''))
-    try:
-        ampname = a[0].header['AMPNAME']
-    except:
-        ampname = None
-    header = a[0].header
-    
-    # Orient image
-    a = orient_image(image, amp, ampname) * gain
-    
-    # Calculate error frame
-    E = np.sqrt(rdnoise**2 + np.where(a > 0., a, 0.))
-    if tfile is not None:
-        t.close()
-    if get_header:
-        return a, E, header
-    return a, E
-
-
-def get_mastertwi(files, masterbias, twitarfile):
-    '''
-    Make a master flat image from the twilight frames
-    
-    Parameters
-    ----------
-    files : list
-        list of fits file names
-    masterbias : 2d numpy array
-        masterbias in e-
-    twitarfile : str or None
-        Name of the tar file if the fits file is tarred
-    
-    Returns
-    -------
-    mastertwi : 2d numy array
-        median stacked twilight frame
-    '''
-    listtwi = []
-    for filename in files:
-        a, e = base_reduction(filename, tfile=twitarfile)
-        a[:] -= masterbias
-        listtwi.append(a)
-    twi_array = np.array(listtwi, dtype=float)
-    norm = np.median(twi_array, axis=(1, 2))[:, np.newaxis, np.newaxis]
-    return np.median(twi_array / norm, axis=0) * np.median(norm)
 
 def get_twi_tarfile(pathname, date, kind='twi'):
     '''
@@ -657,150 +435,11 @@ def roll_through_dates(pathname, date):
             break
     return glob.glob(pathnamen)
 
-
 def get_script_path():
     '''
     Get script path, aka, where does Remedy live?
     '''
     return op.dirname(op.realpath(sys.argv[0]))
-
-def get_twi_spectra(array_flt, array_trace, wave, def_wave):
-    '''
-    Extract spectra by dividing the flat field and averaging the central
-    two pixels
-    
-    Parameters
-    ----------
-    array_flt : 2d numpy array
-        twilight image
-    array_trace : 2d numpy array
-        trace for each fiber
-    wave : 2d numpy array
-        wavelength for each fiber
-    def_wave : 1d numpy array [GLOBAL]
-        rectified wavelength
-    
-    Returns
-    -------
-    twi_spectrum : 2d numpy array
-        rectified twilight spectrum for each fiber  
-    '''
-    twi_spectrum = np.zeros((array_trace.shape[0], array_trace.shape[1]))
-    N = array_flt.shape[0]
-    x = np.arange(array_flt.shape[1])
-    for fiber in np.arange(array_trace.shape[0]):
-        dw = np.diff(wave[fiber])
-        dw = np.hstack([dw[0], dw])
-        if array_trace[fiber].min() < 1.:
-            continue
-        if np.ceil(array_trace[fiber]).max() >= (N-1):
-            continue
-        indl = np.floor(array_trace[fiber]).astype(int)
-        indh = np.ceil(array_trace[fiber]).astype(int)
-        twi_spectrum[fiber] = array_flt[indl, x] / 2. + array_flt[indh, x] / 2.
-    twi_spectrum[~np.isfinite(twi_spectrum)] = 0.0
-    return twi_spectrum
-
-
-def get_spectra_quick(array_sci, array_err, array_flt, plaw, mdark, array_trace, wave, def_wave,
-                      pixelmask, mastersci):
-    '''
-    Extract spectra by dividing the flat field and averaging the central
-    two pixels
-    
-    Parameters
-    ----------
-    array_sci : 2d numpy array
-        science image
-    array_err : 2d numpy array
-        error image
-    array_flt : 2d numpy array
-        twilight image
-    array_trace : 2d numpy array
-        trace for each fiber
-    wave : 2d numpy array
-        wavelength for each fiber
-    def_wave : 1d numpy array [GLOBAL]
-        rectified wavelength
-    
-    Returns
-    -------
-    twi_spectrum : 2d numpy array
-        rectified twilight spectrum for each fiber
-    sci_spectrum : 2d numpy array
-        rectified science spectrum for each fiber
-    err_spectrum : 2d numpy array
-        rectified error spectrum for each fiber   
-    '''
-    sci_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
-    err_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
-    twi_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
-    plaw_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
-    mdark_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
-    chi2_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
-    msci_spectrum = np.zeros((array_trace.shape[0], def_wave.shape[0]))
-
-    mask = np.zeros((array_trace.shape[0], def_wave.shape[0]))
-
-    N = array_flt.shape[0]
-    x = np.arange(array_flt.shape[1])
-    for fiber in np.arange(array_trace.shape[0]):
-        dw = np.diff(wave[fiber])
-        dw = np.hstack([dw[0], dw])
-        if np.round(array_trace[fiber]).min() < 2:
-            continue
-        if np.round(array_trace[fiber]).max() >= (N-2):
-            continue
-        indv = np.round(array_trace[fiber]).astype(int)
-        tw, sw, ew, pm, pl, md, msw = (0., 0., 0., 0., 0., 0., 0.)
-        chi2 = np.zeros((len(indv), 6, 3))
-        for j in np.arange(-3, 3):
-            if j == -3:
-                w = indv + j + 1 - (array_trace[fiber] - 2.5)
-            elif j == 2:
-                w = (2.5 + array_trace[fiber]) - (indv + j) 
-            else:
-                w = 1.
-            tw += array_flt[indv+j, x] * w
-            sw += array_sci[indv+j, x] * w
-            msw += mastersci[indv+j, x] * w
-            pl += plaw[indv+j, x] * w
-            md += mdark[indv+j, x] * w
-            ew += array_err[indv+j, x]**2 * w
-            pm += pixelmask[indv+j, x]
-            chi2[:, j+3, 0] = array_sci[indv+j, x] * w
-            chi2[:, j+3, 1] = array_flt[indv+j, x] * w
-            chi2[:, j+3, 2] = array_err[indv+j, x] * w
-        norm = chi2[:, :, 0].sum(axis=1) / chi2[:, :, 1].sum(axis=1)
-        num = (chi2[:, :, 0] - chi2[:, :, 1] * norm[:, np.newaxis])**2
-        denom = (chi2[:, :, 2] + 0.01*chi2[:, :, 0].sum(axis=1)[:, np.newaxis])**2
-        chi2a = 1. / (1. + 5.) * np.sum(num / denom, axis=1)
-        ew = np.sqrt(ew)
-        twi_spectrum[fiber] = np.interp(def_wave, wave[fiber], tw / dw,
-                                        left=0.0, right=0.0)
-        plaw_spectrum[fiber] = np.interp(def_wave, wave[fiber], pl / dw,
-                                        left=0.0, right=0.0)
-        mdark_spectrum[fiber] = np.interp(def_wave, wave[fiber], md / dw,
-                                        left=0.0, right=0.0)
-        sci_spectrum[fiber] = np.interp(def_wave, wave[fiber], sw / dw,
-                                        left=0.0, right=0.0)
-        msci_spectrum[fiber] = np.interp(def_wave, wave[fiber], msw / dw,
-                                        left=0.0, right=0.0)
-        mask[fiber] = np.interp(def_wave, wave[fiber], pm / dw,
-                                        left=0.0, right=0.0)
-        chi2_spectrum[fiber] = np.interp(def_wave, wave[fiber], chi2a,
-                                        left=0.0, right=0.0)
-        # Not real propagation of error, but skipping math for now
-        err_spectrum[fiber] = np.interp(def_wave, wave[fiber], ew / dw,
-                                        left=0.0, right=0.0)
-    total_mask = (~np.isfinite(twi_spectrum)) * (mask > 0.)
-    twi_spectrum[total_mask] = 0.0
-    err_spectrum[total_mask] = 0.0
-    sci_spectrum[total_mask] = 0.0
-    msci_spectrum[total_mask] = 0.0
-    return (twi_spectrum, sci_spectrum, err_spectrum, plaw_spectrum,
-            mdark_spectrum, chi2_spectrum, msci_spectrum)
-
 
 def get_continuum(spectra, nbins=25):
     '''
@@ -881,43 +520,7 @@ def get_fiber_to_fiber(fltspec, scispec, wave_all, twispec):
     error = np.sqrt((5. * 3.2**2) + (scispec * 5.)) / 5.
     cont = get_continuum(scispec-sky, nbins=50)
     return ftf, (scispec - sky - cont) / error
-    
-def background_pixels(trace, image):
-    back = np.ones(image.shape, dtype=bool)
-    x = np.arange(image.shape[1])
-    for fibert in trace:
-        for j in np.arange(-7, 8):
-            indv = np.round(fibert) + j
-            m = np.max([np.zeros(fibert.shape), indv], axis=0)
-            n = np.min([m, np.ones(fibert.shape)*(image.shape[0]-1)], axis=0)
-            inds = np.array(n, dtype=int)
-            back[inds, x] = False
-    return back
 
-def get_fiber_to_fiber_adj(scispectra, ftf, nexp):
-    Adj = ftf * 0.0
-    inds = np.arange(scispectra.shape[0])
-    for k in np.arange(nexp):
-        sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
-        bins = 9
-        adj = np.zeros((len(sel), bins))
-        X = np.array([np.mean(xi) for xi in np.array_split(def_wave, bins)])
-        cnt = 0
-        for o, f in zip(np.array_split(scispectra[sel], bins, axis=1),
-                        np.array_split(ftf[sel], bins, axis=1)):
-            y = biweight(o / f, axis=1)
-            norm = biweight(y)
-            mask, cont = identify_sky_pixels(y, kernel=2.5)
-            adj[:, cnt] = cont / norm
-            cnt += 1
-        for j in np.arange(len(sel)):
-            good = np.isfinite(adj[j])
-            if good.sum() > bins-3:
-                Adj[sel[j]] = interp1d(X, adj[j], kind='quadratic',
-                                       fill_value='extrapolate')(def_wave)
-            else:
-                scispectra[sel(j)] = np.nan
-    return scispectra, Adj
 
 def get_mask(scispectra, C1, ftf, res, nexp):
     mask = np.zeros(scispectra.shape, dtype=bool)
@@ -1063,30 +666,54 @@ def get_sci_twi_files(kind='twi'):
     return scinames, twinames, scitarfile, twitarfile
 
 def _reduce_ifu_worker(ind):
-    # Worker function to process a single IFU index. Reopens HDF5 in the process.
-    # Returns a dict with concatenated arrays for this IFU across its exposures,
-    # plus metadata strings.
+    """Reduce one IFU (by row index in the HDF5 table) across all exposures.
+
+    The calibration products and per-fiber meta-data are read from the
+    HDF5 file created by build_calibration_h5file.py (table: Cals).
+    For each exposure belonging to this IFU/amp:
+      - load raw image + error from FITS (optionally via tar)
+      - clean and subtract bias/dark and smooth power-law background
+      - extract per-fiber spectra, errors, and QA metrics on the trace
+      - collate wavelength and dithered fiber-positions
+
+    Returns a dict with stacked arrays across exposures for this IFU.
+    Keys (unchanged from legacy code):
+      p, ft, s, e, wa, c1, ExP, ms, t, ar, ids, intm, filenames, scitarfile
+    """
+    # Locate science/twilight files that define our exposure set.
     scinames, twinames, scitarfile, twitarfile = get_sci_twi_files()
+
+    # Open HDF5 calibration table and pull the row for this IFU.
     h5f = open_file(args.hdf5file, mode='r')
     h5tab = h5f.root.Cals
+
+    # --- Basic identifiers and per-fiber metadata ---
     ifuslot = '%03d' % h5tab[ind]['ifuslot']
-    ifuid = h5tab[ind]['ifuid'].decode("utf-8")
-    specid = h5tab[ind]['specid'].decode("utf-8")
-    amp = h5tab[ind]['amp'].decode("utf-8")
-    amppos = h5tab[ind]['ifupos']
-    wave = h5tab[ind]['wavelength']
+    ifuid = h5tab[ind]['ifuid'].decode('utf-8')
+    specid = h5tab[ind]['specid'].decode('utf-8')
+    amp = h5tab[ind]['amp'].decode('utf-8')
+
+    ifupos = h5tab[ind]['ifupos']         # (112, 2)
+    wave = h5tab[ind]['wavelength']       # (112, 1032)
+    trace = h5tab[ind]['trace']           # (112, 1032)
+    readnoise = h5tab[ind]['readnoise']
+
+    # Guard against invalid traces
+    if np.min(trace) < 0.0:
+        trace = 0.0 * trace
+
+    # Delta-wavelength per pixel (prepend first delta for same shape)
     dw = np.diff(wave, axis=1)
     dw = np.hstack([dw[:, 0:1], dw])
-    trace = h5tab[ind]['trace']
-    if np.min(trace) < 0.:
-        trace = 0. * trace
-    readnoise = h5tab[ind]['readnoise']
-    masterflt = h5tab[ind]['masterflt']
-    mastertwi = h5tab[ind]['mastertwi']
-    masterarc = h5tab[ind]['mastercmp']
-    mastersci = h5tab[ind]['mastersci']
-    maskspec = h5tab[ind]['maskspec']
+
+    # --- Master calibration frames (CCD space) ---
     masterbias = h5tab[ind]['masterbias']
+    masterflt = h5tab[ind]['masterflt']   # pixelflat exposure stack
+    mastertwi = h5tab[ind]['mastertwi']   # twilight stack
+    masterarc = h5tab[ind]['mastercmp']   # comparison lamp stack
+    mastersci = h5tab[ind]['mastersci']   # sci stack (for masked-spectrum ref)
+
+    # Optional dark + pixel mask
     try:
         masterdark = h5tab[ind]['masterdark']
         pixelmask = h5tab[ind]['pixelmask'] * 1.
@@ -1094,83 +721,89 @@ def _reduce_ifu_worker(ind):
     except Exception:
         masterdark = np.zeros((1032, 1032))
         pixelmask = np.zeros((1032, 1032), dtype=int)
-    # Prepare masters
-    masterdark[:] = masterdark - masterbias
-    masterflt[:] = masterflt - masterbias
-    masterflt = clean_data(masterflt, pixelmask)
-    try:
-        plaw = get_powerlaw(masterflt, trace)
-    except Exception:
-        plaw = 0.
-    masterflt[:] = masterflt - plaw
-    masterarc[:] = masterarc - masterbias
-    try:
-        plaw = get_powerlaw(masterarc, trace)
-    except Exception:
-        plaw = 0.
-    masterarc[:] = masterarc - plaw
-    mastertwi[:] = mastertwi - masterbias
-    try:
-        plaw = get_powerlaw(mastertwi, trace)
-    except Exception:
-        plaw = 0.
-    mastertwi[:] = mastertwi - plaw
-    mastersci[:] = mastersci - masterdark - masterbias
-    try:
-        plaw2 = get_powerlaw(mastersci, trace)
-    except Exception:
-        plaw2 = 0.
-    mastersci[:] = mastersci - plaw2
-    # Find our exposures
-    fnames_glob = '*/2*%s%s*%s.fits' % (ifuslot, amp, args.nametype)
+
+    # Helper: subtract smooth power-law along trace where useful
+    def _subtract_plaw(img: np.ndarray, tr: np.ndarray) -> np.ndarray:
+        try:
+            pl = get_powerlaw(img, tr)
+        except Exception:
+            pl = 0.0
+        return img - pl
+
+    # Prepare master frames following build_calibration_h5file steps
+    masterdark = masterdark - masterbias
+
+    masterflt = clean_data(masterflt - masterbias, pixelmask)
+    masterflt = _subtract_plaw(masterflt, trace)
+
+    masterarc = _subtract_plaw(masterarc - masterbias, trace)
+    mastertwi = _subtract_plaw(mastertwi - masterbias, trace)
+
+    mastersci = mastersci - masterdark - masterbias
+    mastersci = _subtract_plaw(mastersci, trace)
+
+    # Find science exposures for this IFU+amp
+    fnames_glob = f'*/2*{ifuslot}{amp}*{args.nametype}.fits'
     filenames = fnmatch.filter(scinames, fnames_glob)
-    nexposures = len(filenames)
-    # Accumulators
-    P = []
-    FT = []
-    S = []
-    MS = []
-    AR = []
-    E = []
-    C1 = []
-    WA = []
-    TWI = []
-    EXPT = []
-    ids_blocks = []
-    intm_list = []
+
+    # Nothing to do for this IFU
+    if not len(filenames):
+        h5f.close()
+        return dict(p=None)
+
+    # Accumulators across exposures
+    P, FT, S, MS, AR, E, C1, WA, TWI, EXPT = ([] for _ in range(10))
+    ids_blocks, intm_list = [], []
+
     for j, fn in enumerate(filenames):
-        sciimage, scierror, header = base_reduction(fn, tfile=scitarfile,
-                                            rdnoise=readnoise, get_header=True)
+        # Load raw science image and error
+        sciimage, scierror, header = base_reduction(
+            fn, tfile=scitarfile, rdnoise=readnoise, get_header=True
+        )
+
+        # Clean bad pixels and subtract dark/bias with exposure scaling
         sciimage = clean_data(sciimage, pixelmask)
         scierror = clean_data(scierror, pixelmask)
-        facexp = header.get('EXPTIME', 360.0) / 360.
-        if facexp < 0.:
-            facexp = 1.
-        sciimage[:] = sciimage - masterdark*facexp - masterbias
-        try:
-            sci_plaw = get_powerlaw(sciimage, trace)
-        except Exception:
-            sci_plaw = 0.
-        sciimage[:] = sciimage - sci_plaw
+
+        exptime = float(header.get('EXPTIME', 360.0))
+        facexp = exptime / 360.0
+        if facexp < 0.0:
+            facexp = 1.0
+
+        sciimage = sciimage - masterdark * facexp - masterbias
+        sciimage = _subtract_plaw(sciimage, trace)
+
+        # Extract fiber spectra (divide by dw to get per-Angstrom scale)
         flt = get_spectra(masterflt, trace) / dw
         twi = get_spectra(mastertwi, trace) / dw
         arc = get_spectra(masterarc, trace) / dw
         spec = get_spectra(sciimage, trace) / dw
         espec = get_spectra_error(scierror, trace) / dw
-        chi21 = get_spectra_chi2(masterflt, sciimage, scierror, trace)
-        mask1 = spec * 0.
         mspec = get_spectra(mastersci, trace) / dw
-        for arr in [spec, espec, flt, twi, mspec, arc]:
-            arr[mask1>0.] = np.nan
-        if nexposures == 3:
-            pos = amppos + dither_pattern[j]
+
+        # Simple QA residual from flat-field vs sci
+        chi21 = get_spectra_chi2(masterflt, sciimage, scierror, trace)
+
+        # Apply spectrum mask shape (placeholder retained from legacy code)
+        # Keep the behavior (set to NaN where mask1 > 0); mask1 currently zeros
+        mask1 = spec * 0.0
+        for arr in (spec, espec, flt, twi, mspec, arc):
+            arr[mask1 > 0.0] = np.nan
+
+        # Dithered on-sky position per fiber for this exposure
+        if len(filenames) == 3:
+            pos = ifupos + dither_pattern[j]
         else:
-            pos = amppos * 1.
+            pos = ifupos * 1.0
+
+        # Book-keeping identifiers
         Nf = flt.shape[0]
-        _I = np.char.array(['%s_%s_%s_%s' % (specid, ifuslot, ifuid, amp)] * Nf)
-        _V = '%s_%s_%s_%s_exp%02d' % (specid, ifuslot, ifuid, amp, j+1)
-        # append blocks
-        EXPT.append(np.array([header.get('EXPTIME', 360.0)]*112))
+        amp_id = f'{specid}_{ifuslot}_{ifuid}_{amp}'
+        _I = np.char.array([amp_id] * Nf)
+        _V = f'{amp_id}_exp{j+1:02d}'
+
+        # Append blocks
+        EXPT.append(np.array([exptime] * 112))
         P.append(pos)
         FT.append(flt)
         S.append(spec)
@@ -1182,17 +815,25 @@ def _reduce_ifu_worker(ind):
         TWI.append(twi)
         ids_blocks.append(_I)
         intm_list.append([None, 0.0, _V])
-    # Concatenate
-    if len(P) == 0:
-        result = dict(p=None)
-    else:
-        result = dict(
-            p=np.vstack(P), ft=np.vstack(FT), s=np.vstack(S), e=np.vstack(E),
-            wa=np.vstack(WA), c1=np.vstack(C1), ExP=np.hstack(EXPT),
-            ms=np.vstack(MS), t=np.vstack(TWI) if len(TWI) else np.zeros_like(np.vstack(MS)),
-            ar=np.vstack(AR), ids=ids_blocks, intm=intm_list,
-            filenames=filenames, scitarfile=scitarfile
-        )
+
+    # Collate outputs
+    result = dict(
+        p=np.vstack(P),
+        ft=np.vstack(FT),
+        s=np.vstack(S),
+        e=np.vstack(E),
+        wa=np.vstack(WA),
+        c1=np.vstack(C1),
+        ExP=np.hstack(EXPT),
+        ms=np.vstack(MS),
+        t=np.vstack(TWI) if len(TWI) else np.zeros_like(np.vstack(MS)),
+        ar=np.vstack(AR),
+        ids=ids_blocks,
+        intm=intm_list,
+        filenames=filenames,
+        scitarfile=scitarfile,
+    )
+
     h5f.close()
     return result
 
@@ -1559,102 +1200,6 @@ def safe_division(num, denom, eps=1e-8, fillval=0.0):
         div[:, good] = num[:, good] / denom[good]
         div[:, ~good] = fillval
     return div
-
-def simulate_source(simulated_spectrum, pos, spectra, xc, yc,
-                    seeing=1.5):
-    '''
-    Simulate a point source using the Extract class
-    
-    Start with a simulated spectrum.  Spread the flux over fibers using a
-    Moffat PSF.  Then add to the original fiber spectra.
-    
-    Parameters
-    ----------
-    simulated_spectrum : 1d numpy array
-        simulated spectrum at appropriate rectified wavelengths (def_wave)
-    pos : 2d numpy array
-        x and y positions of the fibers to place the simulated spectrum
-    spectra : 2d numpy array
-        all fiber spectra correspoding to the x and y positions in pos
-    xc : float
-        x centroid of the source [ifu frame]
-    yc : float
-        y centroid of the source [ifu frame]
-    seeing : float
-        seeing for the moffat psf profile to spread out the simulated spectrum
-        
-    Returns
-    -------
-    spectra : 2d numpy array
-        original spectra + the new fiber spectra of the simulated source
-    '''
-    E = Extract()
-    boxsize = 10.5
-    scale = 0.25
-    psf = E.moffat_psf(seeing, boxsize, scale, alpha=3.5)
-    weights = E.build_weights(xc, yc, pos[:, 0], pos[:, 1], psf)
-    s_spec = weights * simulated_spectrum[np.newaxis, :]
-    return spectra + s_spec
-
-def correct_amplifier_offsets(data, ftf, fibers_in_amp=112, order=1):
-    '''
-    Correct the offsets (in multiplication) between various amplifiers.
-    These offsets originate from incorrect gain values in the amplifier 
-    headers and/or mismatches in the amplifier to amplifier correction
-    going from twilight to science exposures
-    
-    Parameters
-    ----------
-    data : 2d numpy array
-        all spectra in a given exposure
-    fiber_in_amp : int
-        number of fibers in an amplifier
-    order : int
-        polynomial order of correction across amplifiers
-    '''
-    y = np.nanmedian(data[:, 200:-200], axis=1)
-    x = np.arange(fibers_in_amp)
-    model = []
-    for i in np.arange(0, len(y), fibers_in_amp):
-        yi = y[i:i+fibers_in_amp]
-        try:
-            mask = sigma_clip(yi, masked=True, maxiters=None, stdfunc=mad_std)
-        except:
-            mask = sigma_clip(yi, iters=None, stdfunc=mad_std) 
-        skysel = ~mask.mask
-        if skysel.sum() > 10:
-            model.append(np.polyval(np.polyfit(x[skysel], yi[skysel], order),
-                                    x))
-        else:
-            model.append(np.ones(yi.shape))
-    model = np.hstack(model)
-    avg = np.nanmedian(model)
-    return model / avg
-
-def estimate_sky(data):
-    '''
-    Model the sky for all fibers using a sigma clip to exlude fibers with
-    sources in them, then take a median of the remaining fibers
-    
-    Parameters
-    ----------
-    data : 2d numpy array
-        all spectra in a given exposure
-    
-    Returns
-    -------
-    init_sky : 1d numpy array
-        estimate of the sky spectrum for all fibers
-    '''
-    y = np.nanmedian(data[:, 200:-200], axis=1)
-    try:
-        mask = sigma_clip(y, masked=True, maxiters=None, stdfunc=mad_std)
-    except:
-        mask = sigma_clip(y, iters=None, stdfunc=mad_std)
-    log.info('Number of masked fibers is %i / %i' % (mask.mask.sum(), len(y)))
-    skyfibers = ~mask.mask
-    init_sky = np.nanmedian(data[skyfibers], axis=0)
-    return init_sky
 
 def get_mirror_illumination_throughput(fn=None, default=51.4e4, default_t=1.,
                                        default_iq=1.8):
@@ -2327,91 +1872,7 @@ def get_skysub(S, sky):
     skysub =  S - sky - dummy - intermediate
     totsky = sky + dummy + intermediate
     log.info('Sky Subtraction Successful')
-#    for k in np.arange(S.shape[1]):
-#        intermediate[:, k] = interpolate_replace_nans(intermediate[:, k], G1)
-#    good_cols = np.isnan(intermediate).sum(axis=0) < 1.
-#    if good_cols.sum() > 60:
-#        pca = PCA(n_components=15)
-#        pca.fit_transform(intermediate[:, good_cols].swapaxes(0, 1))
-#        res = get_residual_map(orig, pca)
-#        res = 0.
-#        skysub = S[goodfibers] - sky - dummy - res
-#        bl, bm = biweight(skysub, calc_std=True)
-#        skysub[skysub < (-4. * bm)] = np.nan
-#        totsky = sky + dummy + res
-#        skysub1 = np.nan * S
-#        skysub1[goodfibers] = skysub
-#        totsky1 = np.nan * S
-#        totsky1[goodfibers] = totsky
-#        skysub = skysub1
-#        totsky = totsky1
-#        log.info('successful skysub')
-#    else:
-#        log.warning('Not enough cols for skysub')
-#        skysub = np.nan * S
-#        totsky = np.nan * S
     return skysub, totsky
-
-def get_residual_map(data, pca):
-    res = data * 0.
-    for i in np.arange(data.shape[1]):
-        sel = np.isfinite(data[:, i])
-        if sel.sum() > data.shape[0]/2.:
-            coeff = np.dot(data[sel, i], pca.components_.T[sel])
-            model = np.dot(coeff, pca.components_)
-        else: 
-            model = np.zeros((data.shape[0],))
-        res[:, i] = model
-    return res
-
-def get_amp_norm_ftf(sci, ftf, nexp, nchunks=9):
-    K = sci * 1.
-    inds = np.arange(sci.shape[0])
-    for k in np.arange(nexp):
-        sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
-        skyfibers = get_sky_fibers(biweight(sci[sel, 800:900] /
-                                   ftf[sel, 800:900], axis=1))
-        sky = biweight((sci[sel] / ftf[sel])[skyfibers], axis=0)
-        K[sel] = K[sel] / sky[np.newaxis, :]
-    namps = int(K.shape[0] / (nexp*112))
-    adj = np.zeros((sci.shape[0], nchunks))
-    inds = np.arange(sci.shape[1])
-    X = np.array([np.mean(xi) for xi in np.array_split(inds, nchunks)])
-    for i in np.arange(namps):
-        i1 = int(i * nexp*112)
-        i2 = int((i + 1) * nexp*112)
-        cnt = 0
-        for schunk, fchunk in zip(np.array_split(K[i1:i2], nchunks, axis=1),
-                                  np.array_split(ftf[i1:i2], nchunks, axis=1)):
-            z = biweight(schunk / fchunk, axis=1)
-            b = []
-            for j in np.arange(nexp):
-                j1 = int(j * 112)
-                j2 = int((j+1) * 112)
-                b.append(z[j1:j2])
-            avg = np.median(b, axis=0)
-            norms = [biweight(bi / avg) for bi in b]
-            avg = np.median([bi / norm for bi, norm in zip(b, norms)], axis=0)
-            norms = [biweight(bi / avg) for bi in b]
-            if np.isfinite(avg).sum():
-                mask, cont = identify_sky_pixels(avg, 5)
-            else:
-                cont = np.ones(avg.shape)
-            for j in np.arange(nexp, dtype=int):
-                 j1 = int(j * 112)
-                 j2 = int((j+1) * 112)
-                 adj[(i1+j1):(i1+j2), cnt] = norms[j] * cont
-            cnt += 1
-    Adj = ftf * 0.
-    for i in np.arange(sci.shape[0]):
-        good = np.isfinite(adj[i])
-        if good.sum() > (nchunks-3):
-            Adj[i] = interp1d(X, adj[i], kind='quadratic',
-                              fill_value='extrapolate')(inds)
-        else:
-            Adj[i] = 0
-    
-    return Adj
 
 def catch_ifuslot_swap(ifuslot, date):
     date = int(date)
@@ -2778,33 +2239,6 @@ mult_fac2 = mult_fac[np.newaxis, :] * fac[:, np.newaxis]
 scispectra[:] = scispectra / throughput[np.newaxis, :] * mult_fac2
 errspectra[:] = errspectra / throughput[np.newaxis, :] * mult_fac2
 skyrect[:] = skyrect / throughput[np.newaxis, :] * mult_fac2
-# =============================================================================
-# Make 2d sky-sub image 
-# =============================================================================
-#obsskies = []
-#for k in np.arange(nexp):
-#    sel = np.where(np.array(inds / 112, dtype=int) % nexp == k)[0]
-#    y = s1[sel] / ftf[sel] / Adj[sel]
-#    y[mask[sel]] = np.nan
-#    sky = biweight(y, axis=0)
-#    obsskies.append(sky)
-#skysub_images = []
-#for k, _V in enumerate(intm):
-#    ind = k % 3
-#    init = _V[0]
-#    image = _V[1]
-#    name = 'multi_' + _V[2] + '.fits'
-#    N = k * 112
-#    M = (k+1) * 112
-#    sky = obsskies[ind] * ftf[N:M] * Adj[N:M]
-#    sky[~np.isfinite(sky)] = 0.0
-#    log.info('Writing model image for %s' % _V[2])
-#    if init is not None:
-#        model_image = build_model_image(init, image, T1[N:M], W1[N:M], sky,
-#                                        def_wave)
-#    else:
-#        model_image = image * 0.
-#    skysub_images.append([image, image-model_image, _V[2], (N+M)/2])
 
 # =============================================================================
 # Ifuslot dictionary
@@ -3340,43 +2774,12 @@ h5spec.close()
 h5spec = None
 
 
-#with open('ds9_%s_%07d.reg' % (args.date, args.observation), 'w') as k:
-#    MakeRegionFile.writeHeader(k)
-#    MakeRegionFile.writeSource(k, coords.ra.deg, coords.dec.deg)
-
-#x = [518 for s in skysub_images]
-#y = [s[3] for s in skysub_images]
-#te = [s[2] for s in skysub_images]
-#with open('ds9_%s_%07d_skysub.reg' % (args.date, args.observation), 'w') as k:
-#    MakeRegionFile.writeHeader(k)
-#    MakeRegionFile.writeText(k, x, y, te)
-
-#if args.simulate:
-#    i = 0
-#    N = 448 * nexp
-#    F = np.nanmedian(ftf[N*i:(i+1)*N], axis=1)
-#    data = scispectra[N*i:(i+1)*N]
-#    P = pos[N*i:(i+1)*N]
-#    log.info('Simulating spectrum from %s' % args.source_file)
-#    simulated_spectrum = read_sim(args.source_file)
-#    simdata = simulate_source(simulated_spectrum, P, data, 
-#                                 args.source_x, args.source_y, 
-#                                 args.source_seeing)
-#    scispectra[N*i:(i+1)*N] = simdata * 1.
-#
-#
-if args.simulate:
-    name = ('%s_%07d_%03d_sim.fits' %
-                (args.date, args.observation, args.ifuslot))
-    cubename = ('%s_%07d_%03d_cube_sim.fits' %
-                (args.date, args.observation, args.ifuslot))
-else:
-    name = ('%s_%07d_%03d.fits' %
-                (args.date, args.observation, args.ifuslot))
-    cubename = ('%s_%07d_%03d_cube.fits' %
-                (args.date, args.observation, args.ifuslot))
-    ecubename = ('%s_%07d_%03d_error_cube.fits' %
-                (args.date, args.observation, args.ifuslot))
+name = ('%s_%07d_%03d.fits' %
+            (args.date, args.observation, args.ifuslot))
+cubename = ('%s_%07d_%03d_cube.fits' %
+            (args.date, args.observation, args.ifuslot))
+ecubename = ('%s_%07d_%03d_error_cube.fits' %
+            (args.date, args.observation, args.ifuslot))
 
 
 
