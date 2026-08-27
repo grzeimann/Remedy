@@ -577,7 +577,6 @@ header['CUNIT3'] = 'Angstrom'
 header['SPECSYS'] = 'TOPOCENT'
 F = fits.PrimaryHDU(np.array(ecube, 'float32'), header=header)
 F.writeto(name, overwrite=True)
-<<<<<<< Updated upstream:make_mosaic_cube.py
 # Write weight cube as requested
 name = op.basename('%s_weight_cube.fits' % args.surname)
 header['CRPIX1'] = (N+1) / 2
