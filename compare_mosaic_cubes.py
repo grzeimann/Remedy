@@ -132,6 +132,21 @@ def compare_arrays(old, new, atol, rtol):
     }
 
 
+def wavelength_factor(old, new):
+    """Estimate new/old using bright, positive, mutually finite pixels."""
+    valid = np.isfinite(old) & np.isfinite(new) & (old > 0.0) & (new > 0.0)
+    if not np.any(valid):
+        return np.nan, 0
+    threshold = np.percentile(old[valid], 75.0)
+    selected = valid & (old >= threshold)
+    ratio = (new[selected] / old[selected]).astype(np.float64)
+    ratio = ratio[np.isfinite(ratio)]
+    if not ratio.size:
+        return np.nan, 0
+    # The median is a robust average and avoids ratios dominated by faint sky.
+    return float(np.median(ratio)), int(ratio.size)
+
+
 def collapse(data, indices, mode):
     """Collapse selected spectral planes without treating missing data as zero."""
     block = np.asarray(data[indices])
@@ -160,6 +175,24 @@ def write_map(path, image, header):
     )
 
 
+def write_factor_plot(path, rows):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    rows = np.asarray(rows, dtype=float)
+    selected = np.isfinite(rows[:, 1]) & (rows[:, 0] >= 3550.0) & (rows[:, 0] <= 5450.0)
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(rows[selected, 0], rows[selected, 1], lw=1.2)
+    ax.axhline(1.0, color="k", ls="--", lw=0.8)
+    ax.set(xlabel="Wavelength (Angstrom)", ylabel="Median factor (new / old)",
+           title="Bright-pixel flux factor: recreated cube / baseline cube")
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
 def main():
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("old_cube", type=Path)
@@ -174,6 +207,8 @@ def main():
                         help="NAME:CENTER:HALF_WIDTH[:sum|mean]; repeatable")
     parser.add_argument("--output-dir", type=Path,
                         help="write report, changed-wavelength table, and line maps")
+    parser.add_argument("--factor-plot", type=Path,
+                        help="factor plot path; defaults to output-dir when supplied")
     args = parser.parse_args()
 
     if args.atol < 0 or args.rtol < 0:
@@ -187,6 +222,7 @@ def main():
         args.output_dir.mkdir(parents=True, exist_ok=True)
 
     report = []
+    factor_rows = []
 
     def say(message=""):
         print(message)
@@ -225,6 +261,8 @@ def main():
             update_stats(old_total, old_plane)
             update_stats(new_total, new_plane)
             diff = compare_arrays(old_plane, new_plane, args.atol, args.rtol)
+            factor, factor_count = wavelength_factor(old_plane, new_plane)
+            factor_rows.append((wave, factor, factor_count))
             if diff["changed"]:
                 changed_rows.append((i, wave, diff["changed"],
                                      diff["max_abs"], diff["rms_abs"]))
@@ -243,6 +281,18 @@ def main():
                     (i, wave, count, max_abs, rms_abs))
         else:
             say("No changed voxels found.")
+
+        say("Flux factor is robust median(new / old) over positive pixels above "
+            "the old-cube 75th percentile per wavelength.")
+        factor_values = np.asarray(factor_rows, dtype=float)
+        factor_sel = ((factor_values[:, 0] >= 3550.0) &
+                      (factor_values[:, 0] <= 5450.0) &
+                      np.isfinite(factor_values[:, 1]))
+        if np.any(factor_sel):
+            say("Factor 3550--5450 A: median=%g, min=%g, max=%g" %
+                (np.median(factor_values[factor_sel, 1]),
+                 np.min(factor_values[factor_sel, 1]),
+                 np.max(factor_values[factor_sel, 1])))
 
         output_header = map_header(old_header)
         slice_waves = args.slices
@@ -292,7 +342,15 @@ def main():
             stream.write("index,wavelength_angstrom,changed_voxels,max_abs,rms_abs\n")
             for row in changed_rows:
                 stream.write("%d,%.6f,%d,%g,%g\n" % row)
+        with (args.output_dir / "flux_factor_vs_wavelength.csv").open("w") as stream:
+            stream.write("wavelength_angstrom,factor_new_over_old,n_pixels\n")
+            for row in factor_rows:
+                stream.write("%.6f,%g,%d\n" % row)
+        factor_plot = args.factor_plot or (args.output_dir / "flux_factor_vs_wavelength.png")
+        write_factor_plot(factor_plot, factor_rows)
         print("Wrote comparison products to %s" % args.output_dir)
+    elif args.factor_plot:
+        write_factor_plot(args.factor_plot, factor_rows)
 
 
 if __name__ == "__main__":
