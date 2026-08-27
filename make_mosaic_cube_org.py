@@ -621,5 +621,3 @@ if write_sub and len(sub_cubes) > 0:
         F = fits.PrimaryHDU(np.array(sub_ecubes[jd], 'float32'), header=header)
         F.writeto(name, overwrite=True)
     args.log.info(f"Wrote {len(sub_cubes)} per-dither cube/errorcube pairs with pattern {args.surname}_sub_dither_N_*.fits")
-=======
->>>>>>> Stashed changes:make_mosaic_cube_org.py
