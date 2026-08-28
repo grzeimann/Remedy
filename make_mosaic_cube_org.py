@@ -41,6 +41,120 @@ mask_dict = {'20200430-20200501': ['057RL', '057RU', '057LL', '057LU', '058RU',
              '20200517-20200522': ['030RL', '030RU', '030LL', '030LU'],
              '20200523-20200526': ['039RL', '039RU', '039LL', '039LU'],
              '20200622-20200715': ['089RL', '089RU', '096RL', '096RU']}
+
+# M101-specific H5 sky repair.  These coordinates are used only for the
+# H5-consumption-time replacement of the Quick Reduction exposure sky.
+M101_SKY_RA0_DEG = 210.800
+M101_SKY_DEC0_DEG = 54.333
+M101_SKY_MIN_RADIUS_ARCMIN = 6.0
+M101_SKY_NEXPOSURES = 3
+M101_SKY_MIN_FINITE_PIXELS = 800
+M101_SKY_MIN_FIBERS = 20
+
+
+def repair_m101_sky(spectra_skysub, stored_sky, ra, dec, log=None,
+                    h5file=''):
+    """Replace the Quick Reduction sky independently for M101 exposures.
+
+    ``spectra_skysub`` and ``stored_sky`` must be in the same units.  The
+    caller handles the offset convention before calling this function.  A
+    full-length Boolean mask is used for each exposure so the radial cut
+    cannot misalign a shortened selection with the original fiber array.
+
+    Returns
+    -------
+    np.ndarray
+        Sky-corrected spectra, or the original sky-subtracted spectra for an
+        exposure when a trustworthy replacement sky cannot be constructed.
+    """
+    spectra_corrected = spectra_skysub.copy()
+    n_fib = spectra_skysub.shape[0]
+    inds_local = np.arange(n_fib)
+    block_ids = inds_local // 112
+    dra_arcmin = ((ra - M101_SKY_RA0_DEG) *
+                  np.cos(np.radians(M101_SKY_DEC0_DEG)) * 60.0)
+    ddec_arcmin = (dec - M101_SKY_DEC0_DEG) * 60.0
+    radius_arcmin = np.sqrt(dra_arcmin ** 2 + ddec_arcmin ** 2)
+    sky_region = radius_arcmin > M101_SKY_MIN_RADIUS_ARCMIN
+    spectra_restored = spectra_skysub + stored_sky
+
+    def report(message, *values):
+        if log is not None:
+            log.info(message, *values)
+
+    for k in range(M101_SKY_NEXPOSURES):
+        exp_sel = (block_ids % M101_SKY_NEXPOSURES) == k
+        exp_indices = np.where(exp_sel)[0]
+        if exp_indices.size == 0:
+            report('M101 sky repair %s exposure %d: no fibers; using original sky-subtracted spectrum.',
+                   h5file, k + 1)
+            continue
+
+        finite_counts = np.isfinite(spectra_restored[exp_indices]).sum(axis=1)
+        broadband = biweight(spectra_restored[exp_indices, 800:900], axis=1)
+        candidate = (sky_region[exp_indices] &
+                     (finite_counts >= M101_SKY_MIN_FINITE_PIXELS) &
+                     np.isfinite(broadband))
+        candidate_indices = exp_indices[candidate]
+        candidate_broadband = broadband[candidate]
+
+        # Start from the original sky-subtracted data for the conservative
+        # fallback path; only replace an exposure after all checks succeed.
+        full_sky_mask = np.zeros(n_fib, dtype=bool)
+        selected_sky_count = 0
+        replacement_sky = None
+        stored_reference = None
+
+        if candidate_indices.size >= M101_SKY_MIN_FIBERS:
+            _, bm = biweight(candidate_broadband, calc_std=True)
+            low = np.nanpercentile(candidate_broadband, 5)
+            high = np.nanpercentile(candidate_broadband, 60)
+            if np.isfinite(bm) and bm > 0.0 and np.isfinite(low) and np.isfinite(high):
+                per_array = np.linspace(low, high, 81)
+                neighbors = np.sum(
+                    np.abs(candidate_broadband[:, None] - per_array[None, :]) < bm,
+                    axis=0)
+                nsky = per_array[np.argmax(neighbors)]
+                selected = (candidate_broadband - nsky) < (2.0 * bm)
+                full_sky_mask[candidate_indices[selected]] = True
+                selected_sky_count = int(selected.sum())
+
+                if selected_sky_count >= M101_SKY_MIN_FIBERS:
+                    replacement_sky = biweight(
+                        spectra_restored[full_sky_mask], axis=0)
+                    stored_reference = biweight(stored_sky[full_sky_mask], axis=0)
+                    if not np.any(np.isfinite(replacement_sky)):
+                        replacement_sky = None
+            else:
+                report('M101 sky repair %s exposure %d: degenerate broadband scatter; using original sky-subtracted spectrum.',
+                       h5file, k + 1)
+
+        if replacement_sky is None:
+            report(
+                'M101 sky repair %s exposure %d: total fibers=%d, beyond 6 arcmin=%d, '
+                'finite candidates=%d, selected sky fibers=%d; insufficient trustworthy sky, '
+                'using original sky-subtracted spectrum.',
+                h5file, k + 1, int(exp_indices.size),
+                int(np.sum(sky_region[exp_indices])), int(candidate_indices.size),
+                selected_sky_count)
+            continue
+
+        spectra_corrected[exp_indices] = (
+            spectra_restored[exp_indices] - replacement_sky[None, :])
+        median_stored = np.nanmedian(stored_sky[full_sky_mask])
+        median_replacement = np.nanmedian(replacement_sky)
+        median_difference = np.nanmedian(replacement_sky - stored_reference)
+        report(
+            'M101 sky repair %s exposure %d: total fibers=%d, beyond 6 arcmin=%d, '
+            'finite candidates=%d, selected sky fibers=%d, median stored QR sky=%0.5g, '
+            'median replacement sky=%0.5g, median replacement - stored sky=%0.5g',
+            h5file, k + 1, int(exp_indices.size),
+            int(np.sum(sky_region[exp_indices])), int(candidate_indices.size),
+            selected_sky_count, median_stored, median_replacement, median_difference)
+
+    return spectra_corrected
+
+
 def get_script_path():
     return op.dirname(op.realpath(sys.argv[0]))
 
@@ -491,15 +605,17 @@ for jk, h5file in enumerate(h5files):
     Dec = t.root.Survey.cols.dec[0]
     pa = t.root.Survey.cols.pa[0]
     offset = t.root.Survey.cols.offset[0]
+    stored_sky = t.root.Fibers.cols.skyspectrum[:]
     if (not np.isfinite(offset)) or (offset == 0):
         args.log.warning(f'Offset for {op.basename(h5file)} is invalid ({offset}); proceeding without offset correction.')
-        spectra = t.root.Fibers.cols.spectrum[:]
+        spectra_skysub = t.root.Fibers.cols.spectrum[:]
         error = t.root.Fibers.cols.error[:]
     else:
         args.log.info(f'Offset for {op.basename(h5file)}: {offset}')
-        # quick_reduction applies this photometric factor before writing the
-        # H5 file.  Divide it back out here, as the historical cube builder did.
-        spectra = t.root.Fibers.cols.spectrum[:] / offset
+        # quick_reduction applies this photometric factor to SCI/error before
+        # writing the H5 file, but not to skyspectrum.  Consequently spectrum/
+        # offset and the stored skyspectrum are already in matching units.
+        spectra_skysub = t.root.Fibers.cols.spectrum[:] / offset
         error = t.root.Fibers.cols.error[:] / offset
     for key in mask_dict.keys():
         date1 = int(key.split('-')[0])
@@ -510,7 +626,14 @@ for jk, h5file in enumerate(h5files):
                 ifu = int(ifuamp[:3])
                 amp = ifuamp[3:]
                 sel = np.where((ifu == ifuslots) * (amp == amps))[0]
-                spectra[sel] = np.nan
+                spectra_skysub[sel] = np.nan
+
+    # Restore the Quick Reduction exposure sky, replace it with an
+    # M101-safe sky independently for each interleaved exposure, and pass the
+    # corrected spectra into the existing mosaic normalization below.
+    spectra = repair_m101_sky(
+        spectra_skysub, stored_sky, ra, dec, log=args.log,
+        h5file=op.basename(h5file))
     cnt1 = cnt + len(ra)
     E = Extract()
     Aother = Astrometry(bounding_box[0], bounding_box[1], pa, 0., 0.)
@@ -541,6 +664,9 @@ for jk, h5file in enumerate(h5files):
             'Sky diagnostics for %s: gsel=%d, sky=%d, finite_spectra=%d',
             h5file, int(np.sum(gsel)), int(np.sum(skyvalues)),
             int(np.isfinite(spectra).sum()))
+        # The M101 repair above replaced the Quick Reduction exposure sky.
+        # This is separate from the existing mosaic-level residual-background
+        # correction performed here with backspectra.
         backspectra = biweight(spectra[gsel][skyvalues], axis=0)
         args.log.info('Average spectrum residual value: %0.3f' % np.nanmedian(backspectra))
         spectra[:] -= backspectra[np.newaxis, :]
