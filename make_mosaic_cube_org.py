@@ -42,41 +42,63 @@ mask_dict = {'20200430-20200501': ['057RL', '057RU', '057LL', '057LU', '058RU',
              '20200523-20200526': ['039RL', '039RU', '039LL', '039LU'],
              '20200622-20200715': ['089RL', '089RU', '096RL', '096RU']}
 
-# M101-specific H5 sky repair.  These coordinates are used only for the
-# H5-consumption-time replacement of the Quick Reduction exposure sky.
-M101_SKY_RA0_DEG = 210.800
-M101_SKY_DEC0_DEG = 54.333
+# M101-specific residual sky correction at H5-consumption time.
+M101_RA_DEG = 210.800
+M101_DEC_DEG = 54.333
 M101_SKY_MIN_RADIUS_ARCMIN = 6.0
 M101_SKY_NEXPOSURES = 3
-M101_SKY_MIN_FINITE_PIXELS = 800
+M101_SKY_MIN_FINITE_FRACTION = 0.8
 M101_SKY_MIN_FIBERS = 20
 
 
-def repair_m101_sky(spectra_skysub, stored_sky, ra, dec, log=None,
-                    h5file=''):
-    """Replace the Quick Reduction sky independently for M101 exposures.
+def subtract_m101_residual_sky(spectra, ra, dec, xg, yg, tp,
+                               binimage=None, log=None, h5file=''):
+    """Subtract one M101-safe residual sky spectrum per exposure.
 
-    ``spectra_skysub`` and ``stored_sky`` must be in the same units.  The
-    caller handles the offset convention before calling this function.  A
-    full-length Boolean mask is used for each exposure so the radial cut
-    cannot misalign a shortened selection with the original fiber array.
+    This operates directly on already sky-subtracted H5 SCI.  It deliberately
+    does not read or add back ``Fibers.skyspectrum``: this is the single
+    residual-sky correction performed by the cube builder.  All masks are
+    full-length masks in the local H5 fiber coordinate system.
 
-    Returns
-    -------
-    np.ndarray
-        Sky-corrected spectra, or the original sky-subtracted spectra for an
-        exposure when a trustworthy replacement sky cannot be constructed.
+    If an external image is available, ``binimage < 0.01`` is an additional
+    blank-sky criterion.  Invalid image pixels are excluded rather than being
+    silently classified as blank.  If no external image is supplied, the
+    radial and mosaic-region criteria remain active and the log records that
+    the external blank-image criterion was unavailable.
     """
-    spectra_corrected = spectra_skysub.copy()
-    n_fib = spectra_skysub.shape[0]
+    n_fib, n_wave = spectra.shape
     inds_local = np.arange(n_fib)
     block_ids = inds_local // 112
-    dra_arcmin = ((ra - M101_SKY_RA0_DEG) *
-                  np.cos(np.radians(M101_SKY_DEC0_DEG)) * 60.0)
-    ddec_arcmin = (dec - M101_SKY_DEC0_DEG) * 60.0
+    dra_arcmin = ((ra - M101_RA_DEG) *
+                  np.cos(np.deg2rad(M101_DEC_DEG)) * 60.0)
+    ddec_arcmin = (dec - M101_DEC_DEG) * 60.0
     radius_arcmin = np.sqrt(dra_arcmin ** 2 + ddec_arcmin ** 2)
     sky_region = radius_arcmin > M101_SKY_MIN_RADIUS_ARCMIN
-    spectra_restored = spectra_skysub + stored_sky
+
+    # Image sampling uses the same 1-based WCS pixel convention as the
+    # existing normalization code.  This is only for the optional external
+    # image criterion; the M101 radial selection above uses RA/Dec directly.
+    x, y = tp.wcs_world2pix(ra, dec, 1)
+    xc = np.rint(np.interp(x, xg, np.arange(len(xg)), left=0., right=len(xg)))
+    yc = np.rint(np.interp(y, yg, np.arange(len(yg)), left=0., right=len(yg)))
+    xc = np.asarray(xc, dtype=int)
+    yc = np.asarray(yc, dtype=int)
+    in_valid_image_region = (
+        np.isfinite(x) & np.isfinite(y) &
+        (xc >= 0) & (xc < len(xg)) &
+        (yc >= 0) & (yc < len(yg)))
+
+    external_blank = None
+    if binimage is not None:
+        external_blank = np.zeros(n_fib, dtype=bool)
+        valid_image = in_valid_image_region.copy()
+        valid_image[valid_image] &= np.isfinite(binimage[yc[valid_image], xc[valid_image]])
+        external_blank[valid_image] = (
+            binimage[yc[valid_image], xc[valid_image]] < 0.01)
+    elif log is not None:
+        log.warning(
+            'M101 residual sky %s: external image unavailable; not applying '
+            'an external blank-image classification.', h5file)
 
     def report(message, *values):
         if log is not None:
@@ -86,73 +108,76 @@ def repair_m101_sky(spectra_skysub, stored_sky, ra, dec, log=None,
         exp_sel = (block_ids % M101_SKY_NEXPOSURES) == k
         exp_indices = np.where(exp_sel)[0]
         if exp_indices.size == 0:
-            report('M101 sky repair %s exposure %d: no fibers; using original sky-subtracted spectrum.',
+            report('M101 residual sky %s exposure %d: no fibers; skipping correction.',
                    h5file, k + 1)
             continue
 
-        finite_counts = np.isfinite(spectra_restored[exp_indices]).sum(axis=1)
-        broadband = biweight(spectra_restored[exp_indices, 800:900], axis=1)
-        candidate = (sky_region[exp_indices] &
-                     (finite_counts >= M101_SKY_MIN_FINITE_PIXELS) &
-                     np.isfinite(broadband))
-        candidate_indices = exp_indices[candidate]
-        candidate_broadband = broadband[candidate]
-
-        # Start from the original sky-subtracted data for the conservative
-        # fallback path; only replace an exposure after all checks succeed.
+        finite_counts = np.isfinite(spectra[exp_indices]).sum(axis=1)
+        sufficient_finite = (
+            finite_counts >= int(np.ceil(M101_SKY_MIN_FINITE_FRACTION * n_wave)))
         full_sky_mask = np.zeros(n_fib, dtype=bool)
-        selected_sky_count = 0
-        replacement_sky = None
-        stored_reference = None
+        full_sky_mask[exp_indices] = (
+            sky_region[exp_indices] &
+            in_valid_image_region[exp_indices] &
+            sufficient_finite)
+        if external_blank is not None:
+            full_sky_mask &= external_blank
 
-        if candidate_indices.size >= M101_SKY_MIN_FIBERS:
-            _, bm = biweight(candidate_broadband, calc_std=True)
-            low = np.nanpercentile(candidate_broadband, 5)
-            high = np.nanpercentile(candidate_broadband, 60)
-            if np.isfinite(bm) and bm > 0.0 and np.isfinite(low) and np.isfinite(high):
-                per_array = np.linspace(low, high, 81)
-                neighbors = np.sum(
-                    np.abs(candidate_broadband[:, None] - per_array[None, :]) < bm,
-                    axis=0)
-                nsky = per_array[np.argmax(neighbors)]
-                selected = (candidate_broadband - nsky) < (2.0 * bm)
-                full_sky_mask[candidate_indices[selected]] = True
-                selected_sky_count = int(selected.sum())
-
-                if selected_sky_count >= M101_SKY_MIN_FIBERS:
-                    replacement_sky = biweight(
-                        spectra_restored[full_sky_mask], axis=0)
-                    stored_reference = biweight(stored_sky[full_sky_mask], axis=0)
-                    if not np.any(np.isfinite(replacement_sky)):
-                        replacement_sky = None
-            else:
-                report('M101 sky repair %s exposure %d: degenerate broadband scatter; using original sky-subtracted spectrum.',
-                       h5file, k + 1)
-
-        if replacement_sky is None:
+        selected_sky_count = int(full_sky_mask.sum())
+        if selected_sky_count < M101_SKY_MIN_FIBERS:
             report(
-                'M101 sky repair %s exposure %d: total fibers=%d, beyond 6 arcmin=%d, '
-                'finite candidates=%d, selected sky fibers=%d; insufficient trustworthy sky, '
-                'using original sky-subtracted spectrum.',
+                'M101 residual sky %s exposure %d: total fibers=%d, beyond 6 arcmin=%d, '
+                'valid image fibers=%d, blank-image candidates=%s, finite sky candidates=%d, '
+                'selected sky fibers=%d; fewer than %d, skipping correction.',
                 h5file, k + 1, int(exp_indices.size),
-                int(np.sum(sky_region[exp_indices])), int(candidate_indices.size),
-                selected_sky_count)
+                int(np.sum(sky_region[exp_indices])),
+                int(np.sum(in_valid_image_region[exp_indices])),
+                ('unavailable' if external_blank is None else
+                 str(int(np.sum(external_blank[exp_indices])))),
+                selected_sky_count, selected_sky_count, M101_SKY_MIN_FIBERS)
+            if log is not None:
+                log.warning(
+                    'M101 residual sky %s exposure %d skipped: only %d sky '
+                    'candidates (minimum %d).',
+                    h5file, k + 1, selected_sky_count, M101_SKY_MIN_FIBERS)
             continue
 
-        spectra_corrected[exp_indices] = (
-            spectra_restored[exp_indices] - replacement_sky[None, :])
-        median_stored = np.nanmedian(stored_sky[full_sky_mask])
-        median_replacement = np.nanmedian(replacement_sky)
-        median_difference = np.nanmedian(replacement_sky - stored_reference)
-        report(
-            'M101 sky repair %s exposure %d: total fibers=%d, beyond 6 arcmin=%d, '
-            'finite candidates=%d, selected sky fibers=%d, median stored QR sky=%0.5g, '
-            'median replacement sky=%0.5g, median replacement - stored sky=%0.5g',
-            h5file, k + 1, int(exp_indices.size),
-            int(np.sum(sky_region[exp_indices])), int(candidate_indices.size),
-            selected_sky_count, median_stored, median_replacement, median_difference)
+        residual_sky = biweight(spectra[full_sky_mask], axis=0)
+        finite_residual = np.isfinite(residual_sky)
+        residual_fraction = finite_residual.sum() / float(n_wave)
+        if residual_fraction < M101_SKY_MIN_FINITE_FRACTION:
+            report(
+                'M101 residual sky %s exposure %d: residual sky finite at %d/%d '
+                'wavelengths; mostly nonfinite, skipping correction.',
+                h5file, k + 1, int(finite_residual.sum()), n_wave)
+            if log is not None:
+                log.warning(
+                    'M101 residual sky %s exposure %d skipped because the residual '
+                    'sky is mostly nonfinite.', h5file, k + 1)
+            continue
 
-    return spectra_corrected
+        # Apply only finite residual bins if a small number of bins are
+        # undefined; this leaves those undefined SCI bins unchanged.
+        spectra[np.ix_(exp_indices, finite_residual)] -= residual_sky[finite_residual]
+        before_level = np.nanmedian(
+            spectra[full_sky_mask] + residual_sky[None, :])
+        after_level = np.nanmedian(spectra[full_sky_mask])
+        p16, p50, p84 = np.nanpercentile(residual_sky[finite_residual], [16, 50, 84])
+        report(
+            'M101 residual sky %s exposure %d: total fibers=%d, beyond 6 arcmin=%d, '
+            'valid image fibers=%d, blank-image candidates=%s, finite sky candidates=%d, '
+            'selected sky fibers=%d, median residual sky=%0.5g, '
+            'residual sky p16/p50/p84=(%0.5g, %0.5g, %0.5g), finite residual wavelengths=%d/%d, '
+            'median sky-region level before=%0.5g, after=%0.5g',
+            h5file, k + 1, int(exp_indices.size),
+            int(np.sum(sky_region[exp_indices])),
+            int(np.sum(in_valid_image_region[exp_indices])),
+            ('unavailable' if external_blank is None else
+             str(int(np.sum(external_blank[exp_indices])))),
+            selected_sky_count, selected_sky_count, p50, p16, p50, p84,
+            int(finite_residual.sum()), n_wave, before_level, after_level)
+
+    return spectra
 
 
 def get_script_path():
@@ -553,6 +578,7 @@ if args.filter_file is not None:
     
 
     
+binimage = None
 if args.image_file is not None:
     name = op.basename(args.image_file)[:-5] + '_rect.fits'
     if op.exists(name):
@@ -605,17 +631,15 @@ for jk, h5file in enumerate(h5files):
     Dec = t.root.Survey.cols.dec[0]
     pa = t.root.Survey.cols.pa[0]
     offset = t.root.Survey.cols.offset[0]
-    stored_sky = t.root.Fibers.cols.skyspectrum[:]
     if (not np.isfinite(offset)) or (offset == 0):
         args.log.warning(f'Offset for {op.basename(h5file)} is invalid ({offset}); proceeding without offset correction.')
-        spectra_skysub = t.root.Fibers.cols.spectrum[:]
+        spectra = t.root.Fibers.cols.spectrum[:]
         error = t.root.Fibers.cols.error[:]
     else:
         args.log.info(f'Offset for {op.basename(h5file)}: {offset}')
-        # quick_reduction applies this photometric factor to SCI/error before
-        # writing the H5 file, but not to skyspectrum.  Consequently spectrum/
-        # offset and the stored skyspectrum are already in matching units.
-        spectra_skysub = t.root.Fibers.cols.spectrum[:] / offset
+        # Preserve the existing H5 units: Quick Reduction applied the final
+        # photometric offset to SCI/error, so undo it before cube normalization.
+        spectra = t.root.Fibers.cols.spectrum[:] / offset
         error = t.root.Fibers.cols.error[:] / offset
     for key in mask_dict.keys():
         date1 = int(key.split('-')[0])
@@ -626,13 +650,14 @@ for jk, h5file in enumerate(h5files):
                 ifu = int(ifuamp[:3])
                 amp = ifuamp[3:]
                 sel = np.where((ifu == ifuslots) * (amp == amps))[0]
-                spectra_skysub[sel] = np.nan
+                spectra[sel] = np.nan
 
-    # Restore the Quick Reduction exposure sky, replace it with an
-    # M101-safe sky independently for each interleaved exposure, and pass the
-    # corrected spectra into the existing mosaic normalization below.
-    spectra = repair_m101_sky(
-        spectra_skysub, stored_sky, ra, dec, log=args.log,
+    # Subtract the single authoritative M101 residual-sky correction before
+    # the existing mosaic normalization.  This uses H5 sky-subtracted SCI
+    # directly; Fibers.skyspectrum is intentionally not added back.  This
+    # replaces the former H5-wide backspectra subtraction below normalization.
+    spectra = subtract_m101_residual_sky(
+        spectra, ra, dec, xg, yg, tp, binimage=binimage, log=args.log,
         h5file=op.basename(h5file))
     cnt1 = cnt + len(ra)
     E = Extract()
@@ -658,18 +683,6 @@ for jk, h5file in enumerate(h5files):
         xc = np.array(np.round(xc), dtype=int)
         yc = np.array(np.round(yc), dtype=int)
         gsel = (xc>0) * (xc<len(xg)) * (yc>0) * (yc<len(yg))
-        d = np.sqrt(xgrid**2 + ygrid**2)
-        skyvalues = (binimage[yc[gsel], xc[gsel]] < 0.01) * (d[yc[gsel], xc[gsel]] > 420.)
-        args.log.info(
-            'Sky diagnostics for %s: gsel=%d, sky=%d, finite_spectra=%d',
-            h5file, int(np.sum(gsel)), int(np.sum(skyvalues)),
-            int(np.isfinite(spectra).sum()))
-        # The M101 repair above replaced the Quick Reduction exposure sky.
-        # This is separate from the existing mosaic-level residual-background
-        # correction performed here with backspectra.
-        backspectra = biweight(spectra[gsel][skyvalues], axis=0)
-        args.log.info('Average spectrum residual value: %0.3f' % np.nanmedian(backspectra))
-        spectra[:] -= backspectra[np.newaxis, :]
         collapse_image = (np.nansum(spectra[:, wsel] * response[np.newaxis, wsel], axis=1) /
                           np.nansum(mask * response[np.newaxis, wsel], axis=1))
         collapse_eimage = np.sqrt((np.nansum(error[:, wsel]**2 * response[np.newaxis, wsel], axis=1) /
