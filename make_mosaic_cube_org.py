@@ -9,6 +9,7 @@ import matplotlib
 matplotlib.use('agg')
 import argparse as ap
 from concurrent.futures import ThreadPoolExecutor
+from numba import njit
 from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.convolution import Gaussian1DKernel, interpolate_replace_nans
 from astropy.io import fits
@@ -172,6 +173,143 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
 
     return image, errorimage, coveragek
 
+
+@njit(nogil=True, cache=True)
+def _gaussian_splat_shot_xy(indices, xpos, ypos, fluxes, errors,
+                            x_origin, y_origin, nx, ny, sigma, radius,
+                            support_radius, area, flux_sum, weight_sum,
+                            error_sum, error_support, support_map):
+    """Numba kernel for one shot's subpixel Gaussian deposition."""
+    sigma_sq = sigma * sigma
+    support_radius_sq = (2.0 * sigma) * (2.0 * sigma)
+    width = 2 * radius + 1
+    gx = np.empty(width, dtype=np.float32)
+    gy = np.empty(width, dtype=np.float32)
+
+    for p in range(indices.shape[0]):
+        j = indices[p]
+        flux = fluxes[j]
+        xi = xpos[j]
+        yi = ypos[j]
+        if not np.isfinite(flux) or not np.isfinite(xi) or not np.isfinite(yi):
+            continue
+
+        ix_center = int(np.floor(xi - x_origin))
+        iy_center = int(np.floor(yi - y_origin))
+
+        for ox in range(-radius, radius + 1):
+            dx = (x_origin + ix_center + ox) - xi
+            gx[ox + radius] = np.exp(-0.5 * dx * dx / sigma_sq)
+        for oy in range(-radius, radius + 1):
+            dy = (y_origin + iy_center + oy) - yi
+            gy[oy + radius] = np.exp(-0.5 * dy * dy / sigma_sq)
+
+        for ox in range(-radius, radius + 1):
+            px = ix_center + ox
+            if px < 0 or px >= nx:
+                continue
+            for oy in range(-radius, radius + 1):
+                py = iy_center + oy
+                if py < 0 or py >= ny:
+                    continue
+                weight = gx[ox + radius] * gy[oy + radius]
+                flux_sum[py, px] += weight * flux / area
+                weight_sum[py, px] += weight
+                err = errors[j]
+                if np.isfinite(err) and err > 0.0:
+                    error_sum[py, px] += weight * weight * (err / area) ** 2
+                    error_support[py, px] += weight * weight
+
+        # Independent-shot support is based on distance to a fiber, not on
+        # whether a Gaussian stencil has a mathematically nonzero tail.
+        for ox in range(-support_radius, support_radius + 1):
+            px = ix_center + ox
+            if px < 0 or px >= nx:
+                continue
+            dx = (x_origin + px) - xi
+            for oy in range(-support_radius, support_radius + 1):
+                py = iy_center + oy
+                if py < 0 or py >= ny:
+                    continue
+                dy = (y_origin + py) - yi
+                if dx * dx + dy * dy <= support_radius_sq:
+                    support_map[py, px] = 1
+
+
+def make_image_gaussian(Pos, y, ye, xg, yg, xgrid, ygrid, sigma,
+                        cnt_array):
+    """Construct one wavelength plane with true subpixel Gaussian splatting.
+
+    Each finite science fiber contributes ``flux / area`` to a Gaussian
+    weighted interpolation within its shot.  Shot images are median-combined
+    only where that shot has a fiber within ``2 * sigma`` of the output pixel.
+    The returned ``coverage`` is the mean per-shot Gaussian support strength,
+    capped at one per shot; it is a diagnostic and never divides SCI.
+
+    ``errorimage`` is the median of the available per-shot interpolation
+    standard deviations calculated from the matched weighted variance formula.
+    It is not an exact propagated variance for the final shot median and must
+    be revisited before a public cube is finalized.
+    """
+    nshots = len(cnt_array)
+    ny, nx = xgrid.shape
+    radius = 3
+    support_radius = int(np.ceil(2.0 * sigma))
+    area = np.pi * 0.75 ** 2
+
+    xpos = Pos[:, 0]
+    ypos = Pos[:, 1]
+    if ye is None:
+        errors = np.full(y.shape, np.nan, dtype=np.float32)
+    else:
+        errors = ye
+    shot_images = np.full((nshots, ny, nx), np.nan, dtype=np.float32)
+    shot_errors = np.full((nshots, ny, nx), np.nan, dtype=np.float32)
+    coverage = np.zeros((ny, nx), dtype=np.float32)
+    ncontrib = np.zeros((ny, nx), dtype=np.uint8)
+
+    for k, cnt in enumerate(cnt_array):
+        if isinstance(cnt, (tuple, list)) and len(cnt) == 2:
+            indices = np.arange(int(cnt[0]), int(cnt[1]), dtype=np.int64)
+        else:
+            indices = np.asarray(cnt, dtype=np.int64)
+
+        flux_sum = np.zeros((ny, nx), dtype=np.float32)
+        weight_sum = np.zeros((ny, nx), dtype=np.float32)
+        error_sum = np.zeros((ny, nx), dtype=np.float32)
+        error_support = np.zeros((ny, nx), dtype=np.float32)
+        support_map = np.zeros((ny, nx), dtype=np.uint8)
+        _gaussian_splat_shot_xy(
+            indices, xpos, ypos, y, errors, float(xg[0]), float(yg[0]),
+            nx, ny, float(sigma), radius, support_radius, float(area),
+            flux_sum, weight_sum, error_sum, error_support, support_map)
+
+        supported = (support_map != 0) & (weight_sum > 0.0)
+        if np.any(supported):
+            shot_images[k, supported] = flux_sum[supported] / weight_sum[supported]
+            # Invalid errors do not invalidate SCI.  The error product is
+            # simply absent for pixels with no valid error-bearing fibers.
+            error_valid = supported & (error_support > 0.0)
+            shot_errors[k, error_valid] = np.sqrt(
+                error_sum[error_valid] /
+                (weight_sum[error_valid] * weight_sum[error_valid]))
+            ncontrib[supported] += 1
+            coverage += np.minimum(weight_sum, 1.0) * supported
+
+    # The median ignores unsupported shots because those entries remain NaN.
+    image = np.nanmedian(shot_images, axis=0).astype(np.float32)
+    errorimage = np.nanmedian(shot_errors, axis=0).astype(np.float32)
+    coverage /= float(max(1, nshots))
+    coverage = np.clip(coverage, 0.0, 1.0)
+
+    final_valid = ncontrib >= 2
+    image[~final_valid] = 0.0
+    errorimage[~final_valid] = 0.0
+    image[~np.isfinite(image)] = 0.0
+    errorimage[~np.isfinite(errorimage)] = 0.0
+
+    return image, errorimage, coverage, ncontrib
+
 def make_image(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
     image = xgrid * 0.
     error = xgrid * 0.
@@ -230,6 +368,7 @@ xgrid, ygrid = np.meshgrid(xg, yg)
 cube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 ecube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 weightcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
+ncontribcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='uint8')
 
 cnt = 0
 cnt_array = np.zeros((len(h5files), 2), dtype=int)
@@ -511,7 +650,7 @@ if _nonzero_total == 0:
     args.log.error('specarray is all zeros before imaging. Possible causes: filter response zero everywhere, norms zero/NaN, all spectra flagged.')
 
 def render_wavelength(i):
-    """Build one wavelength plane using the existing imaging calculation."""
+    """Build one wavelength plane using the test Gaussian imaging path."""
     x, y = tp.wcs_world2pix(raarray[:, i], decarray[:, i], 1)
     # Check how many positions fall within xgrid/ygrid bounds
     xmin, xmax = xg.min(), xg.max()
@@ -526,22 +665,44 @@ def render_wavelength(i):
     Pos = np.column_stack((x, y))
     data = specarray[:, i]
     edata = errarray[:, i]
-    # Full combination across all exposures (shots)
-    image, errorimage, weight = make_image_interp(Pos, data, edata, xg, yg, 
-                                                  xgrid, ygrid, 1.8 / 2.35,
-                                                  shot_indices)
-    return i, image, errorimage, weight
+    # Swap this one call back to make_image_interp for the historical/current
+    # reconstruction comparison.  The old function itself remains unchanged.
+    image, errorimage, weight, ncontrib = make_image_gaussian(
+        Pos, data, edata, xg, yg, xgrid, ygrid, 1.8 / 2.35, shot_indices)
+    return i, image, errorimage, weight, ncontrib
 
+
+def _warm_up_gaussian_splat():
+    """Compile the Numba kernel before wavelength workers are started."""
+    indices = np.array([0], dtype=np.int64)
+    position = np.array([1.0], dtype=np.float64)
+    flux = np.array([1.0], dtype=np.float32)
+    error = np.array([1.0], dtype=np.float32)
+    flux_sum = np.zeros((3, 3), dtype=np.float32)
+    weight_sum = np.zeros((3, 3), dtype=np.float32)
+    error_sum = np.zeros((3, 3), dtype=np.float32)
+    error_support = np.zeros((3, 3), dtype=np.float32)
+    support = np.zeros((3, 3), dtype=np.uint8)
+    _gaussian_splat_shot_xy(
+        indices, position, position, flux, error, 1.0, 1.0, 3, 3,
+        1.8 / 2.35, 3, 2, np.pi * 0.75 ** 2, flux_sum, weight_sum,
+        error_sum, error_support, support)
+
+
+_warm_up_gaussian_splat()
+args.log.info('Gaussian test reconstruction enabled: SCI uses subpixel splats and NCONTRIB >= 2.')
+args.log.warning('Gaussian test errorimage is the median per-shot interpolation error, not an exact median-variance model.')
 
 args.log.info('Using %d wavelength worker(s)' % args.wave_workers)
 with ThreadPoolExecutor(max_workers=args.wave_workers) as executor:
     # executor.map preserves wavelength order in the returned results.  Each
     # worker only reads the shared input arrays; cube writes remain here.
-    for i, image, errorimage, weight in executor.map(render_wavelength,
-                                                     range(len(def_wave))):
+    for i, image, errorimage, weight, ncontrib in executor.map(
+            render_wavelength, range(len(def_wave))):
         cube[i, :, :] = image
         ecube[i, :, :] = errorimage
         weightcube[i, :, :] = weight
+        ncontribcube[i, :, :] = ncontrib
 
 name = op.basename('%s_cube.fits' % args.surname)
 scale = args.pixel_scale / 3600.
@@ -602,4 +763,11 @@ header['CUNIT2'] = 'deg'
 header['CUNIT3'] = 'Angstrom'
 header['SPECSYS'] = 'TOPOCENT'
 F = fits.PrimaryHDU(np.array(weightcube, 'float32'), header=header)
+F.writeto(name, overwrite=True)
+name = op.basename('%s_ncontrib_cube.fits' % args.surname)
+ncontrib_header = header.copy()
+ncontrib_header['BUNIT'] = 'count'
+ncontrib_header['EXTNAME'] = 'NCONTRIB'
+ncontrib_header['COMMENT'] = 'Number of independent shots with a valid fiber within 2 sigma.'
+F = fits.PrimaryHDU(np.array(ncontribcube, 'uint8'), header=ncontrib_header)
 F.writeto(name, overwrite=True)
