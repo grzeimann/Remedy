@@ -317,7 +317,8 @@ def make_image_interp(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array,
 def _gaussian_splat_shot_xy(indices, xpos, ypos, fluxes, errors,
                             x_origin, y_origin, nx, ny, sigma, radius,
                             support_radius, area, flux_sum, weight_sum,
-                            error_sum, error_support, support_map):
+                            variance_numerator, error_weight_sum,
+                            support_map):
     """Numba kernel for one shot's subpixel Gaussian deposition."""
     sigma_sq = sigma * sigma
     support_radius_sq = (2.0 * sigma) * (2.0 * sigma)
@@ -356,8 +357,8 @@ def _gaussian_splat_shot_xy(indices, xpos, ypos, fluxes, errors,
                 weight_sum[py, px] += weight
                 err = errors[j]
                 if np.isfinite(err) and err > 0.0:
-                    error_sum[py, px] += weight * weight * (err / area) ** 2
-                    error_support[py, px] += weight * weight
+                    variance_numerator[py, px] += weight * weight * (err / area) ** 2
+                    error_weight_sum[py, px] += weight
 
         # Independent-shot support is based on distance to a fiber, not on
         # whether a Gaussian stencil has a mathematically nonzero tail.
@@ -375,6 +376,81 @@ def _gaussian_splat_shot_xy(indices, xpos, ypos, fluxes, errors,
                     support_map[py, px] = 1
 
 
+def _compute_final_variance(shot_images, shot_variances, ncontrib):
+    """Compute formal/empirical variance for the existing shot median.
+
+    ``shot_images`` and ``shot_variances`` are indexed by shot, while
+    ``ncontrib`` retains the existing meaningful-support count.  This helper
+    never changes SCI or support; it only evaluates variance for pixels whose
+    SCI median already has at least two supported shots.
+    """
+    ny, nx = ncontrib.shape
+    valid_sci = ncontrib >= 2
+
+    # Keep the support selection identical to the SCI nanmedian.  The
+    # vectorized calculations below only read these arrays and cannot change
+    # SCI or NCONTRIB.
+    supported = np.isfinite(shot_images)
+    n = supported.sum(axis=0)
+    finite_variance = np.isfinite(shot_variances)
+    complete = np.all(~supported | finite_variance, axis=0)
+    positive_or_zero = np.all(~supported | (shot_variances >= 0.0), axis=0)
+
+    formal = np.full((ny, nx), np.nan, dtype=np.float64)
+    two_shot = (n == 2) & complete
+    if np.any(two_shot):
+        formal[two_shot] = (
+            np.sum(np.where(supported, shot_variances, 0.0), axis=0)[two_shot] /
+            4.0)
+
+    three_or_more = (n >= 3) & complete & positive_or_zero
+    if np.any(three_or_more):
+        sigmas = np.sqrt(np.where(supported, shot_variances, 1.0))
+        inverse_sigma = np.zeros_like(sigmas, dtype=np.float64)
+        np.divide(1.0, sigmas, out=inverse_sigma, where=supported)
+        inverse_sigma_sum = np.sum(inverse_sigma, axis=0)
+        positive_sigma = np.all(~supported | (sigmas > 0.0), axis=0)
+        formal_valid = three_or_more & positive_sigma
+        formal[formal_valid] = (
+            n[formal_valid] * np.pi /
+            (2.0 * inverse_sigma_sum[formal_valid] ** 2))
+
+    empirical = np.full((ny, nx), np.nan, dtype=np.float64)
+    five_or_more = n >= 5
+    if np.any(five_or_more):
+        center = np.nanmedian(shot_images, axis=0)
+        mad = np.nanmedian(np.abs(shot_images - center[None, :, :]), axis=0)
+        sigma_scatter = 1.4826 * mad
+        sigma_median_empirical = 1.2533 * sigma_scatter / np.sqrt(n)
+        empirical[five_or_more] = sigma_median_empirical[five_or_more] ** 2
+
+    formal_available = np.isfinite(formal)
+    empirical_available = np.isfinite(empirical)
+    both = formal_available & empirical_available
+    variance = np.full((ny, nx), np.nan, dtype=np.float64)
+    variance[formal_available & ~empirical_available] = formal[formal_available & ~empirical_available]
+    variance[empirical_available & ~formal_available] = empirical[empirical_available & ~formal_available]
+    variance[both] = np.maximum(formal[both], empirical[both])
+    varianceimage = variance.astype(np.float32)
+
+    stats = {
+        'valid_sci_voxels': int(np.sum(valid_sci)),
+        'finite_variance_voxels': int(np.sum(valid_sci & np.isfinite(varianceimage))),
+        'shot_samples': int(np.sum(supported)),
+        'shot_samples_missing_variance': int(np.sum(supported & ~finite_variance)),
+        'both_variances': int(np.sum(both)),
+        'empirical_exceeds_formal': int(np.sum(both & (empirical > formal))),
+        'median_ncontrib': float(np.median(ncontrib[valid_sci])) if np.any(valid_sci) else np.nan,
+        'variance_unavailable_voxels': int(
+            np.sum(valid_sci & ~np.isfinite(varianceimage))),
+    }
+    ratio = np.full((ny, nx), np.nan, dtype=np.float64)
+    ratio[both] = np.sqrt(empirical[both] / formal[both])
+    stats['median_ratio'] = (float(np.median(ratio[np.isfinite(ratio)]))
+                             if np.any(np.isfinite(ratio)) else np.nan)
+    return varianceimage, stats
+
+
 def make_image_gaussian(Pos, y, ye, xg, yg, xgrid, ygrid, sigma,
                         cnt_array):
     """Construct one wavelength plane with true subpixel Gaussian splatting.
@@ -385,10 +461,10 @@ def make_image_gaussian(Pos, y, ye, xg, yg, xgrid, ygrid, sigma,
     The returned ``coverage`` is the mean per-shot Gaussian support strength,
     capped at one per shot; it is a diagnostic and never divides SCI.
 
-    ``errorimage`` is the median of the available per-shot interpolation
-    standard deviations calculated from the matched weighted variance formula.
-    It is not an exact propagated variance for the final shot median and must
-    be revisited before a public cube is finalized.
+    The returned ``varianceimage`` is the variance of the final SCI median:
+    formal shot variances are propagated through the median, and a robust
+    shot-to-shot scatter estimate is used when at least five shots contribute.
+    SCI and NCONTRIB are computed independently of this variance path.
     """
     nshots = len(cnt_array)
     ny, nx = xgrid.shape
@@ -403,7 +479,7 @@ def make_image_gaussian(Pos, y, ye, xg, yg, xgrid, ygrid, sigma,
     else:
         errors = ye
     shot_images = np.full((nshots, ny, nx), np.nan, dtype=np.float32)
-    shot_errors = np.full((nshots, ny, nx), np.nan, dtype=np.float32)
+    shot_variances = np.full((nshots, ny, nx), np.nan, dtype=np.float32)
     coverage = np.zeros((ny, nx), dtype=np.float32)
     ncontrib = np.zeros((ny, nx), dtype=np.uint8)
 
@@ -415,39 +491,44 @@ def make_image_gaussian(Pos, y, ye, xg, yg, xgrid, ygrid, sigma,
 
         flux_sum = np.zeros((ny, nx), dtype=np.float32)
         weight_sum = np.zeros((ny, nx), dtype=np.float32)
-        error_sum = np.zeros((ny, nx), dtype=np.float32)
-        error_support = np.zeros((ny, nx), dtype=np.float32)
+        variance_numerator = np.zeros((ny, nx), dtype=np.float32)
+        error_weight_sum = np.zeros((ny, nx), dtype=np.float32)
         support_map = np.zeros((ny, nx), dtype=np.uint8)
         _gaussian_splat_shot_xy(
             indices, xpos, ypos, y, errors, float(xg[0]), float(yg[0]),
             nx, ny, float(sigma), radius, support_radius, float(area),
-            flux_sum, weight_sum, error_sum, error_support, support_map)
+            flux_sum, weight_sum, variance_numerator, error_weight_sum,
+            support_map)
 
         supported = (support_map != 0) & (weight_sum > 0.0)
         if np.any(supported):
             shot_images[k, supported] = flux_sum[supported] / weight_sum[supported]
-            # Invalid errors do not invalidate SCI.  The error product is
-            # simply absent for pixels with no valid error-bearing fibers.
-            error_valid = supported & (error_support > 0.0)
-            shot_errors[k, error_valid] = np.sqrt(
-                error_sum[error_valid] /
-                (weight_sum[error_valid] * weight_sum[error_valid]))
+            # Formal variance is valid only when every SCI-contributing fiber
+            # has a finite positive error.  The science denominator remains
+            # the full science weight sum, never the error-support sum.
+            complete_error_support = supported & np.isclose(
+                error_weight_sum, weight_sum, rtol=1.e-5, atol=1.e-7)
+            shot_variances[k, complete_error_support] = (
+                variance_numerator[complete_error_support] /
+                (weight_sum[complete_error_support] *
+                 weight_sum[complete_error_support]))
             ncontrib[supported] += 1
             coverage += np.minimum(weight_sum, 1.0) * supported
 
     # The median ignores unsupported shots because those entries remain NaN.
     image = np.nanmedian(shot_images, axis=0).astype(np.float32)
-    errorimage = np.nanmedian(shot_errors, axis=0).astype(np.float32)
+    varianceimage, variance_stats = _compute_final_variance(
+        shot_images, shot_variances, ncontrib)
     coverage /= float(max(1, nshots))
     coverage = np.clip(coverage, 0.0, 1.0)
 
     final_valid = ncontrib >= 2
     image[~final_valid] = 0.0
-    errorimage[~final_valid] = 0.0
+    varianceimage[~final_valid] = 0.0
     image[~np.isfinite(image)] = 0.0
-    errorimage[~np.isfinite(errorimage)] = 0.0
+    # Keep NaN for a valid SCI pixel whose variance cannot be estimated.
 
-    return image, errorimage, coverage, ncontrib
+    return image, varianceimage, coverage, ncontrib, variance_stats
 
 def make_image(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
     image = xgrid * 0.
@@ -505,7 +586,7 @@ yg = np.arange(N) + 1
 xgrid, ygrid = np.meshgrid(xg, yg)
 
 cube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
-ecube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
+variancecube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 weightcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 ncontribcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='uint8')
 
@@ -804,11 +885,9 @@ def render_wavelength(i):
     Pos = np.column_stack((x, y))
     data = specarray[:, i]
     edata = errarray[:, i]
-    # Swap this one call back to make_image_interp for the historical/current
-    # reconstruction comparison.  The old function itself remains unchanged.
-    image, errorimage, weight, ncontrib = make_image_gaussian(
+    image, varianceimage, weight, ncontrib, variance_stats = make_image_gaussian(
         Pos, data, edata, xg, yg, xgrid, ygrid, 1.8 / 2.35, shot_indices)
-    return i, image, errorimage, weight, ncontrib
+    return i, image, varianceimage, weight, ncontrib, variance_stats
 
 
 def _warm_up_gaussian_splat():
@@ -819,29 +898,75 @@ def _warm_up_gaussian_splat():
     error = np.array([1.0], dtype=np.float32)
     flux_sum = np.zeros((3, 3), dtype=np.float32)
     weight_sum = np.zeros((3, 3), dtype=np.float32)
-    error_sum = np.zeros((3, 3), dtype=np.float32)
-    error_support = np.zeros((3, 3), dtype=np.float32)
+    variance_numerator = np.zeros((3, 3), dtype=np.float32)
+    error_weight_sum = np.zeros((3, 3), dtype=np.float32)
     support = np.zeros((3, 3), dtype=np.uint8)
     _gaussian_splat_shot_xy(
         indices, position, position, flux, error, 1.0, 1.0, 3, 3,
         1.8 / 2.35, 3, 2, np.pi * 0.75 ** 2, flux_sum, weight_sum,
-        error_sum, error_support, support)
+        variance_numerator, error_weight_sum, support)
 
 
 _warm_up_gaussian_splat()
 args.log.info('Gaussian test reconstruction enabled: SCI uses subpixel splats and NCONTRIB >= 2.')
-args.log.warning('Gaussian test errorimage is the median per-shot interpolation error, not an exact median-variance model.')
+args.log.warning(
+    'Gaussian reconstruction variance semantics: VAR is the final SCI-median '
+    'variance; ERROR is its 1-sigma companion (sqrt(VAR)). Formal shot '
+    'variances require complete positive fiber-error support, and empirical '
+    'shot scatter is used for NCONTRIB >= 5.')
 
 args.log.info('Using %d wavelength worker(s)' % args.wave_workers)
+variance_diagnostics = {
+    'valid_sci_voxels': 0,
+    'finite_variance_voxels': 0,
+    'shot_samples': 0,
+    'shot_samples_missing_variance': 0,
+    'both_variances': 0,
+    'empirical_exceeds_formal': 0,
+    'median_ratios': [],
+    'median_ncontrib_values': [],
+    'variance_unavailable_voxels': 0,
+}
 with ThreadPoolExecutor(max_workers=args.wave_workers) as executor:
     # executor.map preserves wavelength order in the returned results.  Each
     # worker only reads the shared input arrays; cube writes remain here.
-    for i, image, errorimage, weight, ncontrib in executor.map(
+    for i, image, varianceimage, weight, ncontrib, plane_stats in executor.map(
             render_wavelength, range(len(def_wave))):
         cube[i, :, :] = image
-        ecube[i, :, :] = errorimage
+        variancecube[i, :, :] = varianceimage
         weightcube[i, :, :] = weight
         ncontribcube[i, :, :] = ncontrib
+        for key in ('valid_sci_voxels', 'finite_variance_voxels',
+                    'shot_samples', 'shot_samples_missing_variance',
+                    'both_variances', 'empirical_exceeds_formal',
+                    'variance_unavailable_voxels'):
+            variance_diagnostics[key] += plane_stats[key]
+        if np.isfinite(plane_stats['median_ratio']):
+            variance_diagnostics['median_ratios'].append(plane_stats['median_ratio'])
+        if np.isfinite(plane_stats['median_ncontrib']):
+            variance_diagnostics['median_ncontrib_values'].append(
+                plane_stats['median_ncontrib'])
+
+_valid_sci = variance_diagnostics['valid_sci_voxels']
+_finite_var = variance_diagnostics['finite_variance_voxels']
+_shots = variance_diagnostics['shot_samples']
+_both = variance_diagnostics['both_variances']
+args.log.info(
+    'Variance diagnostics: finite final VAR fraction among valid SCI=%0.4f; '
+    'shot SCI samples lacking complete error support=%0.4f; '
+    'empirical variance > formal variance=%0.4f; '
+    'median sqrt(Var_empirical/Var_formal)=%s; '
+    'median NCONTRIB for valid SCI=%s; valid SCI voxels with VAR unavailable=%d',
+    (_finite_var / float(_valid_sci) if _valid_sci else np.nan),
+    (variance_diagnostics['shot_samples_missing_variance'] /
+     float(_shots) if _shots else np.nan),
+    (variance_diagnostics['empirical_exceeds_formal'] /
+     float(_both) if _both else np.nan),
+    (('%0.4f' % np.median(variance_diagnostics['median_ratios']))
+     if variance_diagnostics['median_ratios'] else 'nan'),
+    (('%0.2f' % np.median(variance_diagnostics['median_ncontrib_values']))
+     if variance_diagnostics['median_ncontrib_values'] else 'nan'),
+    variance_diagnostics['variance_unavailable_voxels'])
 
 name = op.basename('%s_cube.fits' % args.surname)
 scale = args.pixel_scale / 3600.
@@ -868,7 +993,7 @@ header['CUNIT3'] = 'Angstrom'
 header['SPECSYS'] = 'TOPOCENT'
 F = fits.PrimaryHDU(np.array(cube, 'float32'), header=header)
 F.writeto(name, overwrite=True)
-name = op.basename('%s_errorcube.fits' % args.surname)
+name = op.basename('%s_variance_cube.fits' % args.surname)
 header['CRPIX1'] = (N+1) / 2
 header['CRPIX2'] = (N+1) / 2
 # Ensure DS9 recognizes 3D WCS
@@ -884,7 +1009,25 @@ header['CUNIT1'] = 'deg'
 header['CUNIT2'] = 'deg'
 header['CUNIT3'] = 'Angstrom'
 header['SPECSYS'] = 'TOPOCENT'
-F = fits.PrimaryHDU(np.array(ecube, 'float32'), header=header)
+variance_header = header.copy()
+variance_header['BUNIT'] = 'SCI units squared'
+variance_header['EXTNAME'] = 'VARIANCE'
+variance_header.add_comment(
+    'VAR = variance of final SCI estimator; units are SCI units squared.')
+variance_header.add_comment(
+    'Formal and empirical estimates are combined by VAR = max(formal, empirical) when both exist.')
+F = fits.PrimaryHDU(np.array(variancecube, 'float32'), header=variance_header)
+F.writeto(name, overwrite=True)
+# Preserve the historical error-cube filename as a 1-sigma companion.  Its
+# meaning is now explicitly ERROR = sqrt(VAR), rather than a median of shot
+# interpolation errors.
+name = op.basename('%s_errorcube.fits' % args.surname)
+error_header = header.copy()
+error_header['BUNIT'] = 'SCI units'
+error_header['EXTNAME'] = 'ERROR'
+error_header.add_comment(
+    'ERROR = 1-sigma standard deviation = sqrt(VAR). See the variance cube.')
+F = fits.PrimaryHDU(np.sqrt(np.array(variancecube, 'float32')), header=error_header)
 F.writeto(name, overwrite=True)
 # Write weight cube as requested
 name = op.basename('%s_weight_cube.fits' % args.surname)
