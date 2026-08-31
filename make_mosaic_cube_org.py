@@ -1320,10 +1320,12 @@ def _run_lsf_measurement(h5files, surname, def_wave, raarray, decarray,
         # at three compact wavelengths; production values above came only from
         # the sparse evaluator.
         if line_number == 0:
-            validation_columns = np.unique(np.linspace(0, local.size - 1,
-                                                        min(3, local.size), dtype=int))
+            local_columns = np.where(local)[0]
+            validation_columns = np.unique(
+                np.linspace(0, len(local_columns) - 1,
+                            min(3, len(local_columns)), dtype=int))
             for local_column in validation_columns:
-                compact_column = np.where(local)[0][local_column]
+                compact_column = local_columns[local_column]
                 full_index = int(lsf_wave_indices[compact_column])
                 x, y = tp.wcs_world2pix(raarray[:, full_index],
                                         decarray[:, full_index], 1)
