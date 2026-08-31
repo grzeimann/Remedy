@@ -24,7 +24,7 @@ from input_utils import setup_logging
 from astrometry import Astrometry
 from math_utils import biweight
 from extract import Extract
-from scipy.interpolate import griddata
+from scipy.interpolate import griddata, PchipInterpolator
 import matplotlib.pyplot as plt
 
 
@@ -65,6 +65,28 @@ PROV_ERROR_NONFINITE = 2
 PROV_ERROR_ZERO = 3
 PROV_ERROR_NEGATIVE = 4
 PROV_ERROR_OTHER = 5
+
+# Empirical LSF/FWHM calibration anchors.  These are AIR wavelengths and are
+# intentionally kept separate from the science wavelength grid.  The local
+# project resources (Lines_list/virus_lines.dat and wave_utils.py) contain
+# these anchors but no additional nearby transitions, so no blend correction
+# is asserted here.
+REFERENCE_ARC_WAVELENGTHS = np.array([
+    3610.508,
+    3650.153,
+    4046.565,
+    4358.335,
+    4678.149,
+    4799.912,
+    4916.068,
+    5085.822,
+    5460.750,
+], dtype=float)
+ARC_WINDOW_ANGSTROM = 15.0
+ARC_BLEND_NOTES = {
+    float(w): 'none listed in local Hg/Cd project line resources'
+    for w in REFERENCE_ARC_WAVELENGTHS
+}
 
 
 def subtract_m101_residual_sky(spectra, ra, dec, xg, yg, tp,
@@ -242,6 +264,9 @@ parser.add_argument("--wave-workers",
                     help='''Number of threads used to build wavelength planes (default: 1)''',
                     default=1, type=int)
 
+parser.add_argument("--make-lsf", action="store_true",
+                    help='''Also propagate master-arc features sparsely and write empirical FWHM products''')
+
 def rebin(arr, new_shape):
     """Rebin 2D array arr to shape new_shape by averaging."""
     shape = (new_shape[0], arr.shape[0] // new_shape[0],
@@ -390,6 +415,75 @@ def _gaussian_splat_shot_xy(indices, xpos, ypos, fluxes, errors,
                 dy = (y_origin + py) - yi
                 if dx * dx + dy * dy <= support_radius_sq:
                     support_map[py, px] = 1
+
+
+@njit(nogil=True, cache=True)
+def _gaussian_splat_sparse_shot_xy(indices, xpos, ypos, fluxes,
+                                   sample_lookup, x_origin, y_origin,
+                                   nx, ny, sigma, radius, support_radius,
+                                   area, flux_sum, weight_sum, support_map):
+    """Splat one exposure, retaining only pixels named by ``sample_lookup``.
+
+    The arithmetic and loop order intentionally mirror
+    ``_gaussian_splat_shot_xy``.  The lookup only removes additions for output
+    pixels that are not among the selected amplifier-center samples.
+    """
+    sigma_sq = sigma * sigma
+    support_radius_sq = (2.0 * sigma) * (2.0 * sigma)
+    width = 2 * radius + 1
+    gx = np.empty(width, dtype=np.float32)
+    gy = np.empty(width, dtype=np.float32)
+
+    for p in range(indices.shape[0]):
+        j = indices[p]
+        flux = fluxes[j]
+        xi = xpos[j]
+        yi = ypos[j]
+        if not np.isfinite(flux) or not np.isfinite(xi) or not np.isfinite(yi):
+            continue
+
+        ix_center = int(np.floor(xi - x_origin))
+        iy_center = int(np.floor(yi - y_origin))
+
+        for ox in range(-radius, radius + 1):
+            dx = (x_origin + ix_center + ox) - xi
+            gx[ox + radius] = np.exp(-0.5 * dx * dx / sigma_sq)
+        for oy in range(-radius, radius + 1):
+            dy = (y_origin + iy_center + oy) - yi
+            gy[oy + radius] = np.exp(-0.5 * dy * dy / sigma_sq)
+
+        for ox in range(-radius, radius + 1):
+            px = ix_center + ox
+            if px < 0 or px >= nx:
+                continue
+            for oy in range(-radius, radius + 1):
+                py = iy_center + oy
+                if py < 0 or py >= ny:
+                    continue
+                sample_id = sample_lookup[py, px]
+                if sample_id < 0:
+                    continue
+                weight = gx[ox + radius] * gy[oy + radius]
+                flux_sum[sample_id] += weight * flux / area
+                weight_sum[sample_id] += weight
+
+        # Independent-shot support uses the same distance criterion as the
+        # full image kernel, but only for selected output pixels.
+        for ox in range(-support_radius, support_radius + 1):
+            px = ix_center + ox
+            if px < 0 or px >= nx:
+                continue
+            dx = (x_origin + px) - xi
+            for oy in range(-support_radius, support_radius + 1):
+                py = iy_center + oy
+                if py < 0 or py >= ny:
+                    continue
+                sample_id = sample_lookup[py, px]
+                if sample_id < 0:
+                    continue
+                dy = (y_origin + py) - yi
+                if dx * dx + dy * dy <= support_radius_sq:
+                    support_map[sample_id] = 1
 
 
 def _classify_error_provenance(science, errors):
@@ -626,6 +720,654 @@ def make_image(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
     weight[:] *= np.pi * 0.75**2
     return image, np.sqrt(error), weight
 
+
+def _h5_text(value):
+    """Return a stable human-readable value for PyTables string columns."""
+    if isinstance(value, (bytes, np.bytes_)):
+        return value.decode('utf-8', errors='replace').strip()
+    return str(value).strip()
+
+
+def _exp_text(value):
+    """Normalize numeric/string exposure labels for the QA comparison."""
+    if isinstance(value, (bytes, np.bytes_)):
+        value = value.decode('utf-8', errors='replace')
+    try:
+        return '%g' % float(value)
+    except (TypeError, ValueError):
+        return str(value).strip()
+
+
+def _verify_lsf_exposure_partition(info_exp, n_fibers, h5file, log=None):
+    """QA-check, without changing, the science 112-row exposure grouping."""
+    labels = [_exp_text(v) for v in np.asarray(info_exp)]
+    blocks = []
+    for block_start in range(0, n_fibers, 112):
+        block = labels[block_start:block_start + 112]
+        blocks.append(sorted(set(block)))
+
+    observed = [values[0] if len(values) == 1 else 'MIXED'
+                for values in blocks]
+    agree = (n_fibers % 112 == 0 and
+             all(len(values) == 1 for values in blocks) and
+             all(value == str(k % 3) for k, value in enumerate(observed)))
+    agree_one_based = (n_fibers % 112 == 0 and
+                       all(len(values) == 1 for values in blocks) and
+                       all(value == str((k % 3) + 1)
+                           for k, value in enumerate(observed)))
+    agree = agree or agree_one_based
+    if log is not None:
+        if agree:
+            log.info('LSF QA %s: Info.exp agrees with the existing 112-fiber '
+                     'three-exposure partition (%s-based labels).',
+                     op.basename(h5file), 'one' if agree_one_based else 'zero')
+        else:
+            log.warning('LSF QA %s: Info.exp does NOT agree with the existing '
+                        '112-fiber exposure partition; observed block labels=%s. '
+                        'Science grouping is unchanged.',
+                        op.basename(h5file), observed[:12])
+    return agree
+
+
+def _build_lsf_amplifier_centers(h5file, h5table, log=None):
+    """Build one median RA/Dec center per shot x IFUSLOT x amplifier."""
+    if 'Raw' not in h5table.root._v_children:
+        raise ValueError('LSF requested for %s, but the H5 file has no Raw '
+                         'table containing arcspectrum/wave.' % h5file)
+    info = h5table.root.Info.cols
+    ra = np.asarray(info.ra[:], dtype=float)
+    dec = np.asarray(info.dec[:], dtype=float)
+    ifuslot = np.asarray(info.ifuslot[:])
+    amp = np.asarray([_h5_text(v) for v in info.amp[:]])
+    specid = np.asarray([_h5_text(v) for v in info.specid[:]])
+    ifuid = np.asarray([_h5_text(v) for v in info.ifuid[:]])
+
+    n_info = len(ra)
+    n_fiber = int(h5table.root.Fibers.nrows)
+    n_raw = int(h5table.root.Raw.nrows)
+    if not (n_info == n_fiber == n_raw):
+        raise ValueError('LSF row alignment failure for %s: Info=%d Fibers=%d Raw=%d'
+                         % (h5file, n_info, n_fiber, n_raw))
+    _verify_lsf_exposure_partition(info.exp[:], n_info, h5file, log=log)
+
+    records = []
+    keys = sorted(set(zip(ifuslot.tolist(), amp.tolist())),
+                  key=lambda item: (int(item[0]), item[1]))
+    for slot, amplifier in keys:
+        selected = (ifuslot == slot) & (amp == amplifier)
+        ra_values = ra[selected]
+        dec_values = dec[selected]
+        if not np.any(np.isfinite(ra_values) & np.isfinite(dec_values)):
+            continue
+        spec_values = sorted(set(specid[selected].tolist()))
+        ifu_values = sorted(set(ifuid[selected].tolist()))
+        identity_ok = len(spec_values) == 1 and len(ifu_values) == 1
+        if not identity_ok and log is not None:
+            log.warning('LSF QA %s IFUSLOT=%s AMP=%s has inconsistent '
+                        'SPECID/IFUID values: %s/%s', op.basename(h5file),
+                        slot, amplifier, spec_values, ifu_values)
+        records.append({
+            'shot': op.basename(h5file),
+            'specid': spec_values[0] if spec_values else '',
+            'ifuslot': int(slot),
+            'ifuid': ifu_values[0] if ifu_values else '',
+            'amp': amplifier,
+            'ra': float(np.nanmedian(ra_values)),
+            'dec': float(np.nanmedian(dec_values)),
+            'identity_ok': bool(identity_ok),
+        })
+    return records
+
+
+def _map_lsf_centers_to_spaxels(records, tp, xg, yg):
+    """Map 1-based WCS coordinates to nearest zero-based output pixels."""
+    sample_lookup = np.full((len(yg), len(xg)), -1, dtype=np.int32)
+    unique_positions = []
+    position_ids = {}
+    for record in records:
+        xw, yw = tp.wcs_world2pix(record['ra'], record['dec'], 1)
+        valid = np.isfinite(xw) and np.isfinite(yw)
+        if valid:
+            # WCS returns one-based pixel coordinates.  Round in that
+            # coordinate system, then explicitly convert to zero-based array
+            # indices used by sample_lookup and NumPy images.
+            x_one = int(np.rint(xw))
+            y_one = int(np.rint(yw))
+            x_index = x_one - 1
+            y_index = y_one - 1
+            valid = (0 <= x_index < len(xg)) and (0 <= y_index < len(yg))
+        if not valid:
+            record['cube_x'] = -1
+            record['cube_y'] = -1
+            record['sample_id'] = -1
+            continue
+        key = (y_index, x_index)
+        if key not in position_ids:
+            position_ids[key] = len(unique_positions)
+            unique_positions.append(key)
+            sample_lookup[key] = position_ids[key]
+        record['cube_x'] = x_one
+        record['cube_y'] = y_one
+        record['sample_id'] = position_ids[key]
+    return sample_lookup, unique_positions
+
+
+def _sparse_reconstruct_one_wave(Pos, values, xg, yg, sample_lookup,
+                                 shot_indices, sigma=1.8 / 2.35):
+    """Return SCI-like sparse exposure median and NCONTRIB for one wavelength."""
+    n_samples = int(sample_lookup.max()) + 1 if np.any(sample_lookup >= 0) else 0
+    nshots = len(shot_indices)
+    shot_values = np.full((nshots, n_samples), np.nan, dtype=np.float32)
+    ncontrib = np.zeros(n_samples, dtype=np.uint8)
+    area = np.pi * 0.75 ** 2
+    for k, cnt in enumerate(shot_indices):
+        if isinstance(cnt, (tuple, list)) and len(cnt) == 2:
+            indices = np.arange(int(cnt[0]), int(cnt[1]), dtype=np.int64)
+        else:
+            indices = np.asarray(cnt, dtype=np.int64)
+        flux_sum = np.zeros(n_samples, dtype=np.float32)
+        weight_sum = np.zeros(n_samples, dtype=np.float32)
+        support_map = np.zeros(n_samples, dtype=np.uint8)
+        _gaussian_splat_sparse_shot_xy(
+            indices, Pos[:, 0], Pos[:, 1], values, sample_lookup,
+            float(xg[0]), float(yg[0]), len(xg), len(yg), float(sigma),
+            3, int(np.ceil(2.0 * sigma)), float(area), flux_sum, weight_sum,
+            support_map)
+        supported = (support_map != 0) & (weight_sum > 0.0)
+        if np.any(supported):
+            shot_values[k, supported] = flux_sum[supported] / weight_sum[supported]
+            ncontrib[supported] += 1
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        result = np.nanmedian(shot_values, axis=0).astype(np.float32)
+    # Match make_image_gaussian's SCI representation exactly: unsupported
+    # pixels are zero in the returned SCI plane.  The production arc profile
+    # wrapper masks these entries to NaN before FWHM measurement.
+    result[ncontrib < 2] = 0.0
+    return result, ncontrib
+
+
+def _sparse_reconstruct_arc(raarray, decarray, arc_rect, full_indices,
+                            sample_lookup, xg, yg, tp, shot_indices):
+    """Propagate compact normalized arc spectra through selected spaxels."""
+    n_samples = int(sample_lookup.max()) + 1 if np.any(sample_lookup >= 0) else 0
+    propagated = np.full((n_samples, len(full_indices)), np.nan, dtype=np.float32)
+    sample_ncontrib = np.zeros((n_samples, len(full_indices)), dtype=np.uint8)
+    for j, full_index in enumerate(full_indices):
+        x, y = tp.wcs_world2pix(raarray[:, full_index],
+                                decarray[:, full_index], 1)
+        values, ncontrib = _sparse_reconstruct_one_wave(
+            np.column_stack((x, y)), arc_rect[:, j], xg, yg, sample_lookup,
+            shot_indices)
+        values[ncontrib < 2] = np.nan
+        propagated[:, j] = values
+        sample_ncontrib[:, j] = ncontrib
+    return propagated, sample_ncontrib
+
+
+def _rectify_lsf_arcs(h5files, def_wave, lsf_def_wave,
+                      lsf_wave_indices, specarray, log=None):
+    """Rectify only requested arc bins and apply final SCI fiber availability."""
+    arc_rect = np.full((specarray.shape[0], len(lsf_def_wave)), np.nan,
+                       dtype=np.float32)
+    offset = 0
+    for h5file in h5files:
+        t = tables.open_file(h5file)
+        n_info = int(t.root.Info.nrows)
+        n_raw = int(t.root.Raw.nrows)
+        if n_info != n_raw:
+            t.close()
+            raise ValueError('LSF row alignment failure for %s: Info=%d Raw=%d'
+                             % (h5file, n_info, n_raw))
+        native_arc = t.root.Raw.cols.arcspectrum[:]
+        native_wave = t.root.Raw.cols.wave[:]
+        if native_arc.shape[0] != n_info or native_wave.shape[0] != n_info:
+            t.close()
+            raise ValueError('LSF Raw array row alignment failure for %s' % h5file)
+        for row in range(n_info):
+            compact = np.interp(lsf_def_wave, native_wave[row], native_arc[row],
+                                left=np.nan, right=np.nan)
+            if row == 0:
+                full = np.interp(def_wave, native_wave[row], native_arc[row],
+                                 left=np.nan, right=np.nan)
+                np.testing.assert_array_equal(compact, full[lsf_wave_indices])
+                if log is not None:
+                    log.info('LSF rectification validation %s: exact np.interp '
+                             'compact/full-bin agreement for representative fiber.',
+                             op.basename(h5file))
+            arc_rect[offset + row] = compact.astype(np.float32)
+        offset += n_info
+        t.close()
+    if offset != specarray.shape[0]:
+        raise ValueError('LSF row alignment failure across files: Raw=%d SCI=%d'
+                         % (offset, specarray.shape[0]))
+    for j, full_index in enumerate(lsf_wave_indices):
+        arc_rect[~np.isfinite(specarray[:, full_index]), j] = np.nan
+    return arc_rect
+
+
+def _normalize_lsf_arc_window(arc_rect, lsf_def_wave, reference):
+    """Subtract outer-window backgrounds and normalize each fiber's line flux."""
+    window = np.abs(lsf_def_wave - reference) <= ARC_WINDOW_ANGSTROM
+    left = window & (lsf_def_wave <= reference - 10.0)
+    right = window & (lsf_def_wave >= reference + 10.0)
+    local = np.where(window)[0]
+    normalized = np.full_like(arc_rect, np.nan, dtype=np.float32)
+    if local.size == 0:
+        return normalized, np.zeros(arc_rect.shape[0], dtype=bool), np.full(arc_rect.shape[0], np.nan)
+    left_bg = np.nanmedian(arc_rect[:, left], axis=1) if np.any(left) else np.full(arc_rect.shape[0], np.nan)
+    right_bg = np.nanmedian(arc_rect[:, right], axis=1) if np.any(right) else np.full(arc_rect.shape[0], np.nan)
+    background = np.nanmedian(np.column_stack((left_bg, right_bg)), axis=1)
+    line = arc_rect[:, local].astype(float) - background[:, None]
+    signal = np.nansum(line, axis=1) * 2.0
+    valid = (np.isfinite(left_bg) & np.isfinite(right_bg) &
+             np.isfinite(background) & np.isfinite(signal) & (signal > 0.0))
+    for row in np.where(valid)[0]:
+        normalized[row, local] = ((arc_rect[row, local].astype(float) - background[row]) /
+                                  signal[row]).astype(np.float32)
+    return normalized, valid, signal
+
+
+def _measure_direct_fwhm(wave, profile, reference):
+    """Measure FWHM by PCHIP interpolation and half-height crossings only."""
+    wave = np.asarray(wave, dtype=float)
+    profile = np.asarray(profile, dtype=float)
+    finite = np.isfinite(wave) & np.isfinite(profile)
+    if np.count_nonzero(finite) < 5:
+        return {'valid': False, 'status': 'TOO_FEW_SAMPLES', 'center': np.nan,
+                'fwhm': np.nan, 'phase': np.nan}
+    x = wave[finite]
+    y = profile[finite]
+    order = np.argsort(x)
+    x, y = x[order], y[order]
+    left_background = np.nanmedian(y[x <= reference - 10.])
+    right_background = np.nanmedian(y[x >= reference + 10.])
+    if not np.isfinite(left_background) or not np.isfinite(right_background):
+        return {'valid': False, 'status': 'NO_BACKGROUND', 'center': np.nan,
+                'fwhm': np.nan, 'phase': np.nan}
+    background = float(np.nanmedian([left_background, right_background]))
+    y = y - background
+    search = (x >= reference - 5.0) & (x <= reference + 5.0)
+    if np.count_nonzero(search) < 2:
+        return {'valid': False, 'status': 'NO_PEAK_NEAR_LINE', 'center': np.nan,
+                'fwhm': np.nan, 'phase': np.nan}
+    try:
+        interpolator = PchipInterpolator(x, y, extrapolate=False)
+    except (ValueError, TypeError):
+        return {'valid': False, 'status': 'INTERPOLATION_FAILED', 'center': np.nan,
+                'fwhm': np.nan, 'phase': np.nan}
+    dense = np.linspace(x[0], x[-1], max(401, int(np.ceil((x[-1] - x[0]) * 100)) + 1))
+    dense_y = np.asarray(interpolator(dense), dtype=float)
+    search_dense = (dense >= reference - 5.0) & (dense <= reference + 5.0)
+    if not np.any(search_dense) or not np.any(np.isfinite(dense_y[search_dense])):
+        return {'valid': False, 'status': 'NO_PEAK_NEAR_LINE', 'center': np.nan,
+                'fwhm': np.nan, 'phase': np.nan}
+    peak_candidates = np.where(
+        search_dense & np.isfinite(dense_y) &
+        (dense_y >= np.roll(dense_y, 1)) &
+        (dense_y >= np.roll(dense_y, -1)))[0]
+    peak_candidates = peak_candidates[(peak_candidates > 0) &
+                                      (peak_candidates < len(dense) - 1)]
+    if peak_candidates.size == 0:
+        peak_index = int(np.nanargmax(np.where(search_dense, dense_y, np.nan)))
+    else:
+        peak_index = int(peak_candidates[np.nanargmax(dense_y[peak_candidates])])
+    peak_height = float(dense_y[peak_index])
+    if not np.isfinite(peak_height) or peak_height <= 0.0:
+        return {'valid': False, 'status': 'NONPOSITIVE_LINE', 'center': np.nan,
+                'fwhm': np.nan, 'phase': np.nan}
+    strong = peak_candidates[dense_y[peak_candidates] >= 0.80 * peak_height]
+    if strong.size > 1:
+        separated = [idx for idx in strong if abs(dense[idx] - dense[peak_index]) >= 1.0]
+        if separated:
+            return {'valid': False, 'status': 'AMBIGUOUS_BLEND', 'center': np.nan,
+                    'fwhm': np.nan, 'phase': np.nan}
+    half = 0.5 * peak_height
+
+    def crossing(direction):
+        if direction < 0:
+            indices = range(peak_index - 1, -1, -1)
+        else:
+            indices = range(peak_index, len(dense) - 1)
+        for idx in indices:
+            j = idx + 1 if direction > 0 else idx
+            k = idx if direction > 0 else idx + 1
+            y0, y1 = dense_y[j] - half, dense_y[k] - half
+            if np.isfinite(y0) and np.isfinite(y1) and y0 * y1 <= 0.0:
+                lo, hi = min(dense[j], dense[k]), max(dense[j], dense[k])
+                flo, fhi = float(interpolator(lo) - half), float(interpolator(hi) - half)
+                for _ in range(45):
+                    mid = 0.5 * (lo + hi)
+                    fmid = float(interpolator(mid) - half)
+                    if flo * fmid <= 0.0:
+                        hi, fhi = mid, fmid
+                    else:
+                        lo, flo = mid, fmid
+                return 0.5 * (lo + hi)
+        return None
+
+    left_cross = crossing(-1)
+    right_cross = crossing(1)
+    if left_cross is None:
+        return {'valid': False, 'status': 'NO_LEFT_CROSSING', 'center': np.nan,
+                'fwhm': np.nan, 'phase': np.nan}
+    if right_cross is None:
+        return {'valid': False, 'status': 'NO_RIGHT_CROSSING', 'center': np.nan,
+                'fwhm': np.nan, 'phase': np.nan}
+    if left_cross <= x[0] + 1.e-6 or right_cross >= x[-1] - 1.e-6:
+        return {'valid': False, 'status': 'CROSSING_AT_BOUNDARY', 'center': np.nan,
+                'fwhm': np.nan, 'phase': np.nan}
+    center = float(dense[peak_index])
+    nearest_grid = 3470. + 2. * np.rint((center - 3470.) / 2.)
+    phase = float(center - nearest_grid)
+    return {'valid': True, 'status': 'OK', 'center': center,
+            'fwhm': float(right_cross - left_cross), 'phase': phase}
+
+
+def _lsf_spatial_header(tp, n, pixel_scale):
+    """Construct the final cube's two-dimensional spatial WCS."""
+    spatial = tp.to_header()
+    scale = pixel_scale / 3600.
+    spatial['WCSAXES'] = 2
+    spatial['CD1_1'] = -scale
+    spatial['CD1_2'] = 0.0
+    spatial['CD2_1'] = 0.0
+    spatial['CD2_2'] = scale
+    for key in ('CDELT1', 'CDELT2', 'CDELT3', 'CRPIX3', 'CRVAL3',
+                'CTYPE3', 'CUNIT3', 'SPECSYS'):
+        if key in spatial:
+            del spatial[key]
+    spatial['CRPIX1'] = (n + 1) / 2.
+    spatial['CRPIX2'] = (n + 1) / 2.
+    spatial['CTYPE1'] = 'RA---TAN'
+    spatial['CTYPE2'] = 'DEC--TAN'
+    spatial['CUNIT1'] = 'deg'
+    spatial['CUNIT2'] = 'deg'
+    return spatial
+
+
+def _phase_summary(phases, fwhm):
+    """Return a transparent binned phase diagnostic, not a correction."""
+    finite = np.isfinite(phases) & np.isfinite(fwhm)
+    if np.count_nonzero(finite) < 10:
+        return np.nan, np.nan, False
+    x = phases[finite]
+    y = fwhm[finite]
+    edges = np.linspace(-1., 1., 9)
+    medians = []
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        selected = (x >= lo) & (x < hi if hi < edges[-1] else x <= hi)
+        if np.count_nonzero(selected) >= 3:
+            medians.append(float(np.nanmedian(y[selected])))
+    phase_range = (float(np.nanmax(medians) - np.nanmin(medians))
+                   if len(medians) >= 2 else np.nan)
+    correlation = (float(np.corrcoef(x, y)[0, 1])
+                   if np.std(x) > 0. and np.std(y) > 0. else np.nan)
+    median = float(np.nanmedian(y))
+    evidence = bool(np.isfinite(phase_range) and np.isfinite(median) and
+                    median != 0. and phase_range > 0.03 * abs(median))
+    return phase_range, correlation, evidence
+
+
+def _run_lsf_measurement(h5files, surname, def_wave, raarray, decarray,
+                         specarray, shot_indices, shot_names, tp, xg, yg,
+                         xgrid, ygrid, cube, ncontribcube, pixel_scale, log,
+                         records=None):
+    """Run the optional sparse empirical effective-resolution experiment."""
+    if records is None:
+        records = []
+        for h5file in h5files:
+            t = tables.open_file(h5file)
+            records.extend(_build_lsf_amplifier_centers(h5file, t, log=log))
+            t.close()
+    sample_lookup, unique_positions = _map_lsf_centers_to_spaxels(records, tp, xg, yg)
+    log.info('LSF amplifier-center sampling: %d centers, %d unique in-cube spaxels.',
+             len(records), len(unique_positions))
+    if not unique_positions:
+        raise RuntimeError('LSF requested but no amplifier centers map into the cube.')
+
+    line_masks = [np.abs(def_wave - reference) <= ARC_WINDOW_ANGSTROM
+                  for reference in REFERENCE_ARC_WAVELENGTHS]
+    lsf_wave_indices = np.unique(np.concatenate(
+        [np.where(mask)[0] for mask in line_masks])).astype(np.int64)
+    lsf_def_wave = def_wave[lsf_wave_indices]
+    log.info('LSF compact spectral grid: %d of %d science bins.',
+             len(lsf_def_wave), len(def_wave))
+    arc_rect = _rectify_lsf_arcs(
+        h5files, def_wave, lsf_def_wave, lsf_wave_indices, specarray, log=log)
+
+    normalized_by_line = []
+    for line_number, reference in enumerate(REFERENCE_ARC_WAVELENGTHS):
+        normalized, profile_valid, signal = _normalize_lsf_arc_window(
+            arc_rect, lsf_def_wave, reference)
+        normalized_by_line.append(normalized)
+        if line_number in (0, len(REFERENCE_ARC_WAVELENGTHS) // 2,
+                           len(REFERENCE_ARC_WAVELENGTHS) - 1):
+            finite_signal = signal[np.isfinite(signal) & (signal > 0.)]
+            if finite_signal.size:
+                p16, p50, p84 = np.nanpercentile(finite_signal, [16, 50, 84])
+                log.info('LSF native arc amplitude %0.3f A: positive integrated '
+                         'line signal N=%d p16/p50/p84=%0.5g/%0.5g/%0.5g '
+                         'before unit-flux normalization.', reference,
+                         finite_signal.size, p16, p50, p84)
+            else:
+                log.warning('LSF native arc amplitude %0.3f A: no positive '
+                            'integrated line signals before normalization.', reference)
+    log.info('LSF arc normalization: local outer-window background subtraction '
+             'and unit integrated line flux; no assumption of pre-normalized '
+             'Raw.arcspectrum was made.')
+
+    fwhm_by_line = []
+    center_by_line = []
+    phase_by_line = []
+    status_by_line = []
+    ncontrib_by_line = []
+    summary = []
+    for line_number, reference in enumerate(REFERENCE_ARC_WAVELENGTHS):
+        local = np.abs(lsf_def_wave - reference) <= ARC_WINDOW_ANGSTROM
+        local_wave = lsf_def_wave[local]
+        propagated, sample_ncontrib = _sparse_reconstruct_arc(
+            raarray, decarray, normalized_by_line[line_number],
+            lsf_wave_indices, sample_lookup, xg, yg, tp, shot_indices)
+        fwhm = np.full(len(unique_positions), np.nan, dtype=float)
+        center = np.full(len(unique_positions), np.nan, dtype=float)
+        phase = np.full(len(unique_positions), np.nan, dtype=float)
+        status = np.full(len(unique_positions), 'NO_PROFILE', dtype='U32')
+        nnear = np.full(len(unique_positions), -1, dtype=np.int16)
+        profile_valid = np.zeros(len(unique_positions), dtype=bool)
+        for sample_id in range(len(unique_positions)):
+            profile = propagated[sample_id, local]
+            support = sample_ncontrib[sample_id, local]
+            nfinite = np.isfinite(profile)
+            if np.any(nfinite):
+                nnear[sample_id] = int(np.nanmedian(support[nfinite]))
+            if np.count_nonzero(nfinite) >= 5 and np.all(support[nfinite] >= 2):
+                profile_valid[sample_id] = True
+                result = _measure_direct_fwhm(local_wave, profile, reference)
+            else:
+                result = {'valid': False, 'status': 'INSUFFICIENT_SUPPORT',
+                          'center': np.nan, 'fwhm': np.nan, 'phase': np.nan}
+            status[sample_id] = result['status']
+            if result['valid']:
+                fwhm[sample_id] = result['fwhm']
+                center[sample_id] = result['center']
+                phase[sample_id] = result['phase']
+
+        fwhm_by_line.append(fwhm)
+        center_by_line.append(center)
+        phase_by_line.append(phase)
+        status_by_line.append(status)
+        ncontrib_by_line.append(nnear)
+        valid = np.isfinite(fwhm)
+        phase_range, phase_corr, phase_evidence = _phase_summary(phase, fwhm)
+        values = fwhm[valid]
+        centers = center[valid]
+        if values.size:
+            p16, p50, p84 = np.nanpercentile(values, [16, 50, 84])
+            scatter = 1.4826 * np.nanmedian(np.abs(values - p50))
+            center_offset = centers - reference
+            log.info('LSF %0.3f A: centers=%d, propagated profiles=%d/%d '
+                     '(%0.4f), valid FWHM=%d/%d (%0.4f), '
+                     'FWHM p16/p50/p84=%0.4f/%0.4f/%0.4f, '
+                     'robust spatial scatter=%0.4f, center offset median/range='
+                     '%0.4f/%0.4f A, phase-bin range=%s A, phase r=%s, '
+                     'phase evidence=%s, laboratory blend=%s', reference,
+                     len(records), int(np.count_nonzero(profile_valid)),
+                     len(unique_positions),
+                     np.count_nonzero(profile_valid) / float(max(1, len(unique_positions))),
+                     values.size, len(unique_positions),
+                     values.size / float(max(1, len(unique_positions))),
+                     p16, p50, p84, scatter, np.nanmedian(center_offset),
+                     np.nanmax(center_offset) - np.nanmin(center_offset),
+                     ('%0.4f' % phase_range if np.isfinite(phase_range) else 'nan'),
+                     ('%0.4f' % phase_corr if np.isfinite(phase_corr) else 'nan'),
+                     phase_evidence, ARC_BLEND_NOTES[float(reference)])
+            summary.append((reference, p16, p50, p84, scatter, phase_range,
+                            phase_corr, phase_evidence))
+        else:
+            log.warning('LSF %0.3f A: no valid direct FWHM measurements; '
+                        'laboratory blend=%s', reference, ARC_BLEND_NOTES[float(reference)])
+            summary.append((reference, np.nan, np.nan, np.nan, np.nan,
+                            np.nan, np.nan, False))
+
+        # The validation deliberately exercises the full image estimator only
+        # at three compact wavelengths; production values above came only from
+        # the sparse evaluator.
+        if line_number == 0:
+            validation_columns = np.unique(np.linspace(0, local.size - 1,
+                                                        min(3, local.size), dtype=int))
+            for local_column in validation_columns:
+                compact_column = np.where(local)[0][local_column]
+                full_index = int(lsf_wave_indices[compact_column])
+                x, y = tp.wcs_world2pix(raarray[:, full_index],
+                                        decarray[:, full_index], 1)
+                full = make_image_gaussian(
+                    np.column_stack((x, y)), normalized_by_line[line_number][:, compact_column],
+                    None, xg, yg, xgrid, ygrid, 1.8 / 2.35, shot_indices)
+                sparse, sparse_n = _sparse_reconstruct_one_wave(
+                    np.column_stack((x, y)), normalized_by_line[line_number][:, compact_column],
+                    xg, yg, sample_lookup, shot_indices)
+                for sample_id, (py, px) in enumerate(unique_positions):
+                    np.testing.assert_allclose(sparse[sample_id], full[0][py, px],
+                                               rtol=2.e-6, atol=2.e-6)
+                    assert int(sparse_n[sample_id]) == int(full[3][py, px])
+            log.info('LSF sparse/full validation: SCI and NCONTRIB agree at '
+                     'representative wavelengths and all selected sample spaxels.')
+
+    # Build the requested one-row-per-amplifier-center x reference-line table.
+    nrows = len(records) * len(REFERENCE_ARC_WAVELENGTHS)
+    table = Table()
+    table['shot'] = np.array([r['shot'] for r in records for _ in REFERENCE_ARC_WAVELENGTHS], dtype='U80')
+    table['specid'] = np.array([r['specid'] for r in records for _ in REFERENCE_ARC_WAVELENGTHS], dtype='U16')
+    table['ifuslot'] = np.array([r['ifuslot'] for r in records for _ in REFERENCE_ARC_WAVELENGTHS], dtype=np.int32)
+    table['ifuid'] = np.array([r['ifuid'] for r in records for _ in REFERENCE_ARC_WAVELENGTHS], dtype='U16')
+    table['amp'] = np.array([r['amp'] for r in records for _ in REFERENCE_ARC_WAVELENGTHS], dtype='U8')
+    table['identity_ok'] = np.array([r['identity_ok'] for r in records for _ in REFERENCE_ARC_WAVELENGTHS], dtype=bool)
+    table['ra'] = np.array([r['ra'] for r in records for _ in REFERENCE_ARC_WAVELENGTHS], dtype=float)
+    table['dec'] = np.array([r['dec'] for r in records for _ in REFERENCE_ARC_WAVELENGTHS], dtype=float)
+    table['cube_x'] = np.array([r['cube_x'] for r in records for _ in REFERENCE_ARC_WAVELENGTHS], dtype=np.int32)
+    table['cube_y'] = np.array([r['cube_y'] for r in records for _ in REFERENCE_ARC_WAVELENGTHS], dtype=np.int32)
+    table['sample_id'] = np.array([r['sample_id'] for r in records for _ in REFERENCE_ARC_WAVELENGTHS], dtype=np.int32)
+    table['reference_wavelength'] = np.tile(REFERENCE_ARC_WAVELENGTHS, len(records))
+    table['measured_center'] = np.array([center_by_line[j][r['sample_id']] if r['sample_id'] >= 0 else np.nan
+                                         for r in records for j in range(len(REFERENCE_ARC_WAVELENGTHS))], dtype=float)
+    table['fwhm'] = np.array([fwhm_by_line[j][r['sample_id']] if r['sample_id'] >= 0 else np.nan
+                              for r in records for j in range(len(REFERENCE_ARC_WAVELENGTHS))], dtype=float)
+    table['grid_phase'] = np.array([phase_by_line[j][r['sample_id']] if r['sample_id'] >= 0 else np.nan
+                                    for r in records for j in range(len(REFERENCE_ARC_WAVELENGTHS))], dtype=float)
+    table['ncontrib'] = np.array([ncontrib_by_line[j][r['sample_id']] if r['sample_id'] >= 0 else -1
+                                  for r in records for j in range(len(REFERENCE_ARC_WAVELENGTHS))], dtype=np.int16)
+    table['valid'] = np.array([bool(r['sample_id'] >= 0 and np.isfinite(fwhm_by_line[j][r['sample_id']]))
+                               for r in records for j in range(len(REFERENCE_ARC_WAVELENGTHS))], dtype=bool)
+    table['status'] = np.array([status_by_line[j][r['sample_id']] if r['sample_id'] >= 0 else 'OUTSIDE_CUBE'
+                                for r in records for j in range(len(REFERENCE_ARC_WAVELENGTHS))], dtype='U32')
+    table['lab_blend'] = np.zeros(nrows, dtype=bool)
+    table['blend_note'] = np.array([ARC_BLEND_NOTES[float(REFERENCE_ARC_WAVELENGTHS[j])]
+                                    for _ in records for j in range(len(REFERENCE_ARC_WAVELENGTHS))], dtype='U64')
+    sample_path = op.basename('%s_lsf_samples.fits' % surname)
+    table.write(sample_path, format='fits', overwrite=True)
+
+    spatial_header = _lsf_spatial_header(tp, len(xg), pixel_scale)
+    for line_number, reference in enumerate(REFERENCE_ARC_WAVELENGTHS):
+        valid = np.isfinite(fwhm_by_line[line_number])
+        image = np.full(xgrid.shape, np.nan, dtype=np.float32)
+        if np.any(valid):
+            points = np.array([(unique_positions[sid][1], unique_positions[sid][0])
+                               for sid in np.where(valid)[0]], dtype=float)
+            values = fwhm_by_line[line_number][valid]
+            image[:, :] = griddata(points, values, (xgrid - 1., ygrid - 1.),
+                                   method='nearest').astype(np.float32)
+        science_index = int(np.argmin(np.abs(def_wave - reference)))
+        image[ncontribcube[science_index] < 2] = np.nan
+        header = spatial_header.copy()
+        header['REFWAVE'] = (float(reference), 'laboratory air wavelength [Angstrom]')
+        header['WAVECONV'] = ('AIR', 'Hg/Cd reference wavelength convention')
+        header['METHOD'] = ('DIRECT/NONPARAMETRIC', 'PCHIP peak and half-height crossings')
+        header['INTERP'] = ('NEAREST', 'nearest-neighbor spatial sample interpolation')
+        header['LSFMODEL'] = ('NONE', 'profile shape not specified')
+        header['BUNIT'] = 'Angstrom'
+        header.add_history('Effective cube FWHM from propagated master arcs.')
+        output = op.basename('%s_lsf_fwhm_%04d.fits' % (surname, int(np.floor(reference + .5))))
+        fits.PrimaryHDU(image, header=header).writeto(output, overwrite=True)
+
+    # Compact diagnostics: raw center locations, FWHM values, medians versus
+    # wavelength, and FWHM versus phase on the two-Angstrom grid.
+    fig, axes = plt.subplots(2, 2, figsize=(13, 10), constrained_layout=True)
+    axes[0, 0].scatter([r['cube_x'] for r in records if r['sample_id'] >= 0],
+                       [r['cube_y'] for r in records if r['sample_id'] >= 0],
+                       s=3, alpha=.35)
+    axes[0, 0].set_title('Amplifier-center sample spaxels')
+    axes[0, 0].set_aspect('equal', adjustable='box')
+    axes[0, 0].set_xlabel('cube x pixel (1-based)')
+    axes[0, 0].set_ylabel('cube y pixel (1-based)')
+    median_sample = np.nanmedian(np.vstack(fwhm_by_line), axis=0)
+    good_sample = np.isfinite(median_sample)
+    if np.any(good_sample):
+        axes[0, 1].scatter([unique_positions[sid][1] + 1 for sid in np.where(good_sample)[0]],
+                           [unique_positions[sid][0] + 1 for sid in np.where(good_sample)[0]],
+                           c=median_sample[good_sample], s=5, cmap='viridis')
+    axes[0, 1].set_title('Median valid FWHM at sample spaxels')
+    axes[0, 1].set_aspect('equal', adjustable='box')
+    axes[0, 1].set_xlabel('cube x pixel (1-based)')
+    axes[0, 1].set_ylabel('cube y pixel (1-based)')
+    for line_number, reference in enumerate(REFERENCE_ARC_WAVELENGTHS):
+        values = fwhm_by_line[line_number]
+        axes[1, 0].plot(reference, np.nanmedian(values) if np.any(np.isfinite(values)) else np.nan,
+                         'o')
+        axes[1, 1].scatter(phase_by_line[line_number], values, s=3, alpha=.25,
+                           label='%0.0f' % reference)
+    axes[1, 0].set_title('Median FWHM versus reference wavelength')
+    axes[1, 0].set_xlabel('reference wavelength [A]')
+    axes[1, 0].set_ylabel('FWHM [A]')
+    axes[1, 1].set_title('FWHM versus 2-Angstrom grid phase')
+    axes[1, 1].set_xlabel('center minus nearest grid bin [A]')
+    axes[1, 1].set_ylabel('FWHM [A]')
+    axes[1, 1].legend(fontsize=7, ncol=3)
+    qa_path = op.basename('%s_lsf_qa.png' % surname)
+    fig.savefig(qa_path, dpi=180)
+    plt.close(fig)
+
+    all_values = np.concatenate([values[np.isfinite(values)] for values in fwhm_by_line
+                                 if np.any(np.isfinite(values))]) if any(
+                                     np.any(np.isfinite(values)) for values in fwhm_by_line) else np.array([])
+    if all_values.size:
+        median_values = np.array([row[2] for row in summary if np.isfinite(row[2])])
+        median_change = (np.nanmax(median_values) - np.nanmin(median_values)
+                         if median_values.size else np.nan)
+        typical_scatter = np.nanmedian(
+            [row[4] for row in summary if np.isfinite(row[4])])
+        log.info('LSF overall: %d/%d reference lines usable; unique evaluated '
+                 'spaxels=%d; FWHM range=%0.4f-%0.4f A; spatial robust scatter '
+                 'per line=%s; peak-to-peak change in median FWHM=%0.4f A; '
+                 'typical spatial scatter=%0.4f A. The prior ~5.35-5.39 A '
+                 'single-CCD result is treated only as a sanity check, not a '
+                 'constraint.', sum(np.any(np.isfinite(v)) for v in fwhm_by_line),
+                 len(REFERENCE_ARC_WAVELENGTHS), len(unique_positions),
+                 np.nanmin(all_values), np.nanmax(all_values),
+                 ', '.join('%0.4f' % row[4] for row in summary
+                           if np.isfinite(row[4])), median_change, typical_scatter)
+    return table, summary, len(unique_positions)
+
 args = parser.parse_args(args=None)
 if args.wave_workers < 1:
     parser.error('--wave-workers must be at least 1')
@@ -660,6 +1402,7 @@ cnt_array = np.zeros((len(h5files), 2), dtype=int)
 nexp_default = 3
 shot_indices = []  # list of numpy arrays of global indices for each exposure
 shot_names = []
+lsf_center_records = []
 for i, h5file in enumerate(h5files):
     t = tables.open_file(h5file)
     ra = t.root.Info.cols.ra[:]
@@ -677,10 +1420,15 @@ for i, h5file in enumerate(h5files):
         if sel_local.size > 0:
             shot_indices.append(sel_local + start)
             shot_names.append('%s exposure %d' % (op.basename(h5file), k + 1))
+    if args.make_lsf:
+        lsf_center_records.extend(_build_lsf_amplifier_centers(h5file, t, log=args.log))
     cnt = end
     t.close()
 args.log.info('Number of total fibers: %i' % cnt)
 args.log.info(f'Total shots (exposures) assumed: {len(shot_indices)} (3 per h5file).')
+if args.make_lsf:
+    args.log.info('LSF QA retained %d amplifier-center records before WCS mapping.',
+                  len(lsf_center_records))
 
 raarray = np.zeros((cnt, len(def_wave)), dtype='float32')
 decarray = np.zeros((cnt, len(def_wave)), dtype='float32')
@@ -982,7 +1730,23 @@ def _warm_up_gaussian_splat():
         variance_numerator, error_weight_sum, support)
 
 
+def _warm_up_sparse_gaussian_splat():
+    """Compile the optional sparse kernel before the LSF reconstruction."""
+    indices = np.array([0], dtype=np.int64)
+    position = np.array([1.0], dtype=np.float64)
+    flux = np.array([1.0], dtype=np.float32)
+    lookup = np.arange(9, dtype=np.int32).reshape(3, 3)
+    flux_sum = np.zeros(9, dtype=np.float32)
+    weight_sum = np.zeros(9, dtype=np.float32)
+    support = np.zeros(9, dtype=np.uint8)
+    _gaussian_splat_sparse_shot_xy(
+        indices, position, position, flux, lookup, 1.0, 1.0, 3, 3,
+        1.8 / 2.35, 3, 2, np.pi * 0.75 ** 2, flux_sum, weight_sum, support)
+
+
 _warm_up_gaussian_splat()
+if args.make_lsf:
+    _warm_up_sparse_gaussian_splat()
 args.log.info('Gaussian test reconstruction enabled: SCI uses subpixel splats and NCONTRIB >= 2.')
 args.log.warning(
     'Gaussian reconstruction variance semantics: VAR is the final SCI-median '
@@ -1121,6 +1885,13 @@ args.log.info(
     variance_diagnostics['formal_var_used_voxels'],
     variance_diagnostics['empirical_var_used_voxels'],
     variance_diagnostics['empirical_only_voxels'])
+
+if args.make_lsf:
+    _run_lsf_measurement(
+        h5files, args.surname, def_wave, raarray, decarray, specarray,
+        shot_indices, shot_names, tp, xg, yg, xgrid, ygrid, cube,
+        ncontribcube, args.pixel_scale, args.log,
+        records=lsf_center_records)
 
 name = op.basename('%s_cube.fits' % args.surname)
 scale = args.pixel_scale / 3600.
