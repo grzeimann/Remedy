@@ -50,6 +50,22 @@ M101_SKY_NEXPOSURES = 3
 M101_SKY_MIN_FINITE_FRACTION = 0.8
 M101_SKY_MIN_FIBERS = 20
 
+# Data-quality bits for the final SCI/VAR estimator state.  Coverage strength
+# and the number of contributing shots remain continuous/independent products.
+DQ_INSUFFICIENT_SUPPORT = np.uint16(1 << 0)
+DQ_VAR_INCOMPLETE = np.uint16(1 << 1)
+DQ_EMPIRICAL_VAR_USED = np.uint16(1 << 2)
+DQ_FORMAL_VAR_USED = np.uint16(1 << 3)
+DQ_VAR_EMPIRICAL_ONLY = np.uint16(1 << 4)
+
+# Error-provenance columns used by the compact wavelength/exposure counters.
+PROV_NSCI = 0
+PROV_ERROR_VALID = 1
+PROV_ERROR_NONFINITE = 2
+PROV_ERROR_ZERO = 3
+PROV_ERROR_NEGATIVE = 4
+PROV_ERROR_OTHER = 5
+
 
 def subtract_m101_residual_sky(spectra, ra, dec, xg, yg, tp,
                                binimage=None, log=None, h5file=''):
@@ -376,6 +392,31 @@ def _gaussian_splat_shot_xy(indices, xpos, ypos, fluxes, errors,
                     support_map[py, px] = 1
 
 
+def _classify_error_provenance(science, errors):
+    """Count error states for finite SCI fiber samples.
+
+    The returned columns are ``N_SCI``, positive finite error, nonfinite
+    error, zero error, negative error, and any remaining invalid state.  This
+    is input-sample provenance only; it does not alter SCI acceptance.
+    """
+    science_valid = np.isfinite(science)
+    error_finite = np.isfinite(errors)
+    error_valid = science_valid & error_finite & (errors > 0.0)
+    error_nonfinite = science_valid & ~error_finite
+    error_zero = science_valid & error_finite & (errors == 0.0)
+    error_negative = science_valid & error_finite & (errors < 0.0)
+    error_other = science_valid & ~(
+        error_valid | error_nonfinite | error_zero | error_negative)
+    return np.array([
+        int(np.sum(science_valid)),
+        int(np.sum(error_valid)),
+        int(np.sum(error_nonfinite)),
+        int(np.sum(error_zero)),
+        int(np.sum(error_negative)),
+        int(np.sum(error_other)),
+    ], dtype=np.int64)
+
+
 def _compute_final_variance(shot_images, shot_variances, ncontrib):
     """Compute formal/empirical variance for the existing shot median.
 
@@ -433,6 +474,24 @@ def _compute_final_variance(shot_images, shot_variances, ncontrib):
     variance[both] = np.maximum(formal[both], empirical[both])
     varianceimage = variance.astype(np.float32)
 
+    dq = np.zeros((ny, nx), dtype=np.uint16)
+    dq[~valid_sci] |= DQ_INSUFFICIENT_SUPPORT
+    formal_used = valid_sci & formal_available & (~empirical_available | (formal >= empirical))
+    empirical_used = valid_sci & both & (empirical > formal)
+    empirical_only = valid_sci & ~formal_available & empirical_available
+    variance_incomplete = valid_sci & ~formal_available & ~empirical_available
+    dq[formal_used] |= DQ_FORMAL_VAR_USED
+    dq[empirical_used] |= DQ_EMPIRICAL_VAR_USED
+    dq[empirical_only] |= DQ_VAR_EMPIRICAL_ONLY
+    dq[variance_incomplete] |= DQ_VAR_INCOMPLETE
+
+    # The variance provenance states are mutually exclusive by construction.
+    variance_state_count = (formal_used.astype(np.uint8) +
+                            empirical_used.astype(np.uint8) +
+                            empirical_only.astype(np.uint8) +
+                            variance_incomplete.astype(np.uint8))
+    assert np.all(variance_state_count <= 1)
+
     stats = {
         'valid_sci_voxels': int(np.sum(valid_sci)),
         'finite_variance_voxels': int(np.sum(valid_sci & np.isfinite(varianceimage))),
@@ -443,12 +502,16 @@ def _compute_final_variance(shot_images, shot_variances, ncontrib):
         'median_ncontrib': float(np.median(ncontrib[valid_sci])) if np.any(valid_sci) else np.nan,
         'variance_unavailable_voxels': int(
             np.sum(valid_sci & ~np.isfinite(varianceimage))),
+        'insufficient_support_voxels': int(np.sum(~valid_sci)),
+        'formal_var_used_voxels': int(np.sum(formal_used)),
+        'empirical_var_used_voxels': int(np.sum(empirical_used)),
+        'empirical_only_voxels': int(np.sum(empirical_only)),
     }
     ratio = np.full((ny, nx), np.nan, dtype=np.float64)
     ratio[both] = np.sqrt(empirical[both] / formal[both])
     stats['median_ratio'] = (float(np.median(ratio[np.isfinite(ratio)]))
                              if np.any(np.isfinite(ratio)) else np.nan)
-    return varianceimage, stats
+    return varianceimage, dq, stats
 
 
 def make_image_gaussian(Pos, y, ye, xg, yg, xgrid, ygrid, sigma,
@@ -517,7 +580,7 @@ def make_image_gaussian(Pos, y, ye, xg, yg, xgrid, ygrid, sigma,
 
     # The median ignores unsupported shots because those entries remain NaN.
     image = np.nanmedian(shot_images, axis=0).astype(np.float32)
-    varianceimage, variance_stats = _compute_final_variance(
+    varianceimage, dq, variance_stats = _compute_final_variance(
         shot_images, shot_variances, ncontrib)
     coverage /= float(max(1, nshots))
     coverage = np.clip(coverage, 0.0, 1.0)
@@ -528,7 +591,7 @@ def make_image_gaussian(Pos, y, ye, xg, yg, xgrid, ygrid, sigma,
     image[~np.isfinite(image)] = 0.0
     # Keep NaN for a valid SCI pixel whose variance cannot be estimated.
 
-    return image, varianceimage, coverage, ncontrib, variance_stats
+    return image, varianceimage, coverage, ncontrib, dq, variance_stats
 
 def make_image(Pos, y, ye, xg, yg, xgrid, ygrid, sigma, cnt_array):
     image = xgrid * 0.
@@ -589,12 +652,14 @@ cube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 variancecube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 weightcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
 ncontribcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='uint8')
+dqcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='uint16')
 
 cnt = 0
 cnt_array = np.zeros((len(h5files), 2), dtype=int)
 # Build per-exposure (shot) index selections assuming 3 interleaved dithers per h5
 nexp_default = 3
 shot_indices = []  # list of numpy arrays of global indices for each exposure
+shot_names = []
 for i, h5file in enumerate(h5files):
     t = tables.open_file(h5file)
     ra = t.root.Info.cols.ra[:]
@@ -611,6 +676,7 @@ for i, h5file in enumerate(h5files):
         sel_local = np.where((block_ids % nexp_default) == k)[0]
         if sel_local.size > 0:
             shot_indices.append(sel_local + start)
+            shot_names.append('%s exposure %d' % (op.basename(h5file), k + 1))
     cnt = end
     t.close()
 args.log.info('Number of total fibers: %i' % cnt)
@@ -885,9 +951,18 @@ def render_wavelength(i):
     Pos = np.column_stack((x, y))
     data = specarray[:, i]
     edata = errarray[:, i]
-    image, varianceimage, weight, ncontrib, variance_stats = make_image_gaussian(
+    provenance = _classify_error_provenance(data, edata)
+    shot_provenance = np.zeros((len(shot_indices), 6), dtype=np.int64)
+    for k, cnt in enumerate(shot_indices):
+        if isinstance(cnt, (tuple, list)) and len(cnt) == 2:
+            indices = np.arange(int(cnt[0]), int(cnt[1]), dtype=np.int64)
+        else:
+            indices = np.asarray(cnt, dtype=np.int64)
+        shot_provenance[k, :] = _classify_error_provenance(
+            data[indices], edata[indices])
+    image, varianceimage, weight, ncontrib, dq, variance_stats = make_image_gaussian(
         Pos, data, edata, xg, yg, xgrid, ygrid, 1.8 / 2.35, shot_indices)
-    return i, image, varianceimage, weight, ncontrib, variance_stats
+    return i, image, varianceimage, weight, ncontrib, dq, variance_stats, provenance, shot_provenance
 
 
 def _warm_up_gaussian_splat():
@@ -926,20 +1001,31 @@ variance_diagnostics = {
     'median_ratios': [],
     'median_ncontrib_values': [],
     'variance_unavailable_voxels': 0,
+    'insufficient_support_voxels': 0,
+    'formal_var_used_voxels': 0,
+    'empirical_var_used_voxels': 0,
+    'empirical_only_voxels': 0,
 }
+provenance_by_wave = np.zeros((len(def_wave), 6), dtype=np.int64)
+provenance_by_shot = np.zeros((len(shot_indices), 6), dtype=np.int64)
 with ThreadPoolExecutor(max_workers=args.wave_workers) as executor:
     # executor.map preserves wavelength order in the returned results.  Each
     # worker only reads the shared input arrays; cube writes remain here.
-    for i, image, varianceimage, weight, ncontrib, plane_stats in executor.map(
+    for i, image, varianceimage, weight, ncontrib, dq, plane_stats, provenance, shot_provenance in executor.map(
             render_wavelength, range(len(def_wave))):
         cube[i, :, :] = image
         variancecube[i, :, :] = varianceimage
         weightcube[i, :, :] = weight
         ncontribcube[i, :, :] = ncontrib
+        dqcube[i, :, :] = dq
+        provenance_by_wave[i, :] = provenance
+        provenance_by_shot += shot_provenance
         for key in ('valid_sci_voxels', 'finite_variance_voxels',
                     'shot_samples', 'shot_samples_missing_variance',
                     'both_variances', 'empirical_exceeds_formal',
-                    'variance_unavailable_voxels'):
+                    'variance_unavailable_voxels', 'insufficient_support_voxels',
+                    'formal_var_used_voxels', 'empirical_var_used_voxels',
+                    'empirical_only_voxels'):
             variance_diagnostics[key] += plane_stats[key]
         if np.isfinite(plane_stats['median_ratio']):
             variance_diagnostics['median_ratios'].append(plane_stats['median_ratio'])
@@ -968,6 +1054,74 @@ args.log.info(
      if variance_diagnostics['median_ncontrib_values'] else 'nan'),
     variance_diagnostics['variance_unavailable_voxels'])
 
+_prov_names = ('SCI-valid', 'finite positive error', 'nonfinite error',
+               'zero error', 'negative error', 'other invalid error')
+_prov_total = provenance_by_wave.sum(axis=0)
+_prov_sci = int(_prov_total[PROV_NSCI])
+args.log.info('Error provenance: SCI-valid fiber samples=%d', _prov_sci)
+for _prov_index, _prov_name in enumerate(_prov_names[1:], start=1):
+    args.log.info('Error provenance: %-22s=%d (%0.4f)', _prov_name,
+                  int(_prov_total[_prov_index]),
+                  (_prov_total[_prov_index] / float(_prov_sci)
+                   if _prov_sci else np.nan))
+
+# A compact 12-bin wavelength summary makes edge or interval concentration
+# visible without retaining per-pixel provenance masks or logging every plane.
+_wave_bins = np.linspace(0, len(def_wave), 13, dtype=int)
+args.log.info('Error provenance by wavelength bin: wave_start-wave_end, '
+              'NSCI, frac_valid, frac_nonfinite, frac_zero, frac_negative, frac_other')
+for _bin_start, _bin_stop in zip(_wave_bins[:-1], _wave_bins[1:]):
+    _bin_prov = provenance_by_wave[_bin_start:_bin_stop].sum(axis=0)
+    _bin_sci = int(_bin_prov[PROV_NSCI])
+    _bin_den = float(_bin_sci) if _bin_sci else np.nan
+    args.log.info(
+        'Error provenance wavelength %0.0f-%0.0f: NSCI=%d, '
+        'valid=%0.4f, nonfinite=%0.4f, zero=%0.4f, negative=%0.4f, other=%0.4f',
+        def_wave[_bin_start], def_wave[_bin_stop - 1], _bin_sci,
+        _bin_prov[PROV_ERROR_VALID] / _bin_den,
+        _bin_prov[PROV_ERROR_NONFINITE] / _bin_den,
+        _bin_prov[PROV_ERROR_ZERO] / _bin_den,
+        _bin_prov[PROV_ERROR_NEGATIVE] / _bin_den,
+        _bin_prov[PROV_ERROR_OTHER] / _bin_den)
+
+_invalid_by_wave = (provenance_by_wave[:, PROV_ERROR_NONFINITE] +
+                    provenance_by_wave[:, PROV_ERROR_ZERO] +
+                    provenance_by_wave[:, PROV_ERROR_NEGATIVE] +
+                    provenance_by_wave[:, PROV_ERROR_OTHER])
+_invalid_fraction_by_wave = np.divide(
+    _invalid_by_wave, provenance_by_wave[:, PROV_NSCI],
+    out=np.full(len(def_wave), np.nan, dtype=float),
+    where=provenance_by_wave[:, PROV_NSCI] > 0)
+_peak_wave = int(np.nanargmax(_invalid_fraction_by_wave)) if np.any(np.isfinite(_invalid_fraction_by_wave)) else None
+if _peak_wave is not None:
+    args.log.info('Error provenance concentration: peak invalid-error wavelength '
+                  '%0.0f A, fraction=%0.4f; first/last-bin fractions=%s/%s.',
+                  def_wave[_peak_wave], _invalid_fraction_by_wave[_peak_wave],
+                  ('%0.4f' % _invalid_fraction_by_wave[0]),
+                  ('%0.4f' % _invalid_fraction_by_wave[-1]))
+
+_invalid_by_shot = provenance_by_shot[:, PROV_ERROR_NONFINITE] + provenance_by_shot[:, PROV_ERROR_ZERO] + provenance_by_shot[:, PROV_ERROR_NEGATIVE] + provenance_by_shot[:, PROV_ERROR_OTHER]
+_top_shots = np.argsort(_invalid_by_shot)[::-1]
+for _shot_index in _top_shots[:3]:
+    if _invalid_by_shot[_shot_index] <= 0:
+        break
+    args.log.info('Error provenance exposure: %s invalid=%d of SCI-valid=%d',
+                  shot_names[_shot_index], int(_invalid_by_shot[_shot_index]),
+                  int(provenance_by_shot[_shot_index, PROV_NSCI]))
+
+args.log.info(
+    'DQ diagnostics: valid SCI voxels=%d; insufficient-support voxels=%d; '
+    'SCI-valid voxels with finite VAR=%d; VAR unavailable=%d; '
+    'formal VAR adopted=%d; empirical VAR adopted over formal=%d; '
+    'empirical-only VAR=%d',
+    variance_diagnostics['valid_sci_voxels'],
+    variance_diagnostics['insufficient_support_voxels'],
+    variance_diagnostics['finite_variance_voxels'],
+    variance_diagnostics['variance_unavailable_voxels'],
+    variance_diagnostics['formal_var_used_voxels'],
+    variance_diagnostics['empirical_var_used_voxels'],
+    variance_diagnostics['empirical_only_voxels'])
+
 name = op.basename('%s_cube.fits' % args.surname)
 scale = args.pixel_scale / 3600.
 header['WCSAXES'] = 3
@@ -991,6 +1145,9 @@ header['CUNIT1'] = 'deg'
 header['CUNIT2'] = 'deg'
 header['CUNIT3'] = 'Angstrom'
 header['SPECSYS'] = 'TOPOCENT'
+header.add_history('Gaussian subpixel reconstruction.')
+header.add_history('NCONTRIB >= 2 required for valid SCI and VAR.')
+header.add_history('Final VAR = max(formal median variance, empirical median variance).')
 F = fits.PrimaryHDU(np.array(cube, 'float32'), header=header)
 F.writeto(name, overwrite=True)
 name = op.basename('%s_variance_cube.fits' % args.surname)
@@ -1028,6 +1185,18 @@ error_header['EXTNAME'] = 'ERROR'
 error_header.add_comment(
     'ERROR = 1-sigma standard deviation = sqrt(VAR). See the variance cube.')
 F = fits.PrimaryHDU(np.sqrt(np.array(variancecube, 'float32')), header=error_header)
+F.writeto(name, overwrite=True)
+name = op.basename('%s_dq_cube.fits' % args.surname)
+dq_header = header.copy()
+dq_header['BUNIT'] = 'bit mask'
+dq_header['EXTNAME'] = 'DQ'
+dq_header['DQBIT0'] = 'NCONTRIB < 2'
+dq_header['DQBIT1'] = 'SCI valid, VAR unavailable'
+dq_header['DQBIT2'] = 'empirical VAR adopted over formal'
+dq_header['DQBIT3'] = 'formal VAR adopted'
+dq_header['DQBIT4'] = 'empirical-only VAR adopted'
+dq_header.add_comment('DQ bits are independent flags; NCONTRIB/COVERAGE describe continuous support.')
+F = fits.PrimaryHDU(np.array(dqcube, 'uint16'), header=dq_header)
 F.writeto(name, overwrite=True)
 # Write weight cube as requested
 name = op.basename('%s_weight_cube.fits' % args.surname)

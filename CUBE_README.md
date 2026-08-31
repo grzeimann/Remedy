@@ -25,6 +25,10 @@ Outputs written by make_mosaic_cube.py
 - <surname>_errorcube.fits: backwards-compatible 1σ companion equal to
   `sqrt(variance_cube)`. `VAR` means variance; `ERROR` means standard
   deviation.
+- <surname>_dq_cube.fits: uint16 data-quality bit cube. Bits are independent:
+  bit 0 = `NCONTRIB < 2`; bit 1 = SCI valid but VAR unavailable; bit 2 =
+  empirical VAR adopted over formal; bit 3 = formal VAR adopted; bit 4 =
+  empirical-only VAR adopted.
 
 Axis definitions and WCS (DS9-friendly)
 - 3D WCS with WCSAXES = 3.
