@@ -738,9 +738,34 @@ def _exp_text(value):
         return str(value).strip()
 
 
-def _verify_lsf_exposure_partition(info_exp, n_fibers, h5file, log=None):
-    """QA-check, without changing, the science 112-row exposure grouping."""
+def _verify_lsf_exposure_partition(info_exp, n_fibers, h5file, log=None,
+                                   inferred_nexp=None):
+    """QA-check the science grouping and diagnose unpopulated ``Info.exp``."""
     labels = [_exp_text(v) for v in np.asarray(info_exp)]
+    unique_labels = sorted(set(labels))
+
+    # quick_reduction creates Info.exp but, in the historical M101 products,
+    # does not assign it when writing each fiber row.  A constant zero is
+    # therefore missing metadata, not a string representation of 3 exposure
+    # labels.  The exposure count is inferred from the same 448-fiber IFU
+    # blocks used by the reduction, while the existing 112-row ordering
+    # remains the authoritative row-level grouping.
+    info_unpopulated = len(unique_labels) == 1 and unique_labels[0] in ('0', '')
+    if info_unpopulated:
+        if log is not None:
+            if inferred_nexp is not None:
+                log.warning('LSF QA %s: Info.exp is present but unpopulated '
+                            '(constant %s); inferred nexp=%d from the fiber-row '
+                            'structure Nfiber/(448*NIFU). The existing 112-fiber '
+                            'row ordering is the exposure partition and is unchanged.',
+                            op.basename(h5file), unique_labels[0], inferred_nexp)
+            else:
+                log.warning('LSF QA %s: Info.exp is present but unpopulated '
+                            '(constant %s); no valid row-structure exposure count '
+                            'was available. The existing 112-fiber row ordering '
+                            'is unchanged.', op.basename(h5file), unique_labels[0])
+        return None
+
     blocks = []
     for block_start in range(0, n_fibers, 112):
         block = labels[block_start:block_start + 112]
@@ -788,7 +813,11 @@ def _build_lsf_amplifier_centers(h5file, h5table, log=None):
     if not (n_info == n_fiber == n_raw):
         raise ValueError('LSF row alignment failure for %s: Info=%d Fibers=%d Raw=%d'
                          % (h5file, n_info, n_fiber, n_raw))
-    _verify_lsf_exposure_partition(info.exp[:], n_info, h5file, log=log)
+    nslots = len(np.unique(ifuslot))
+    inferred_nexp = (int(n_info / float(448 * nslots))
+                     if nslots > 0 and n_info % (448 * nslots) == 0 else None)
+    _verify_lsf_exposure_partition(info.exp[:], n_info, h5file, log=log,
+                                   inferred_nexp=inferred_nexp)
 
     records = []
     keys = sorted(set(zip(ifuslot.tolist(), amp.tolist())),
