@@ -69,8 +69,8 @@ PROV_ERROR_OTHER = 5
 # Empirical LSF/FWHM calibration anchors.  These are AIR wavelengths and are
 # intentionally kept separate from the science wavelength grid.  The local
 # project resources (Lines_list/virus_lines.dat and wave_utils.py) contain
-# these anchors but no additional nearby transitions, so no blend correction
-# is asserted here.
+# these anchors but no additional nearby transitions.  The laboratory blend
+# state remains UNKNOWN until checked against an authoritative Hg/Cd list.
 REFERENCE_ARC_WAVELENGTHS = np.array([
     3610.508,
     3650.153,
@@ -84,7 +84,7 @@ REFERENCE_ARC_WAVELENGTHS = np.array([
 ], dtype=float)
 ARC_WINDOW_ANGSTROM = 15.0
 ARC_BLEND_NOTES = {
-    float(w): 'none listed in local Hg/Cd project line resources'
+    float(w): 'UNKNOWN: authoritative Hg/Cd blend list not yet verified'
     for w in REFERENCE_ARC_WAVELENGTHS
 }
 
@@ -907,7 +907,7 @@ def _sparse_reconstruct_arc(raarray, decarray, arc_rect, full_indices,
 
 def _rectify_lsf_arcs(h5files, def_wave, lsf_def_wave,
                       lsf_wave_indices, specarray, log=None):
-    """Rectify only requested arc bins and apply final SCI fiber availability."""
+    """Rectify only requested arc bins, retaining the complete arc profile."""
     arc_rect = np.full((specarray.shape[0], len(lsf_def_wave)), np.nan,
                        dtype=np.float32)
     offset = 0
@@ -941,8 +941,6 @@ def _rectify_lsf_arcs(h5files, def_wave, lsf_def_wave,
     if offset != specarray.shape[0]:
         raise ValueError('LSF row alignment failure across files: Raw=%d SCI=%d'
                          % (offset, specarray.shape[0]))
-    for j, full_index in enumerate(lsf_wave_indices):
-        arc_rect[~np.isfinite(specarray[:, full_index]), j] = np.nan
     return arc_rect
 
 
@@ -968,11 +966,52 @@ def _normalize_lsf_arc_window(arc_rect, lsf_def_wave, reference):
     return normalized, valid, signal
 
 
+def _native_arc_clipping_diagnostic(arc_rect, lsf_def_wave, reference):
+    """Flag flat-topped native arc profiles without fitting a saturation model."""
+    window = np.abs(lsf_def_wave - reference) <= ARC_WINDOW_ANGSTROM
+    local = np.where(window)[0]
+    if local.size == 0:
+        return {'finite': 0, 'flat_top': 0, 'exact_plateau': 0,
+                'suspicious': 0}
+    left = window & (lsf_def_wave <= reference - 10.0)
+    right = window & (lsf_def_wave >= reference + 10.0)
+    left_bg = (np.nanmedian(arc_rect[:, left], axis=1)
+               if np.any(left) else np.full(arc_rect.shape[0], np.nan))
+    right_bg = (np.nanmedian(arc_rect[:, right], axis=1)
+                if np.any(right) else np.full(arc_rect.shape[0], np.nan))
+    background = np.nanmedian(np.column_stack((left_bg, right_bg)), axis=1)
+    values = arc_rect[:, local].astype(float) - background[:, None]
+    finite = np.isfinite(values)
+    peak = np.full(values.shape[0], np.nan)
+    for row in range(values.shape[0]):
+        if np.any(finite[row]):
+            peak[row] = np.nanmax(values[row])
+    finite_rows = np.isfinite(peak) & (peak > 0.0)
+    flat_top = np.zeros(values.shape[0], dtype=bool)
+    exact_plateau = np.zeros(values.shape[0], dtype=bool)
+    for row in np.where(finite_rows)[0]:
+        top = finite[row] & (values[row] >= 0.995 * peak[row])
+        flat_top[row] = np.any(top[:-1] & top[1:])
+        exact_plateau[row] = np.any(
+            top[:-1] & top[1:] &
+            (np.abs(values[row, :-1] - values[row, 1:]) <=
+             max(1.e-6, 1.e-6 * abs(peak[row]))))
+    suspicious = flat_top | exact_plateau
+    return {'finite': int(np.count_nonzero(finite_rows)),
+            'flat_top': int(np.count_nonzero(flat_top)),
+            'exact_plateau': int(np.count_nonzero(exact_plateau)),
+            'suspicious': int(np.count_nonzero(suspicious))}
+
+
 def _measure_direct_fwhm(wave, profile, reference):
     """Measure FWHM by PCHIP interpolation and half-height crossings only."""
     wave = np.asarray(wave, dtype=float)
     profile = np.asarray(profile, dtype=float)
     finite = np.isfinite(wave) & np.isfinite(profile)
+    core = np.isfinite(wave) & (np.abs(wave - reference) <= 6.0)
+    if np.count_nonzero(core) < 2 or not np.all(finite[core]):
+        return {'valid': False, 'status': 'UNSUPPORTED_CORE', 'center': np.nan,
+                'fwhm': np.nan, 'phase': np.nan}
     if np.count_nonzero(finite) < 5:
         return {'valid': False, 'status': 'TOO_FEW_SAMPLES', 'center': np.nan,
                 'fwhm': np.nan, 'phase': np.nan}
@@ -1138,6 +1177,13 @@ def _run_lsf_measurement(h5files, surname, def_wave, raarray, decarray,
 
     normalized_by_line = []
     for line_number, reference in enumerate(REFERENCE_ARC_WAVELENGTHS):
+        clipping = _native_arc_clipping_diagnostic(
+            arc_rect, lsf_def_wave, reference)
+        log.info('LSF native arc diagnostic %0.3f A: usable native profiles=%d, '
+                 'flat-top profiles=%d, exact plateaus=%d, suspicious=%d. '
+                 'These are QA flags only; no saturation model or rejection applied.',
+                 reference, clipping['finite'], clipping['flat_top'],
+                 clipping['exact_plateau'], clipping['suspicious'])
         normalized, profile_valid, signal = _normalize_lsf_arc_window(
             arc_rect, lsf_def_wave, reference)
         normalized_by_line.append(normalized)
@@ -1166,9 +1212,16 @@ def _run_lsf_measurement(h5files, surname, def_wave, raarray, decarray,
     for line_number, reference in enumerate(REFERENCE_ARC_WAVELENGTHS):
         local = np.abs(lsf_def_wave - reference) <= ARC_WINDOW_ANGSTROM
         local_wave = lsf_def_wave[local]
+        line_indices = lsf_wave_indices[local]
+        normalized_arc = normalized_by_line[line_number][:, local].copy()
+        # Availability is deliberately imposed after line normalization.  A
+        # missing science bin therefore removes that bin's contribution but
+        # cannot renormalize the surviving arc wings.
+        for compact_column, full_index in enumerate(line_indices):
+            normalized_arc[~np.isfinite(specarray[:, full_index]), compact_column] = np.nan
         propagated, sample_ncontrib = _sparse_reconstruct_arc(
-            raarray, decarray, normalized_by_line[line_number],
-            lsf_wave_indices, sample_lookup, xg, yg, tp, shot_indices)
+            raarray, decarray, normalized_arc, line_indices,
+            sample_lookup, xg, yg, tp, shot_indices)
         fwhm = np.full(len(unique_positions), np.nan, dtype=float)
         center = np.full(len(unique_positions), np.nan, dtype=float)
         phase = np.full(len(unique_positions), np.nan, dtype=float)
@@ -1176,12 +1229,16 @@ def _run_lsf_measurement(h5files, surname, def_wave, raarray, decarray,
         nnear = np.full(len(unique_positions), -1, dtype=np.int16)
         profile_valid = np.zeros(len(unique_positions), dtype=bool)
         for sample_id in range(len(unique_positions)):
-            profile = propagated[sample_id, local]
-            support = sample_ncontrib[sample_id, local]
+            # ``propagated`` is already limited to this line's local columns.
+            profile = propagated[sample_id]
+            support = sample_ncontrib[sample_id]
             nfinite = np.isfinite(profile)
             if np.any(nfinite):
                 nnear[sample_id] = int(np.nanmedian(support[nfinite]))
-            if np.count_nonzero(nfinite) >= 5 and np.all(support[nfinite] >= 2):
+            core = np.abs(local_wave - reference) <= 6.0
+            if (np.count_nonzero(core) >= 2 and
+                    np.all(np.isfinite(profile[core])) and
+                    np.all(support[core] >= 2)):
                 profile_valid[sample_id] = True
                 result = _measure_direct_fwhm(local_wave, profile, reference)
             else:
@@ -1242,10 +1299,10 @@ def _run_lsf_measurement(h5files, surname, def_wave, raarray, decarray,
                 x, y = tp.wcs_world2pix(raarray[:, full_index],
                                         decarray[:, full_index], 1)
                 full = make_image_gaussian(
-                    np.column_stack((x, y)), normalized_by_line[line_number][:, compact_column],
+                    np.column_stack((x, y)), normalized_arc[:, local_column],
                     None, xg, yg, xgrid, ygrid, 1.8 / 2.35, shot_indices)
                 sparse, sparse_n = _sparse_reconstruct_one_wave(
-                    np.column_stack((x, y)), normalized_by_line[line_number][:, compact_column],
+                    np.column_stack((x, y)), normalized_arc[:, local_column],
                     xg, yg, sample_lookup, shot_indices)
                 for sample_id, (py, px) in enumerate(unique_positions):
                     np.testing.assert_allclose(sparse[sample_id], full[0][py, px],
@@ -1281,7 +1338,7 @@ def _run_lsf_measurement(h5files, surname, def_wave, raarray, decarray,
                                for r in records for j in range(len(REFERENCE_ARC_WAVELENGTHS))], dtype=bool)
     table['status'] = np.array([status_by_line[j][r['sample_id']] if r['sample_id'] >= 0 else 'OUTSIDE_CUBE'
                                 for r in records for j in range(len(REFERENCE_ARC_WAVELENGTHS))], dtype='U32')
-    table['lab_blend'] = np.zeros(nrows, dtype=bool)
+    table['lab_blend'] = np.full(nrows, 'UNKNOWN', dtype='U16')
     table['blend_note'] = np.array([ARC_BLEND_NOTES[float(REFERENCE_ARC_WAVELENGTHS[j])]
                                     for _ in records for j in range(len(REFERENCE_ARC_WAVELENGTHS))], dtype='U64')
     sample_path = op.basename('%s_lsf_samples.fits' % surname)
@@ -1313,13 +1370,19 @@ def _run_lsf_measurement(h5files, surname, def_wave, raarray, decarray,
     # Compact diagnostics: raw center locations, FWHM values, medians versus
     # wavelength, and FWHM versus phase on the two-Angstrom grid.
     fig, axes = plt.subplots(2, 2, figsize=(13, 10), constrained_layout=True)
-    axes[0, 0].scatter([r['cube_x'] for r in records if r['sample_id'] >= 0],
-                       [r['cube_y'] for r in records if r['sample_id'] >= 0],
-                       s=3, alpha=.35)
+    amp_colors = {'LL': 'tab:blue', 'LU': 'tab:orange',
+                  'RL': 'tab:green', 'RU': 'tab:red'}
+    for amplifier, color in amp_colors.items():
+        amplifier_records = [r for r in records
+                             if r['sample_id'] >= 0 and r['amp'] == amplifier]
+        axes[0, 0].scatter([r['cube_x'] for r in amplifier_records],
+                           [r['cube_y'] for r in amplifier_records],
+                           s=4, alpha=.45, color=color, label=amplifier)
     axes[0, 0].set_title('Amplifier-center sample spaxels')
     axes[0, 0].set_aspect('equal', adjustable='box')
     axes[0, 0].set_xlabel('cube x pixel (1-based)')
     axes[0, 0].set_ylabel('cube y pixel (1-based)')
+    axes[0, 0].legend(title='amplifier', fontsize=8, markerscale=1.5)
     median_sample = np.nanmedian(np.vstack(fwhm_by_line), axis=0)
     good_sample = np.isfinite(median_sample)
     if np.any(good_sample):
