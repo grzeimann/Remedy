@@ -69,8 +69,9 @@ PROV_ERROR_OTHER = 5
 # Empirical LSF/FWHM calibration anchors.  These are AIR wavelengths and are
 # intentionally kept separate from the science wavelength grid.  The local
 # project resources (Lines_list/virus_lines.dat and wave_utils.py) contain
-# these anchors but no additional nearby transitions.  The laboratory blend
-# state remains UNKNOWN until checked against an authoritative Hg/Cd list.
+# these anchors.  Established Hg/Cd laboratory/astronomical line lists show
+# that the blue Cd I components around 3610 A and the Hg/Cd structure around
+# 3650 A are known blends; they are retained for QA but excluded from LSF use.
 REFERENCE_ARC_WAVELENGTHS = np.array([
     3610.508,
     3650.153,
@@ -83,9 +84,24 @@ REFERENCE_ARC_WAVELENGTHS = np.array([
     5460.750,
 ], dtype=float)
 ARC_WINDOW_ANGSTROM = 15.0
+ARC_USABLE_FOR_LSF = np.array(
+    [False, False, True, True, True, True, True, True, True], dtype=bool)
+ARC_BLEND_STATES = np.array([
+    'KNOWN_BLEND', 'KNOWN_BLEND',
+    'UNKNOWN', 'UNKNOWN', 'UNKNOWN', 'UNKNOWN', 'UNKNOWN', 'UNKNOWN', 'UNKNOWN'
+], dtype='U16')
 ARC_BLEND_NOTES = {
-    float(w): 'UNKNOWN: authoritative Hg/Cd blend list not yet verified'
-    for w in REFERENCE_ARC_WAVELENGTHS
+    3610.508: ('Known Cd I blend with 3612.873 A and 3614.453 A; '
+               'excluded from LSF'),
+    3650.153: ('Known Hg/Cd blend; Hg I 3654.84 A produces red shoulder; '
+               'excluded from LSF'),
+    4046.565: 'No significant known blend affecting half-maximum width',
+    4358.335: 'No significant known blend affecting half-maximum width',
+    4678.149: 'No significant known blend affecting half-maximum width',
+    4799.912: 'No significant known blend affecting half-maximum width',
+    4916.068: 'No significant known blend affecting half-maximum width',
+    5085.822: 'No significant known blend affecting half-maximum width',
+    5460.750: 'No significant known blend affecting half-maximum width',
 }
 
 
@@ -1322,7 +1338,8 @@ def _run_lsf_measurement(h5files, surname, def_wave, raarray, decarray,
                      'FWHM p16/p50/p84=%0.4f/%0.4f/%0.4f, '
                      'robust spatial scatter=%0.4f, center offset median/range='
                      '%0.4f/%0.4f A, phase-bin range=%s A, phase r=%s, '
-                     'phase evidence=%s, laboratory blend=%s', reference,
+                     'phase evidence=%s, laboratory blend=%s, usable_for_lsf=%s',
+                     reference,
                      len(records), int(np.count_nonzero(profile_valid)),
                      len(unique_positions),
                      np.count_nonzero(profile_valid) / float(max(1, len(unique_positions))),
@@ -1332,12 +1349,15 @@ def _run_lsf_measurement(h5files, surname, def_wave, raarray, decarray,
                      np.nanmax(center_offset) - np.nanmin(center_offset),
                      ('%0.4f' % phase_range if np.isfinite(phase_range) else 'nan'),
                      ('%0.4f' % phase_corr if np.isfinite(phase_corr) else 'nan'),
-                     phase_evidence, ARC_BLEND_NOTES[float(reference)])
+                     phase_evidence, ARC_BLEND_STATES[line_number],
+                     bool(ARC_USABLE_FOR_LSF[line_number]))
             summary.append((reference, p16, p50, p84, scatter, phase_range,
                             phase_corr, phase_evidence))
         else:
             log.warning('LSF %0.3f A: no valid direct FWHM measurements; '
-                        'laboratory blend=%s', reference, ARC_BLEND_NOTES[float(reference)])
+                        'laboratory blend=%s, usable_for_lsf=%s', reference,
+                        ARC_BLEND_STATES[line_number],
+                        bool(ARC_USABLE_FOR_LSF[line_number]))
             summary.append((reference, np.nan, np.nan, np.nan, np.nan,
                             np.nan, np.nan, False))
 
@@ -1392,16 +1412,27 @@ def _run_lsf_measurement(h5files, surname, def_wave, raarray, decarray,
                                   for r in records for j in range(len(REFERENCE_ARC_WAVELENGTHS))], dtype=np.int16)
     table['valid'] = np.array([bool(r['sample_id'] >= 0 and np.isfinite(fwhm_by_line[j][r['sample_id']]))
                                for r in records for j in range(len(REFERENCE_ARC_WAVELENGTHS))], dtype=bool)
+    table['usable_for_lsf'] = np.array([
+        bool(ARC_USABLE_FOR_LSF[j] and r['sample_id'] >= 0 and
+             np.isfinite(fwhm_by_line[j][r['sample_id']]))
+        for r in records for j in range(len(REFERENCE_ARC_WAVELENGTHS))], dtype=bool)
     table['status'] = np.array([status_by_line[j][r['sample_id']] if r['sample_id'] >= 0 else 'OUTSIDE_CUBE'
                                 for r in records for j in range(len(REFERENCE_ARC_WAVELENGTHS))], dtype='U32')
-    table['lab_blend'] = np.full(nrows, 'UNKNOWN', dtype='U16')
+    table['lab_blend'] = np.array([
+        ARC_BLEND_STATES[j] == 'KNOWN_BLEND' for _ in records
+        for j in range(len(REFERENCE_ARC_WAVELENGTHS))], dtype=bool)
+    table['lab_blend_state'] = np.array([
+        ARC_BLEND_STATES[j] for _ in records
+        for j in range(len(REFERENCE_ARC_WAVELENGTHS))], dtype='U16')
     table['blend_note'] = np.array([ARC_BLEND_NOTES[float(REFERENCE_ARC_WAVELENGTHS[j])]
-                                    for _ in records for j in range(len(REFERENCE_ARC_WAVELENGTHS))], dtype='U64')
+                                    for _ in records for j in range(len(REFERENCE_ARC_WAVELENGTHS))], dtype='U96')
     sample_path = op.basename('%s_lsf_samples.fits' % surname)
     table.write(sample_path, format='fits', overwrite=True)
 
     spatial_header = _lsf_spatial_header(tp, len(xg), pixel_scale)
-    for line_number, reference in enumerate(REFERENCE_ARC_WAVELENGTHS):
+    public_line_indices = np.where(ARC_USABLE_FOR_LSF)[0]
+    for line_number in public_line_indices:
+        reference = REFERENCE_ARC_WAVELENGTHS[line_number]
         valid = np.isfinite(fwhm_by_line[line_number])
         image = np.full(xgrid.shape, np.nan, dtype=np.float32)
         if np.any(valid):
@@ -1439,7 +1470,7 @@ def _run_lsf_measurement(h5files, surname, def_wave, raarray, decarray,
     axes[0, 0].set_xlabel('cube x pixel (1-based)')
     axes[0, 0].set_ylabel('cube y pixel (1-based)')
     axes[0, 0].legend(title='amplifier', fontsize=8, markerscale=1.5)
-    median_sample = np.nanmedian(np.vstack(fwhm_by_line), axis=0)
+    median_sample = np.nanmedian(np.vstack([fwhm_by_line[i] for i in public_line_indices]), axis=0)
     good_sample = np.isfinite(median_sample)
     if np.any(good_sample):
         axes[0, 1].scatter([unique_positions[sid][1] + 1 for sid in np.where(good_sample)[0]],
@@ -1449,16 +1480,25 @@ def _run_lsf_measurement(h5files, surname, def_wave, raarray, decarray,
     axes[0, 1].set_aspect('equal', adjustable='box')
     axes[0, 1].set_xlabel('cube x pixel (1-based)')
     axes[0, 1].set_ylabel('cube y pixel (1-based)')
+    # Include the two known blends in these diagnostic plots so their broad
+    # QA widths remain visible, while keeping them out of the public summary.
     for line_number, reference in enumerate(REFERENCE_ARC_WAVELENGTHS):
         values = fwhm_by_line[line_number]
-        axes[1, 0].plot(reference, np.nanmedian(values) if np.any(np.isfinite(values)) else np.nan,
-                         'o')
+        blend = ARC_BLEND_STATES[line_number] == 'KNOWN_BLEND'
+        axes[1, 0].plot(
+            reference,
+            np.nanmedian(values) if np.any(np.isfinite(values)) else np.nan,
+            'x' if blend else 'o',
+            color='tab:red' if blend else 'tab:blue',
+            label='%0.0f blend QA-only' % reference if blend else None)
         axes[1, 1].scatter(phase_by_line[line_number], values, s=3, alpha=.25,
-                           label='%0.0f' % reference)
-    axes[1, 0].set_title('Median FWHM versus reference wavelength')
+                           label=('%0.0f blend QA-only' % reference)
+                           if blend else '%0.0f' % reference)
+    axes[1, 0].set_title('Median FWHM versus reference wavelength (blend points QA-only)')
     axes[1, 0].set_xlabel('reference wavelength [A]')
     axes[1, 0].set_ylabel('FWHM [A]')
-    axes[1, 1].set_title('FWHM versus 2-Angstrom grid phase')
+    axes[1, 0].legend(fontsize=7, ncol=2)
+    axes[1, 1].set_title('FWHM versus 2-Angstrom grid phase (blend QA-only)')
     axes[1, 1].set_xlabel('center minus nearest grid bin [A]')
     axes[1, 1].set_ylabel('FWHM [A]')
     axes[1, 1].legend(fontsize=7, ncol=3)
@@ -1466,25 +1506,41 @@ def _run_lsf_measurement(h5files, surname, def_wave, raarray, decarray,
     fig.savefig(qa_path, dpi=180)
     plt.close(fig)
 
-    all_values = np.concatenate([values[np.isfinite(values)] for values in fwhm_by_line
-                                 if np.any(np.isfinite(values))]) if any(
-                                     np.any(np.isfinite(values)) for values in fwhm_by_line) else np.array([])
+    public_measured_count = sum(
+        np.any(np.isfinite(fwhm_by_line[i])) for i in public_line_indices)
+    measured_count = sum(
+        np.any(np.isfinite(fwhm_by_line[i]))
+        for i in range(len(REFERENCE_ARC_WAVELENGTHS)))
+    all_values = np.concatenate([
+        fwhm_by_line[i][np.isfinite(fwhm_by_line[i])]
+        for i in public_line_indices if np.any(np.isfinite(fwhm_by_line[i]))
+    ]) if any(np.any(np.isfinite(fwhm_by_line[i])) for i in public_line_indices) else np.array([])
     if all_values.size:
-        median_values = np.array([row[2] for row in summary if np.isfinite(row[2])])
+        median_values = np.array([summary[i][2] for i in public_line_indices
+                                  if np.isfinite(summary[i][2])])
         median_change = (np.nanmax(median_values) - np.nanmin(median_values)
                          if median_values.size else np.nan)
         typical_scatter = np.nanmedian(
-            [row[4] for row in summary if np.isfinite(row[4])])
-        log.info('LSF overall: %d/%d reference lines usable; unique evaluated '
+            [summary[i][4] for i in public_line_indices
+             if np.isfinite(summary[i][4])])
+        log.info('LSF overall: %d/%d public reference lines measured; unique evaluated '
                  'spaxels=%d; FWHM range=%0.4f-%0.4f A; spatial robust scatter '
                  'per line=%s; peak-to-peak change in median FWHM=%0.4f A; '
                  'typical spatial scatter=%0.4f A. The prior ~5.35-5.39 A '
                  'single-CCD result is treated only as a sanity check, not a '
-                 'constraint.', sum(np.any(np.isfinite(v)) for v in fwhm_by_line),
-                 len(REFERENCE_ARC_WAVELENGTHS), len(unique_positions),
-                 np.nanmin(all_values), np.nanmax(all_values),
-                 ', '.join('%0.4f' % row[4] for row in summary
-                           if np.isfinite(row[4])), median_change, typical_scatter)
+                 'constraint. Anchor accounting: 9/9 windows propagated, '
+                 '%d/9 measured, 7/9 usable isolated-line anchors, 2/9 '
+                 'excluded as known blends.',
+                 public_measured_count, len(public_line_indices),
+                 len(unique_positions), np.nanmin(all_values), np.nanmax(all_values),
+                 ', '.join('%0.4f' % summary[i][4] for i in public_line_indices
+                           if np.isfinite(summary[i][4])), median_change, typical_scatter,
+                 measured_count)
+    else:
+        log.warning('LSF overall: no valid public-anchor FWHM values; '
+                    'anchor accounting: 9/9 windows propagated, %d/9 measured, '
+                    '7/9 usable isolated-line anchors, 2/9 excluded as known blends.',
+                    measured_count)
     return table, summary, len(unique_positions)
 
 args = parser.parse_args(args=None)
