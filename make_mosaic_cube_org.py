@@ -1064,6 +1064,38 @@ def _measure_direct_fwhm(wave, profile, reference):
     except (ValueError, TypeError):
         return {'valid': False, 'status': 'INTERPOLATION_FAILED', 'center': np.nan,
                 'fwhm': np.nan, 'phase': np.nan}
+    sampled_search = np.where(search)[0]
+    imax = int(sampled_search[np.argmax(y[sampled_search])])
+    if (imax <= 0 or imax >= len(x) - 1 or
+            not np.isfinite(x[imax - 1]) or not np.isfinite(x[imax + 1]) or
+            not np.isfinite(y[imax - 1]) or not np.isfinite(y[imax + 1])):
+        return {'valid': False, 'status': 'INVALID_PEAK_INTERPOLATION',
+                'center': np.nan, 'fwhm': np.nan, 'phase': np.nan}
+    ym, y0, yp = y[imax - 1], y[imax], y[imax + 1]
+    dx_left = x[imax] - x[imax - 1]
+    dx_right = x[imax + 1] - x[imax]
+    if (not np.isfinite(dx_left) or not np.isfinite(dx_right) or
+            dx_left <= 0.0 or not np.isclose(dx_left, dx_right,
+                                              rtol=1.e-7, atol=1.e-10)):
+        return {'valid': False, 'status': 'INVALID_PEAK_INTERPOLATION',
+                'center': np.nan, 'fwhm': np.nan, 'phase': np.nan}
+    denom = ym - 2.0 * y0 + yp
+    denom_tolerance = (100.0 * np.finfo(float).eps *
+                       max(1.0, abs(ym), abs(y0), abs(yp)))
+    if not np.isfinite(denom) or denom >= 0.0 or abs(denom) <= denom_tolerance:
+        return {'valid': False, 'status': 'INVALID_PEAK_INTERPOLATION',
+                'center': np.nan, 'fwhm': np.nan, 'phase': np.nan}
+    delta_pix = 0.5 * (ym - yp) / denom
+    if not np.isfinite(delta_pix) or abs(delta_pix) > 1.0:
+        return {'valid': False, 'status': 'INVALID_PEAK_INTERPOLATION',
+                'center': np.nan, 'fwhm': np.nan, 'phase': np.nan}
+    dx = 0.5 * (dx_left + dx_right)
+    center = float(x[imax] + delta_pix * dx)
+    peak_height = float(y0 - (yp - ym) ** 2 / (8.0 * denom))
+    if not np.isfinite(peak_height) or peak_height <= 0.0:
+        return {'valid': False, 'status': 'NONPOSITIVE_LINE', 'center': np.nan,
+                'fwhm': np.nan, 'phase': np.nan}
+
     dense = np.linspace(x[0], x[-1], max(401, int(np.ceil((x[-1] - x[0]) * 100)) + 1))
     dense_y = np.asarray(interpolator(dense), dtype=float)
     search_dense = (dense >= reference - 5.0) & (dense <= reference + 5.0)
@@ -1076,21 +1108,14 @@ def _measure_direct_fwhm(wave, profile, reference):
         (dense_y >= np.roll(dense_y, -1)))[0]
     peak_candidates = peak_candidates[(peak_candidates > 0) &
                                       (peak_candidates < len(dense) - 1)]
-    if peak_candidates.size == 0:
-        peak_index = int(np.nanargmax(np.where(search_dense, dense_y, np.nan)))
-    else:
-        peak_index = int(peak_candidates[np.nanargmax(dense_y[peak_candidates])])
-    peak_height = float(dense_y[peak_index])
-    if not np.isfinite(peak_height) or peak_height <= 0.0:
-        return {'valid': False, 'status': 'NONPOSITIVE_LINE', 'center': np.nan,
-                'fwhm': np.nan, 'phase': np.nan}
     strong = peak_candidates[dense_y[peak_candidates] >= 0.80 * peak_height]
     if strong.size > 1:
-        separated = [idx for idx in strong if abs(dense[idx] - dense[peak_index]) >= 1.0]
+        separated = [idx for idx in strong if abs(dense[idx] - center) >= 1.0]
         if separated:
             return {'valid': False, 'status': 'AMBIGUOUS_BLEND', 'center': np.nan,
                     'fwhm': np.nan, 'phase': np.nan}
     half = 0.5 * peak_height
+    peak_index = int(np.argmin(np.abs(dense - center)))
 
     def crossing(direction):
         if direction < 0:
