@@ -1601,7 +1601,7 @@ def _additive_flux_basis(h5, n_wave, exposure):
         "offset": offset, "raw_basis_scale": scale,
         "raw_basis_unscaled": raw_to_fibers,
     }
-    return raw_to_fibers / scale, note, metadata
+    return raw_to_fibers, raw_to_fibers / scale, note, metadata
 
 
 def _additive_median_rows(values, selected, description):
@@ -1629,23 +1629,30 @@ def _additive_bandaid_rows(path, exposure, image):
     """Read one exposure of blank-sky Fibers spectra for the Band-Aid test."""
     with tables.open_file(path, mode="r") as h5:
         required_tables = {"Info", "Fibers"}
-        if not required_tables.issubset(h5.root._v_children):
-            raise ValueError("%s must contain Info and Fibers tables" % path)
+        if not required_tables.union({"Raw"}).issubset(h5.root._v_children):
+            raise ValueError("%s must contain Info, Raw, and Fibers tables" %
+                             path)
         info = h5.root.Info
         fibers = h5.root.Fibers
+        raw = h5.root.Raw
         if int(info.nrows) != int(fibers.nrows):
             raise ValueError("%s Info/Fibers row mismatch" % path)
-        if "spectrum" not in fibers.colnames:
-            raise ValueError("%s Fibers lacks spectrum" % path)
+        if int(info.nrows) != int(raw.nrows):
+            raise ValueError("%s Info/Raw row mismatch" % path)
+        if "spectrum" not in fibers.colnames or \
+                not {"spectrum", "wave"}.issubset(raw.colnames):
+            raise ValueError("%s lacks required Fibers/Raw spectrum columns" %
+                             path)
         groups, labels, nexp = build_amplifier_groups(info)
         if exposure < 1 or exposure > nexp:
             raise ValueError("requested exposure %d but %s has %d exposures" %
                              (exposure, path, nexp))
         nrows = int(info.nrows)
-        n_wave = int(fibers.coldtypes["spectrum"].shape[0])
-        if n_wave != RECTIFIED_WAVE.size:
+        n_fiber_wave = int(fibers.coldtypes["spectrum"].shape[0])
+        n_raw_wave = int(raw.coldtypes["spectrum"].shape[0])
+        if n_fiber_wave != RECTIFIED_WAVE.size:
             raise ValueError("%s Fibers.spectrum has %d bins; expected %d" %
-                             (path, n_wave, RECTIFIED_WAVE.size))
+                             (path, n_fiber_wave, RECTIFIED_WAVE.size))
         ra = np.asarray(info.cols.ra[:], dtype=float)
         dec = np.asarray(info.cols.dec[:], dtype=float)
         if image is None:
@@ -1680,22 +1687,32 @@ def _additive_bandaid_rows(path, exposure, image):
                                dtype=np.int8)
 
         minimum_finite = int(np.ceil(
-            M101_SKY_MIN_FINITE_FRACTION * n_wave))
+            M101_SKY_MIN_FINITE_FRACTION * n_fiber_wave))
         kept_rows = []
-        kept_spectra = []
+        kept_fiber_spectra = []
+        kept_raw_spectra = []
+        kept_raw_waves = []
         for start in range(0, candidate_indices.size, ROW_CHUNK):
             rows = candidate_indices[start:start + ROW_CHUNK]
-            spectrum = np.asarray(
+            fiber_spectrum = np.asarray(
                 fibers.read_coordinates(rows, field="spectrum"), dtype=float)
-            keep = np.isfinite(spectrum).sum(axis=1) >= minimum_finite
+            raw_spectrum = np.asarray(
+                raw.read_coordinates(rows, field="spectrum"), dtype=float)
+            raw_wave = np.asarray(
+                raw.read_coordinates(rows, field="wave"), dtype=float)
+            keep = np.isfinite(fiber_spectrum).sum(axis=1) >= minimum_finite
             if np.any(keep):
                 kept_rows.append(rows[keep])
-                kept_spectra.append(spectrum[keep])
-        if not kept_spectra:
+                kept_fiber_spectra.append(fiber_spectrum[keep])
+                kept_raw_spectra.append(raw_spectrum[keep])
+                kept_raw_waves.append(raw_wave[keep])
+        if not kept_fiber_spectra:
             raise ValueError("no blank-sky fibers meet the finite-spectrum "
                              "criterion")
         kept_rows = np.concatenate(kept_rows)
-        spectra = np.concatenate(kept_spectra, axis=0)
+        spectra = np.concatenate(kept_fiber_spectra, axis=0)
+        raw_spectra = np.concatenate(kept_raw_spectra, axis=0)
+        raw_waves = np.concatenate(kept_raw_waves, axis=0)
         candidate_position = {int(row): index for index, row in
                               enumerate(candidate_indices)}
         kept_position = np.asarray([candidate_position[int(row)]
@@ -1704,16 +1721,27 @@ def _additive_bandaid_rows(path, exposure, image):
         partition = partition[kept_position]
         j = row_j[kept_rows].astype(int)
         amp = row_amp[kept_rows]
-        K_flux, norm_note, calibration = _additive_flux_basis(
-            h5, n_wave, exposure)
+        common_raw_wave = np.nanmedian(raw_waves[:256], axis=0)
+        raw_rectified = np.full(raw_spectra.shape, np.nan, dtype=float)
+        for index in range(raw_spectra.shape[0]):
+            valid = np.isfinite(raw_waves[index]) & np.isfinite(raw_spectra[index])
+            if np.sum(valid) >= 2:
+                raw_rectified[index] = np.interp(
+                    common_raw_wave, raw_waves[index, valid],
+                    raw_spectra[index, valid], left=np.nan, right=np.nan)
+        K_absolute, K_normalized, norm_note, calibration = _additive_flux_basis(
+            h5, n_fiber_wave, exposure)
         return {
             "path": Path(path), "exposure": int(exposure),
             "wave": RECTIFIED_WAVE.copy(), "spectrum": spectra,
+            "raw_wave": common_raw_wave, "raw_spectrum": raw_rectified,
             "j": j, "amp": amp, "partition": partition,
             "identity": physical_identity, "K": {
                 "constant_final": np.ones(n_wave, dtype=float),
-                "raw_constant": K_flux,
+                "raw_constant": K_normalized,
             },
+            "K_raw_to_fibers_absolute": K_absolute,
+            "K_raw_to_fibers_normalized": K_normalized,
             "norm_note": norm_note, "calibration": calibration,
             "candidate_count": int(candidate_indices.size),
             "n_fibers": int(spectra.shape[0]),
@@ -1752,6 +1780,7 @@ def _fit_additive_amplitude(difference, basis, wave):
 
 def _additive_training_profiles(data):
     wave = data["wave"]
+    raw_wave = data["raw_wave"]
     profiles = {}
     q_axis = np.arange(FIBERS_PER_AMPLIFIER, dtype=int)
     for amp in AMPLIFIERS:
@@ -1761,6 +1790,9 @@ def _additive_training_profiles(data):
         central = _additive_median_rows(
             data["spectrum"], central_selected,
             "%s TRAIN central reference" % amp)
+        central_raw = _additive_median_rows(
+            data["raw_spectrum"], central_selected,
+            "%s TRAIN Raw central reference" % amp)
         amp_models = {}
         if amp in ("LL", "RU"):
             q_for_row = data["j"]
@@ -1771,16 +1803,30 @@ def _additive_training_profiles(data):
         for model in ADDITIVE_MODELS:
             basis = data["K"][model]
             raw = np.full(FIBERS_PER_AMPLIFIER, np.nan, dtype=float)
+            scatter = np.full(FIBERS_PER_AMPLIFIER, np.nan, dtype=float)
             train_q_values = {}
             for q in q_axis:
                 selected = train & (q_for_row == q)
                 if not np.any(selected):
                     continue
-                r_q = _additive_median_rows(
-                    data["spectrum"], selected,
-                    "%s TRAIN q=%d" % (amp, q))
-                difference = r_q - central
-                raw[q] = _fit_additive_amplitude(difference, basis, wave)
+                if model == "raw_constant":
+                    r_q = _additive_median_rows(
+                        data["raw_spectrum"], selected,
+                        "%s TRAIN Raw q=%d" % (amp, q))
+                    difference = r_q - central_raw
+                    finite = ((raw_wave >= ADDITIVE_SAFE_WAVE[0]) &
+                              (raw_wave <= ADDITIVE_SAFE_WAVE[1]) &
+                              np.isfinite(difference))
+                    raw[q] = (float(np.nanmedian(difference[finite]))
+                              if np.any(finite) else np.nan)
+                    scatter[q] = _robust_rms(
+                        difference[finite] - raw[q]) if np.any(finite) else np.nan
+                else:
+                    r_q = _additive_median_rows(
+                        data["spectrum"], selected,
+                        "%s TRAIN q=%d" % (amp, q))
+                    difference = r_q - central
+                    raw[q] = _fit_additive_amplitude(difference, basis, wave)
                 train_q_values[q] = difference
             smooth = _smooth_additive_profile(raw)
             center_level = np.nanmedian(smooth[q_for_reference])
@@ -1792,11 +1838,12 @@ def _additive_training_profiles(data):
             amp_models[model] = {
                 "basis": basis, "center": central, "raw": raw,
                 "smooth": smooth, "applied": applied,
-                "train_q_values": train_q_values,
+                "train_q_values": train_q_values, "scatter": scatter,
             }
         profiles[amp] = {
             "q": q_axis, "models": amp_models,
             "q_for_row": q_for_row, "q_for_reference": q_for_reference,
+            "central_raw": central_raw,
         }
     return profiles
 
@@ -1804,6 +1851,7 @@ def _additive_training_profiles(data):
 def _additive_validation_profiles(data, training_profiles, wave_center,
                                   half_width):
     wave = data["wave"]
+    raw_wave = data["raw_wave"]
     band = ((wave >= wave_center - half_width) &
             (wave <= wave_center + half_width))
     if not np.any(band):
@@ -1821,12 +1869,44 @@ def _additive_validation_profiles(data, training_profiles, wave_center,
         edge = _additive_median_rows(
             data["spectrum"], edge_selected,
             "%s VALIDATION edge" % amp)
+        raw_center = _additive_median_rows(
+            data["raw_spectrum"], central_selected,
+            "%s VALIDATION Raw central reference" % amp)
+        raw_edge = _additive_median_rows(
+            data["raw_spectrum"], edge_selected,
+            "%s VALIDATION Raw edge" % amp)
+        raw_model = training_profiles[amp]["models"]["raw_constant"]
+        raw_correction = raw_model["applied"][q_for_row]
+        raw_corrected_rows = data["raw_spectrum"] - raw_correction[:, None]
+        raw_corrected_edge = _additive_median_rows(
+            raw_corrected_rows, edge_selected,
+            "%s VALIDATION corrected Raw edge" % amp)
+        raw_legacy_difference = raw_edge - raw_center
+        raw_corrected_difference = raw_corrected_edge - raw_center
+        raw_validation = {
+            "center": raw_center, "legacy": {
+                "edge": raw_edge, "difference": raw_legacy_difference,
+                "smooth_difference": _broad_continuum_1d(
+                    raw_legacy_difference, raw_wave),
+            },
+            "corrected": {
+                "edge": raw_corrected_edge,
+                "difference": raw_corrected_difference,
+                "smooth_difference": _broad_continuum_1d(
+                    raw_corrected_difference, raw_wave),
+            },
+        }
         model_results = {}
         for model in ADDITIVE_MODELS:
             model_profile = training_profiles[amp]["models"][model]
-            correction = model_profile["applied"][q_for_row]
-            corrected_rows = (data["spectrum"] -
-                              correction[:, None] * data["K"][model])
+            if model == "raw_constant":
+                correction = model_profile["applied"][q_for_row]
+                corrected_rows = (data["spectrum"] -
+                                  correction[:, None] *
+                                  data["K_raw_to_fibers_absolute"])
+            else:
+                correction = model_profile["applied"][q_for_row]
+                corrected_rows = data["spectrum"] - correction[:, None]
             corrected_edge = _additive_median_rows(
                 corrected_rows, edge_selected,
                 "%s VALIDATION corrected edge" % amp)
@@ -1856,8 +1936,12 @@ def _additive_validation_profiles(data, training_profiles, wave_center,
             else:
                 correction = training_profiles[amp]["models"][model][
                     "applied"][q_for_row]
-                corrected = (data["spectrum"] -
-                             correction[:, None] * data["K"][model])
+                if model == "raw_constant":
+                    corrected = (data["spectrum"] -
+                                 correction[:, None] *
+                                 data["K_raw_to_fibers_absolute"])
+                else:
+                    corrected = data["spectrum"] - correction[:, None]
                 levels = np.nanmedian(corrected[:, band], axis=1)
             q_values = np.full(FIBERS_PER_AMPLIFIER, np.nan, dtype=float)
             for q in range(FIBERS_PER_AMPLIFIER):
@@ -1870,6 +1954,7 @@ def _additive_validation_profiles(data, training_profiles, wave_center,
         results[amp] = {
             "center": center, "legacy": legacy,
             "models": model_results, "continuum": continuum_values,
+            "raw_validation": raw_validation,
             "n_validation": int(validation.sum()),
             "n_edge": int(edge_selected.sum()),
             "n_center": int(central_selected.sum()),
@@ -1910,14 +1995,18 @@ def _write_additive_outputs(output_dir, data, training_profiles,
         "q0_39_rms_legacy", "q0_39_rms_corrected",
         "q_ge40_median_change", "broad_rms_legacy", "broad_rms_corrected",
         "highpass_rms_legacy", "highpass_rms_corrected",
+        "raw_q20_legacy", "raw_q20_corrected", "raw_q20_absolute_reduction",
+        "raw_q20_percent_reduction", "raw_broad_rms_legacy",
+        "raw_broad_rms_corrected",
         "raw_basis_scale", "exptime", "millum", "guider_throughput",
         "gratio", "survey_offset", "median_A_edge_raw_units",
     ]
     summary_rows = []
     profile_fields = [
-        "h5", "exposure", "amplifier", "model", "q", "A_raw",
-        "A_smooth", "A_applied", "validation_legacy_residual",
-        "validation_corrected_residual",
+        "h5", "exposure", "amplifier", "q",
+        "A_raw_unsmoothed_e_per_A", "A_raw_smoothed_e_per_A",
+        "A_raw_applied_e_per_A", "wavelength_scatter_e_per_A",
+        "n_train_fibers", "n_validation_fibers",
     ]
     profile_rows = []
     for amp in AMPLIFIERS:
@@ -1947,6 +2036,21 @@ def _write_additive_outputs(output_dir, data, training_profiles,
                 validation["legacy"]["smooth_difference"])
             highpass_corrected = _robust_rms(
                 corrected["difference"] - corrected["smooth_difference"])
+            if model == "raw_constant":
+                raw_legacy = validation["raw_validation"]["legacy"]
+                raw_corrected = validation["raw_validation"]["corrected"]
+                raw_q20_legacy = float(np.nanmedian(
+                    raw_legacy["difference"][:20]))
+                raw_q20_corrected = float(np.nanmedian(
+                    raw_corrected["difference"][:20]))
+                raw_reduction = raw_q20_legacy - raw_q20_corrected
+                raw_broad_legacy = _robust_amplitude_rms(
+                    raw_legacy["smooth_difference"])
+                raw_broad_corrected = _robust_amplitude_rms(
+                    raw_corrected["smooth_difference"])
+            else:
+                raw_q20_legacy = raw_q20_corrected = raw_reduction = np.nan
+                raw_broad_legacy = raw_broad_corrected = np.nan
             calibration = data["calibration"]
             raw_scale = calibration["raw_basis_scale"]
             median_A_edge_raw = (
@@ -1969,6 +2073,15 @@ def _write_additive_outputs(output_dir, data, training_profiles,
                 "broad_rms_corrected": broad_corrected,
                 "highpass_rms_legacy": highpass_legacy,
                 "highpass_rms_corrected": highpass_corrected,
+                "raw_q20_legacy": raw_q20_legacy,
+                "raw_q20_corrected": raw_q20_corrected,
+                "raw_q20_absolute_reduction": raw_reduction,
+                "raw_q20_percent_reduction": (
+                    100.0 * raw_reduction / raw_q20_legacy
+                    if np.isfinite(raw_q20_legacy) and raw_q20_legacy != 0.0
+                    else np.nan),
+                "raw_broad_rms_legacy": raw_broad_legacy,
+                "raw_broad_rms_corrected": raw_broad_corrected,
                 "raw_basis_scale": raw_scale,
                 "exptime": calibration["exptime"],
                 "millum": calibration["millum"],
@@ -1977,15 +2090,18 @@ def _write_additive_outputs(output_dir, data, training_profiles,
                 "survey_offset": calibration["offset"],
                 "median_A_edge_raw_units": median_A_edge_raw,
             })
-            for q in range(FIBERS_PER_AMPLIFIER):
-                profile_rows.append({
-                    "h5": data["path"].name, "exposure": data["exposure"],
-                    "amplifier": amp, "model": model, "q": q,
-                    "A_raw": fit["raw"][q], "A_smooth": fit["smooth"][q],
-                    "A_applied": fit["applied"][q],
-                    "validation_legacy_residual": legacy_residual[q],
-                    "validation_corrected_residual": corrected_residual[q],
-                })
+        raw_fit = training_profiles[amp]["models"]["raw_constant"]
+        for q in range(FIBERS_PER_AMPLIFIER):
+            profile_rows.append({
+                "h5": data["path"].name, "exposure": data["exposure"],
+                "amplifier": amp, "q": q,
+                "A_raw_unsmoothed_e_per_A": raw_fit["raw"][q],
+                "A_raw_smoothed_e_per_A": raw_fit["smooth"][q],
+                "A_raw_applied_e_per_A": raw_fit["applied"][q],
+                "wavelength_scatter_e_per_A": raw_fit["scatter"][q],
+                "n_train_fibers": train_count,
+                "n_validation_fibers": valid_count,
+            })
     with (output_dir / "additive_bandaid_summary.csv").open(
             "w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=summary_fields)
@@ -2013,18 +2129,105 @@ def make_additive_basis_figure(output_dir, data):
     constant = np.ones(wave.size, dtype=float)
     raw_basis = data["K"]["raw_constant"]
     finite = np.isfinite(raw_basis)
-    fig, axis = plt.subplots(figsize=(8, 4.5))
-    axis.plot(wave, constant, label="constant-final basis = 1")
-    axis.plot(wave[finite], raw_basis[finite],
-              label="Raw-constant propagated basis")
-    axis.set(xlabel="wavelength (A)", ylabel="normalized basis",
-             title="Additive Band-Aid wavelength bases")
-    axis.set_xlim(float(wave[0]), float(wave[-1]))
-    axis.set_ylim(*_robust_ylim(constant, raw_basis))
-    axis.grid(alpha=.2)
-    axis.legend(fontsize=8)
+    raw_absolute = data["K_raw_to_fibers_absolute"]
+    fig, axes = plt.subplots(2, 1, figsize=(8, 7), sharex=True)
+    axes[0].plot(wave, constant, label="constant-final basis = 1")
+    axes[0].plot(wave[finite], raw_basis[finite],
+                 label="K_raw_to_fibers_normalized")
+    axes[0].set_ylabel("normalized basis")
+    axes[0].set_ylim(*_robust_ylim(constant, raw_basis))
+    axes[1].plot(wave, raw_absolute,
+                 label="K_raw_to_fibers_absolute")
+    axes[1].set_ylabel("Fibers units per Raw e-/A")
+    axes[1].set_ylim(*_robust_ylim(raw_absolute))
+    axes[1].set_xlabel("wavelength (A)")
+    for axis in axes:
+        axis.set_xlim(float(wave[0]), float(wave[-1]))
+        axis.grid(alpha=.2)
+        axis.legend(fontsize=8)
+    axes[0].set_title("Additive Band-Aid wavelength bases")
     fig.tight_layout()
     fig.savefig(output_dir / "additive_bandaid_wavelength_basis.png", dpi=160)
+    plt.close(fig)
+
+
+def make_additive_raw_validation_figure(output_dir, data,
+                                       validation_profiles):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    wave = data["raw_wave"]
+    entries = {}
+    for amp in AMPLIFIERS:
+        entries[amp] = validation_profiles[amp]["raw_validation"]
+    center = np.nanmedian(np.vstack([
+        entries[amp]["center"] for amp in AMPLIFIERS]), axis=0)
+    legacy_edge = np.nanmedian(np.vstack([
+        entries[amp]["legacy"]["edge"] for amp in AMPLIFIERS]), axis=0)
+    corrected_edge = np.nanmedian(np.vstack([
+        entries[amp]["corrected"]["edge"] for amp in AMPLIFIERS]), axis=0)
+    legacy_difference = legacy_edge - center
+    corrected_difference = corrected_edge - center
+    entries["all amps"] = {
+        "center": center,
+        "legacy": {
+            "edge": legacy_edge, "difference": legacy_difference,
+            "smooth_difference": _broad_continuum_1d(
+                legacy_difference, wave),
+        },
+        "corrected": {
+            "edge": corrected_edge, "difference": corrected_difference,
+            "smooth_difference": _broad_continuum_1d(
+                corrected_difference, wave),
+        },
+    }
+    coverage = np.sum([
+        np.isfinite(entries[amp]["center"]) &
+        np.isfinite(entries[amp]["legacy"]["edge"])
+        for amp in AMPLIFIERS], axis=0)
+    wave_mask = coverage == len(AMPLIFIERS)
+    if not np.any(wave_mask):
+        wave_mask = np.isfinite(wave)
+    x = wave[wave_mask]
+
+    fig, axes = plt.subplots(2, 5, figsize=(19, 7), sharex=True)
+    for column, amp in enumerate((*AMPLIFIERS, "all amps")):
+        entry = entries[amp]
+        center = entry["center"][wave_mask]
+        legacy = entry["legacy"]
+        corrected = entry["corrected"]
+        axes[0, column].plot(x, legacy["edge"][wave_mask], label="Raw E")
+        axes[0, column].plot(x, center, label="Raw C")
+        axes[0, column].plot(x, corrected["edge"][wave_mask],
+                             "--", label="Raw E corrected")
+        axes[1, column].plot(x, legacy["difference"][wave_mask],
+                             label="legacy Raw E - C")
+        axes[1, column].plot(x, corrected["difference"][wave_mask],
+                             "--", label="corrected Raw E - C")
+        axes[1, column].plot(x, legacy["smooth_difference"][wave_mask],
+                             ":", label="broad legacy E - C")
+        axes[1, column].plot(x, corrected["smooth_difference"][wave_mask],
+                             "-.", label="broad corrected E - C")
+        axes[0, column].set_title(amp)
+        axes[0, column].set_ylim(*_robust_ylim(
+            legacy["edge"][wave_mask], center,
+            corrected["edge"][wave_mask]))
+        axes[1, column].set_ylim(*_robust_ylim(
+            legacy["difference"][wave_mask],
+            corrected["difference"][wave_mask],
+            legacy["smooth_difference"][wave_mask],
+            corrected["smooth_difference"][wave_mask]))
+        for row in range(2):
+            axes[row, column].grid(alpha=.2)
+        axes[1, column].set_xlabel("native wavelength (A)")
+    axes[0, 0].set_ylabel("Raw spectrum (e-/A)")
+    axes[1, 0].set_ylabel("Raw E - C (e-/A)")
+    axes[0, 0].legend(fontsize=7)
+    axes[1, 0].legend(fontsize=7)
+    fig.suptitle("Held-out Raw-space additive validation")
+    fig.tight_layout()
+    fig.savefig(output_dir / "additive_bandaid_raw_validation.png", dpi=160)
     plt.close(fig)
 
 
@@ -2052,8 +2255,8 @@ def make_additive_bandaid_figures(output_dir, data, training_profiles,
             if row == 1:
                 axes[row, column].set_xlabel("folded readout distance q")
         axes[row, 0].set_ylabel("A(q) [%s]" %
-                                 ("final" if model == "constant_final"
-                                  else "normalized norm"))
+                                 ("final units control" if model ==
+                                  "constant_final" else "e-/A"))
     axes[0, 0].legend(fontsize=7)
     axes[1, 0].legend(fontsize=7)
     fig.suptitle("Additive Band-Aid: inferred spatial profile")
@@ -2109,7 +2312,7 @@ def make_additive_bandaid_figures(output_dir, data, training_profiles,
         axes[0, column].plot(x, edge, label="E legacy")
         axes[0, column].plot(x, center, label="C")
         axes[0, column].plot(x, corr_a, "--", label="E corrected A")
-        axes[0, column].plot(x, corr_b, ":", label="E corrected B")
+        axes[0, column].plot(x, corr_b, ":", label="E Raw-derived corrected")
         axes[1, column].plot(x, legacy["difference"][wave_mask],
                              label="legacy E - C")
         axes[1, column].plot(
@@ -2121,7 +2324,7 @@ def make_additive_bandaid_figures(output_dir, data, training_profiles,
             axes[1, column].plot(
                 x, corrected["difference"][wave_mask], style,
                 label="corrected %s E - C" % ("A" if model ==
-                                               "constant_final" else "B"))
+                                               "constant_final" else "Raw"))
             axes[1, column].plot(
                 x, corrected["smooth_difference"][wave_mask],
                 style, alpha=.45)
@@ -2132,7 +2335,7 @@ def make_additive_bandaid_figures(output_dir, data, training_profiles,
             "--", label="corrected A")
         axes[2, column].plot(
             x, entry["models"]["raw_constant"]["ratio"][wave_mask],
-            ":", label="corrected B")
+            ":", label="Raw-derived corrected")
         axes[2, column].axhline(0.0, color="k", linewidth=.8, alpha=.6)
         axes[0, column].set_title(name)
         for row in range(3):
@@ -2177,7 +2380,7 @@ def make_additive_bandaid_figures(output_dir, data, training_profiles,
         axes[column].plot(np.arange(112), stacks["constant_final"],
                           "--", label="corrected A")
         axes[column].plot(np.arange(112), stacks["raw_constant"],
-                          ":", label="corrected B")
+                          ":", label="Raw-derived corrected")
         axes[column].axvspan(0, 19, color="tab:red", alpha=.10)
         axes[column].axvline(40, color="k", linestyle=":", linewidth=.8)
         axes[column].set_title(name)
@@ -2193,6 +2396,7 @@ def make_additive_bandaid_figures(output_dir, data, training_profiles,
     fig.savefig(output_dir / "additive_bandaid_folded_profile.png", dpi=160)
     plt.close(fig)
     make_additive_basis_figure(output_dir, data)
+    make_additive_raw_validation_figure(output_dir, data, validation_profiles)
 
 
 def run_additive_bandaid(path, exposure, image, output_dir,
@@ -2208,7 +2412,8 @@ def run_additive_bandaid(path, exposure, image, output_dir,
     print("")
     print("Additive post-processing Band-Aid experiment:")
     print("  selected H5/exposure: %s / %d" % (path, exposure))
-    print("  Fibers.spectrum only; all corrections remained in memory")
+    print("  Raw.spectrum used for direct TRAIN/VALIDATION fit/check; "
+          "Fibers.spectrum used for propagated application")
     print("  blank-sky candidates: %d; usable fibers: %d" %
           (data["candidate_count"], data["n_fibers"]))
     print("  physical IFUs: %d (TRAIN=%d, VALIDATION=%d)" %
@@ -2236,6 +2441,44 @@ def run_additive_bandaid(path, exposure, image, output_dir,
                row["broad_rms_legacy"], row["broad_rms_corrected"],
                row["highpass_rms_legacy"], row["highpass_rms_corrected"],
                row["q_ge40_median_change"]))
+    print("  Raw-space validation for raw_constant:")
+    for amp in AMPLIFIERS:
+        raw_validation = validation[amp]["raw_validation"]
+        raw_legacy = raw_validation["legacy"]
+        raw_corrected = raw_validation["corrected"]
+        raw_q20_legacy = np.nanmedian(raw_legacy["difference"][:20])
+        raw_q20_corrected = np.nanmedian(raw_corrected["difference"][:20])
+        raw_broad_legacy = _robust_amplitude_rms(
+            raw_legacy["smooth_difference"])
+        raw_broad_corrected = _robust_amplitude_rms(
+            raw_corrected["smooth_difference"])
+        scatter = np.nanmedian(
+            training[amp]["models"]["raw_constant"]["scatter"][:20])
+        print("    %s: q<20 %.6g -> %.6g; broad RMS %.6g -> %.6g; "
+              "median wavelength scatter q<20=%.6g" %
+              (amp, raw_q20_legacy, raw_q20_corrected,
+               raw_broad_legacy, raw_broad_corrected, scatter))
+    raw_validation_values = [validation[amp]["raw_validation"]
+                             for amp in AMPLIFIERS]
+    raw_q20_legacy = np.nanmedian([
+        np.nanmedian(item["legacy"]["difference"][:20])
+        for item in raw_validation_values])
+    raw_q20_corrected = np.nanmedian([
+        np.nanmedian(item["corrected"]["difference"][:20])
+        for item in raw_validation_values])
+    raw_broad_legacy = np.nanmedian([
+        _robust_amplitude_rms(item["legacy"]["smooth_difference"])
+        for item in raw_validation_values])
+    raw_broad_corrected = np.nanmedian([
+        _robust_amplitude_rms(item["corrected"]["smooth_difference"])
+        for item in raw_validation_values])
+    raw_scatter = np.nanmedian([
+        np.nanmedian(training[amp]["models"]["raw_constant"]["scatter"][:20])
+        for amp in AMPLIFIERS])
+    print("    combined: q<20 %.6g -> %.6g; broad RMS %.6g -> %.6g; "
+          "median wavelength scatter q<20=%.6g" %
+          (raw_q20_legacy, raw_q20_corrected, raw_broad_legacy,
+           raw_broad_corrected, raw_scatter))
     print("  combined median comparison:")
     for model in ADDITIVE_MODELS:
         rows = [row for row in summary_rows if row["model"] == model]
@@ -2255,12 +2498,11 @@ def run_additive_bandaid(path, exposure, image, output_dir,
     print("  inferred correction positive at expected readout edge: %s" %
           ", ".join("%s=%s" % (model, "YES" if positive[model] else "NO")
                     for model in ADDITIVE_MODELS))
-    raw_scale = data["calibration"]["raw_basis_scale"]
     print("  median inferred A(q<20) in Raw-spectrum units (e-/A):")
     for amp in AMPLIFIERS:
         amplitude = np.nanmedian(
             training[amp]["models"]["raw_constant"]["applied"][:20])
-        print("    %s: %.6g" % (amp, amplitude / raw_scale))
+        print("    %s: %.6g" % (amp, amplitude))
     print("  no production model was selected by the diagnostic")
 
 
