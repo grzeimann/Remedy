@@ -2513,7 +2513,7 @@ def _scan_fold_metrics(validation_profiles, amp):
     validation = validation_profiles[amp]
     raw_legacy = validation["raw_validation"]["legacy"]
     raw_corrected = validation["raw_validation"]["corrected"]
-    legacy = validation["continuum"]["legacy"]
+    legacy = validation["legacy"]
     corrected = validation["models"]["raw_constant"]
     metrics = {
         "raw_q20_before": float(np.nanmedian(
