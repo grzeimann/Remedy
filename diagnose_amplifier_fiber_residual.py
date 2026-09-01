@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Diagnose amplifier-relative continuum residuals in Remedy M101 H5 files.
+"""Diagnose amplifier-relative residuals in Remedy M101 H5 files.
 
-The utility is read-only. It uses only the rectified Fibers products and
-processes one H5 at a time; it does not construct an image or inspect
-Raw.spectrum.
+The utility is read-only and processes one H5 at a time.  The normal path
+uses rectified Fibers products; the opt-in ``--spectral-sky-test`` path uses
+one exposure of the native Raw science spectra to test for sky-like edge
+structure.
 """
 
 from argparse import ArgumentParser
@@ -981,9 +982,442 @@ def run_candidate_ftf(files, output_dir, wave_center, half_width):
              np.nanmedian(np.abs(legacy[finite])) else "NO"))
 
 
+SPECTRAL_Q_BINS = ((0, 9), (10, 19), (20, 29), (30, 39),
+                   (40, 59), (60, 79), (80, 111))
+SPECTRAL_CONTINUUM_BINS = 30
+SPECTRAL_RAW_CHUNK = 2048
+
+
+def _broad_continuum_1d(values, wave, n_bins=SPECTRAL_CONTINUUM_BINS):
+    """Robust broad continuum using only a small number of wide bins."""
+    values = np.asarray(values, dtype=float)
+    wave = np.asarray(wave, dtype=float)
+    edges = np.linspace(0, values.size, n_bins + 1, dtype=int)
+    centers = []
+    medians = []
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        segment = values[lo:hi]
+        finite = np.isfinite(segment)
+        if finite.sum() >= max(3, (hi - lo) // 4):
+            centers.append(float(np.nanmedian(wave[lo:hi])))
+            medians.append(float(np.nanmedian(segment[finite])))
+    result = np.full(values.shape, np.nan, dtype=float)
+    if len(medians) >= 2:
+        result = np.interp(wave, np.asarray(centers), np.asarray(medians))
+    elif len(medians) == 1:
+        result[:] = medians[0]
+    return result
+
+
+def _robust_zero_slope(x, y):
+    finite = np.isfinite(x) & np.isfinite(y)
+    x = np.asarray(x)[finite]
+    y = np.asarray(y)[finite]
+    if x.size < 5 or np.sum(x * x) == 0.0:
+        return np.nan, np.full(y.shape, np.nan), finite
+    beta = float(np.sum(x * y) / np.sum(x * x))
+    for _ in range(3):
+        residual = y - beta * x
+        center = np.median(residual)
+        scale = 1.4826 * np.median(np.abs(residual - center))
+        if not np.isfinite(scale) or scale == 0.0:
+            break
+        keep = np.abs(residual - center) <= 4.0 * scale
+        if keep.sum() < 5 or np.sum(x[keep] * x[keep]) == 0.0:
+            break
+        beta = float(np.sum(x[keep] * y[keep]) /
+                     np.sum(x[keep] * x[keep]))
+    return beta, y - beta * x, finite
+
+
+def _robust_rms(values):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return np.nan
+    return float(1.4826 * np.median(np.abs(values - np.median(values))))
+
+
+def _spectral_fit(difference, sky, wave):
+    wave = np.asarray(wave, dtype=float)
+    d_hp = difference - _broad_continuum_1d(difference, wave)
+    s_hp = sky - _broad_continuum_1d(sky, wave)
+    beta, _, finite = _robust_zero_slope(s_hp, d_hp)
+    if np.sum(finite) >= 3:
+        x = s_hp[finite]
+        y = d_hp[finite]
+        residual = y - beta * x if np.isfinite(beta) else y
+        pearson = np.corrcoef(x, y)[0, 1] if np.std(x) and np.std(y) else np.nan
+        spearman = spearmanr(x, y).statistic
+    else:
+        residual = np.array([], dtype=float)
+        pearson = np.nan
+        spearman = np.nan
+    return {
+        "D": difference, "D_hp": d_hp, "S": sky, "S_hp": s_hp,
+        "beta": float(beta), "pearson": float(pearson),
+        "spearman": float(spearman),
+        "rms_before": _robust_rms(d_hp),
+        "rms_after": _robust_rms(residual),
+        "residual": (d_hp - beta * s_hp
+                     if np.isfinite(beta) else np.full(d_hp.shape, np.nan)),
+    }
+
+
+def _spectral_native_rows(path, exposure, image):
+    """Read one exposure's blank-sky Raw spectra and interpolate once."""
+    with tables.open_file(path, mode="r") as h5:
+        if not {"Info", "Raw"}.issubset(h5.root._v_children):
+            raise ValueError("%s must contain Info and Raw tables" % path)
+        info = h5.root.Info
+        raw = h5.root.Raw
+        if int(info.nrows) != int(raw.nrows):
+            raise ValueError("%s Info/Raw row mismatch" % path)
+        if not {"spectrum", "wave"}.issubset(raw.colnames):
+            raise ValueError("%s Raw lacks spectrum/wave" % path)
+        groups, labels, nexp = build_amplifier_groups(info)
+        if exposure < 1 or exposure > nexp:
+            raise ValueError("requested exposure %d but %s has %d exposures" %
+                             (exposure, path, nexp))
+        ra = np.asarray(info.cols.ra[:], dtype=float)
+        dec = np.asarray(info.cols.dec[:], dtype=float)
+        dra = ((ra - M101_RA_DEG) * np.cos(np.deg2rad(M101_DEC_DEG)) * 60.0)
+        ddec = (dec - M101_DEC_DEG) * 60.0
+        radial_blank = np.hypot(dra, ddec) > M101_SKY_MIN_RADIUS_ARCMIN
+        image_valid, image_blank = _image_blank_selection(image, ra, dec)
+        if image_blank is None:
+            raise ValueError("the spectral sky test requires --image")
+        row_j = np.full(int(info.nrows), -1, dtype=np.int16)
+        row_amp = np.full(int(info.nrows), "", dtype="U2")
+        for group in groups:
+            row_j[group["indices"]] = group["j"]
+            row_amp[group["indices"]] = group["amp"]
+        candidate = ((labels == exposure) & radial_blank & image_valid &
+                     image_blank)
+        candidate_indices = np.flatnonzero(candidate)
+        if candidate_indices.size == 0:
+            raise ValueError("no image-selected blank-sky fibers in exposure %d"
+                             % exposure)
+
+        native_by_amp = {amp: {"wave": [], "spectrum": [], "j": []}
+                         for amp in AMPLIFIERS}
+        n_wave = int(raw.coldtypes["spectrum"].shape[0])
+        minimum_finite = int(np.ceil(
+            M101_SKY_MIN_FINITE_FRACTION * n_wave))
+        for start in range(0, candidate_indices.size, SPECTRAL_RAW_CHUNK):
+            rows = candidate_indices[start:start + SPECTRAL_RAW_CHUNK]
+            spectrum = np.asarray(
+                raw.read_coordinates(rows, field="spectrum"), dtype=float)
+            wave = np.asarray(
+                raw.read_coordinates(rows, field="wave"), dtype=float)
+            keep = np.isfinite(spectrum).sum(axis=1) >= minimum_finite
+            for amp in AMPLIFIERS:
+                selected = keep & (row_amp[rows] == amp)
+                if np.any(selected):
+                    native_by_amp[amp]["wave"].append(wave[selected])
+                    native_by_amp[amp]["spectrum"].append(spectrum[selected])
+                    native_by_amp[amp]["j"].append(row_j[rows[selected]])
+        all_waves = [value for item in native_by_amp.values()
+                     for value in item["wave"]]
+        if not all_waves:
+            raise ValueError("no blank-sky fibers meet the finite-spectrum criterion")
+        sample_waves = np.vstack(all_waves)[:256]
+        common_wave = np.nanmedian(sample_waves, axis=0)
+        spectra_by_amp = {}
+        for amp, item in native_by_amp.items():
+            if not item["wave"]:
+                spectra_by_amp[amp] = {
+                    "spectrum": np.empty((0, n_wave)),
+                    "j": np.empty(0, dtype=int)}
+                continue
+            waves = np.vstack(item["wave"])
+            spectra = np.vstack(item["spectrum"])
+            rectified = np.full(spectra.shape, np.nan, dtype=float)
+            for index in range(spectra.shape[0]):
+                rectified[index] = np.interp(
+                    common_wave, waves[index], spectra[index],
+                    left=np.nan, right=np.nan)
+            spectra_by_amp[amp] = {
+                "spectrum": rectified,
+                "j": np.concatenate(item["j"]).astype(int),
+            }
+        counts = {
+            amp: int(spectra_by_amp[amp]["j"].size) for amp in AMPLIFIERS}
+        return {
+            "wave": common_wave, "by_amp": spectra_by_amp,
+            "counts": counts, "groups": groups, "nexp": nexp,
+            "candidate_count": int(candidate_indices.size),
+        }
+
+
+def _spectral_reference_profiles(data):
+    global _spectral_wave
+    _spectral_wave = np.asarray(data["wave"], dtype=float)
+    by_amp = data["by_amp"]
+    central_rows = []
+    for amp in AMPLIFIERS:
+        values = by_amp[amp]["spectrum"]
+        j = by_amp[amp]["j"]
+        selected = np.isin(j, REFERENCE_J)
+        if np.any(selected):
+            central_rows.append(values[selected])
+    if not central_rows:
+        raise ValueError("no blank-sky fibers in central reference region")
+    global_sky = np.nanmedian(np.vstack(central_rows), axis=0)
+    results = {}
+    for amp in AMPLIFIERS:
+        values = by_amp[amp]["spectrum"]
+        j = by_amp[amp]["j"]
+        q = j if amp in ("LL", "RU") else 111 - j
+        central = np.nanmedian(values[np.isin(j, REFERENCE_J)], axis=0)
+        edge = np.nanmedian(values[(q >= 0) & (q <= 19)], axis=0)
+        edge_fit = _spectral_fit(edge - central, central, _spectral_wave)
+        edge_global_fit = _spectral_fit(
+            edge - central, global_sky, _spectral_wave)
+        q_fits = []
+        for q_min, q_max in SPECTRAL_Q_BINS:
+            selected = (q >= q_min) & (q <= q_max)
+            difference = np.nanmedian(values[selected], axis=0) - central
+            fit = _spectral_fit(difference, central, _spectral_wave)
+            fit_global = _spectral_fit(difference, global_sky, _spectral_wave)
+            q_fits.append({
+                "q_min": q_min, "q_max": q_max,
+                "N_fibers": int(selected.sum()), "fit": fit,
+                "fit_global": fit_global,
+            })
+        results[amp] = {
+            "edge": edge_fit, "edge_global": edge_global_fit,
+            "q_fits": q_fits, "central": central, "global": global_sky,
+        }
+    return results
+
+
+def _write_spectral_outputs(output_dir, h5_name, exposure, data, profiles):
+    summary_fields = [
+        "h5", "exposure", "amplifier", "region", "q_min", "q_max",
+        "N_fibers", "beta", "beta_global", "Pearson_r", "Spearman_rho",
+        "robust_rms_before", "robust_rms_after",
+    ]
+    summary_rows = []
+    for amp in AMPLIFIERS:
+        edge = profiles[amp]["edge"]
+        edge_global = profiles[amp]["edge_global"]
+        j = data["by_amp"][amp]["j"]
+        q = j if amp in ("LL", "RU") else 111 - j
+        summary_rows.append({
+            "h5": h5_name, "exposure": exposure, "amplifier": amp,
+            "region": "edge", "q_min": 0, "q_max": 19,
+            "N_fibers": int(((q >= 0) & (q <= 19)).sum()),
+            "beta": edge["beta"], "beta_global": edge_global["beta"],
+            "Pearson_r": edge["pearson"], "Spearman_rho": edge["spearman"],
+            "robust_rms_before": edge["rms_before"],
+            "robust_rms_after": edge["rms_after"],
+        })
+        for qfit in profiles[amp]["q_fits"]:
+            fit = qfit["fit"]
+            fit_global = qfit["fit_global"]
+            summary_rows.append({
+                "h5": h5_name, "exposure": exposure, "amplifier": amp,
+                "region": "qbin", "q_min": qfit["q_min"],
+                "q_max": qfit["q_max"], "N_fibers": qfit["N_fibers"],
+                "beta": fit["beta"], "beta_global": fit_global["beta"],
+                "Pearson_r": fit["pearson"],
+                "Spearman_rho": fit["spearman"],
+                "robust_rms_before": fit["rms_before"],
+                "robust_rms_after": fit["rms_after"],
+            })
+    with (output_dir / "sky_spectral_edge_fit_summary.csv").open(
+            "w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=summary_fields)
+        writer.writeheader()
+        writer.writerows(summary_rows)
+
+    spectral_fields = ["h5", "exposure", "wavelength", "amplifier",
+                       "D", "D_hp", "S", "S_hp", "beta_S_hp",
+                       "residual_after_fit"]
+    with (output_dir / "edge_excess_spectra.csv").open(
+            "w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=spectral_fields)
+        writer.writeheader()
+        for amp in AMPLIFIERS:
+            fit = profiles[amp]["edge"]
+            for wave, values in zip(data["wave"], zip(
+                    fit["D"], fit["D_hp"], fit["S"], fit["S_hp"],
+                    fit["S_hp"] * fit["beta"], fit["residual"])):
+                writer.writerow({
+                    "h5": h5_name, "exposure": exposure,
+                    "wavelength": wave, "amplifier": amp,
+                    "D": values[0], "D_hp": values[1], "S": values[2],
+                    "S_hp": values[3], "beta_S_hp": values[4],
+                    "residual_after_fit": values[5],
+                })
+    return summary_rows
+
+
+def _spectral_feature_centers(wave, spectrum, count=4):
+    finite = np.isfinite(spectrum)
+    if not np.any(finite):
+        return []
+    order = np.argsort(np.abs(np.where(finite, spectrum, 0.0)))[::-1]
+    selected = []
+    for index in order:
+        if all(abs(int(index) - previous) > 12 for previous in selected):
+            selected.append(int(index))
+        if len(selected) == count:
+            break
+    return [float(wave[index]) for index in sorted(selected)]
+
+
+def make_spectral_figures(output_dir, wave, profiles):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(2, 4, figsize=(16, 7), sharex=True)
+    for column, amp in enumerate(AMPLIFIERS):
+        fit = profiles[amp]["edge"]
+        axes[0, column].plot(wave, fit["D"], label="D")
+        axes[0, column].plot(wave, fit["beta"] * fit["S"], "--",
+                             label="beta S")
+        axes[1, column].plot(wave, fit["D_hp"], label="D_hp")
+        axes[1, column].plot(wave, fit["beta"] * fit["S_hp"], "--",
+                             label="beta S_hp")
+        axes[0, column].set_title(amp)
+        for row in range(2):
+            axes[row, column].grid(alpha=.2)
+        axes[1, column].set_xlabel("native wavelength (A)")
+        axes[0, column].text(
+            .02, .96, "beta=%.3g\\nr=%.3g\\nrho=%.3g\\nRMS %.3g -> %.3g" %
+            (fit["beta"], fit["pearson"], fit["spearman"],
+             fit["rms_before"], fit["rms_after"]),
+            transform=axes[0, column].transAxes, va="top", fontsize=7)
+    axes[0, 0].set_ylabel("D")
+    axes[1, 0].set_ylabel("high-pass")
+    axes[0, 0].legend(fontsize=7)
+    axes[1, 0].legend(fontsize=7)
+    fig.suptitle("Blank-sky edge excess versus sky spectrum")
+    fig.tight_layout()
+    fig.savefig(output_dir / "edge_excess_spectrum_vs_sky.png", dpi=160)
+    plt.close(fig)
+
+    d_hp = np.nanmedian(np.vstack(
+        [profiles[amp]["edge"]["D_hp"] for amp in AMPLIFIERS]), axis=0)
+    s_hp = np.nanmedian(np.vstack(
+        [profiles[amp]["edge"]["S_hp"] for amp in AMPLIFIERS]), axis=0)
+    beta, _, _ = _robust_zero_slope(s_hp, d_hp)
+    centers = _spectral_feature_centers(wave, s_hp)
+    if not centers:
+        centers = [float(np.nanmedian(wave))]
+    fig, axes = plt.subplots(len(centers), 1,
+                             figsize=(9, max(3, 2.4 * len(centers))),
+                             squeeze=False)
+    for axis, center in zip(axes[:, 0], centers):
+        selected = (wave >= center - 12.0) & (wave <= center + 12.0)
+        axis.plot(wave[selected], s_hp[selected], label="S_hp")
+        axis.plot(wave[selected], d_hp[selected], label="D_hp")
+        axis.plot(wave[selected], beta * s_hp[selected], "--",
+                  label="beta S_hp")
+        axis.set_title("%.1f A" % center)
+        axis.grid(alpha=.2)
+    if centers:
+        axes[0, 0].legend(fontsize=8)
+    fig.suptitle("Automatically selected strong sky-feature regions")
+    fig.tight_layout()
+    fig.savefig(output_dir / "edge_excess_sky_feature_zooms.png", dpi=160)
+    plt.close(fig)
+
+    fig, axis = plt.subplots(figsize=(9, 5))
+    for amp in AMPLIFIERS:
+        q = [0.5 * (item["q_min"] + item["q_max"])
+             for item in profiles[amp]["q_fits"]]
+        beta_q = [item["fit"]["beta"] for item in profiles[amp]["q_fits"]]
+        axis.plot(q, beta_q, "o-", label=amp)
+    combined = []
+    for index in range(len(SPECTRAL_Q_BINS)):
+        combined.append(np.nanmedian([
+            profiles[amp]["q_fits"][index]["fit"]["beta"]
+            for amp in AMPLIFIERS]))
+    axis.plot([0.5 * sum(item) for item in SPECTRAL_Q_BINS], combined,
+              "k--", label="combined")
+    axis.axvspan(0, 19, color="tab:red", alpha=.10)
+    axis.set(xlabel="folded readout distance q", ylabel="beta(q)")
+    axis.grid(alpha=.2)
+    axis.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(output_dir / "sky_like_residual_vs_readout_distance.png",
+                dpi=160)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8), sharex=True)
+    for axis, amp in zip(axes.ravel(), AMPLIFIERS):
+        fit = profiles[amp]["edge"]
+        axis.plot(wave, fit["D_hp"], label="D_hp")
+        axis.plot(wave, fit["residual"], label="D_hp - beta S_hp")
+        axis.set_title(amp)
+        axis.grid(alpha=.2)
+        axis.legend(fontsize=8)
+    fig.suptitle("Edge excess after removing fitted sky-like component")
+    fig.tight_layout()
+    fig.savefig(output_dir / "edge_excess_after_sky_component_removal.png",
+                dpi=160)
+    plt.close(fig)
+
+
+def run_spectral_sky_test(path, exposure, image, output_dir):
+    data = _spectral_native_rows(path, exposure, image)
+    profiles = _spectral_reference_profiles(data)
+    rows = _write_spectral_outputs(
+        output_dir, Path(path).name, exposure, data, profiles)
+    make_spectral_figures(output_dir, data["wave"], profiles)
+    print("")
+    print("Spectral sky-like residual experiment:")
+    print("  selected H5/exposure: %s / %d" % (path, exposure))
+    print("  analyzed stream: Raw.spectrum/Raw.wave after legacy FTF, "
+          "before rectification and sky subtraction")
+    print("  Raw.mscispectrum and the candidate-FTF path were not used")
+    print("  blank-sky fibers after finite-spectrum check: %d" %
+          sum(data["counts"].values()))
+    print("  blank-sky fibers by amplifier: %s" %
+          ", ".join("%s=%d" % (amp, data["counts"][amp])
+                   for amp in AMPLIFIERS))
+    for amp in AMPLIFIERS:
+        j = data["by_amp"][amp]["j"]
+        print("  %s: edge q<20=%d, center j=40..70=%d" %
+              (amp, int(np.sum((j if amp in ("LL", "RU") else 111 - j) < 20)),
+               int(np.isin(j, REFERENCE_J).sum())))
+        fit = profiles[amp]["edge"]
+        reduction = (100.0 * (1.0 - fit["rms_after"] / fit["rms_before"])
+                     if fit["rms_before"] else np.nan)
+        print("    beta=%.6g, Pearson=%.6g, Spearman=%.6g, "
+              "robust RMS %.6g -> %.6g (%.3g%% reduction)" %
+              (fit["beta"], fit["pearson"], fit["spearman"],
+               fit["rms_before"], fit["rms_after"], reduction))
+    print("  beta(q):")
+    for amp in AMPLIFIERS:
+        print("    %s: %s" % (amp, ", ".join(
+            "[%d-%d]=%.5g" % (item["q_min"], item["q_max"],
+                               item["fit"]["beta"])
+            for item in profiles[amp]["q_fits"])))
+    edge_fits = [profiles[amp]["edge"] for amp in AMPLIFIERS]
+    positive = [fit["beta"] > 0.0 and fit["pearson"] > 0.0 and
+                fit["rms_after"] < fit["rms_before"]
+                for fit in edge_fits]
+    if all(positive):
+        conclusion = "YES"
+    elif any(positive):
+        conclusion = "AMBIGUOUS"
+    else:
+        conclusion = "NO"
+    print("  detailed edge residual follows sky spectral structure: %s"
+          % conclusion)
+
+
 def main():
     parser = ArgumentParser(description=__doc__)
-    parser.add_argument("h5_pattern", help="quoted H5 glob, e.g. '2*.h5'")
+    parser.add_argument("h5_pattern", nargs="?",
+                        help="quoted H5 glob, e.g. '2*.h5'")
+    parser.add_argument("--h5", dest="h5_file",
+                        help="single H5 file/glob for --spectral-sky-test")
     parser.add_argument("--image", type=Path,
                         help="optional M101 image for binimage < 0.01 selection")
     parser.add_argument("--wave-center", type=float, default=4600.0)
@@ -993,10 +1427,17 @@ def main():
                         help="shot stem or comma-separated shot stems to exclude")
     parser.add_argument("--candidate-ftf", action="store_true",
                         help="run the experimental Raw master-science FTF test")
+    parser.add_argument("--spectral-sky-test", action="store_true",
+                        help="run only the selected Raw sky spectral test")
+    parser.add_argument("--exposure", type=int, default=1,
+                        help="1-based exposure for --spectral-sky-test")
     args = parser.parse_args()
     if args.half_width <= 0.0:
         parser.error("--half-width must be positive")
-    files = resolved_h5_files(args.h5_pattern)
+    input_pattern = args.h5_file or args.h5_pattern
+    if not input_pattern:
+        parser.error("an H5 glob/path is required")
+    files = resolved_h5_files(input_pattern)
     excludes = {token.strip() for value in args.exclude
                 for token in value.split(",") if token.strip()}
     files = [path for path in files
@@ -1005,12 +1446,26 @@ def main():
     if not files:
         parser.error("no H5 files remain after pattern/exclusion filtering")
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    print("Supplied H5 pattern: %s" % args.h5_pattern)
+    print("Supplied H5 pattern: %s" % input_pattern)
     print("H5 files resolved after exclusions: %d" % len(files))
     for path in files:
         print("  %s" % path)
     if excludes:
         print("Excluded shot identifiers: %s" % ", ".join(sorted(excludes)))
+    if args.spectral_sky_test:
+        if len(files) != 1:
+            parser.error("--spectral-sky-test requires exactly one resolved H5; "
+                         "select one file with --h5 or a single positional path")
+        if args.image is None:
+            parser.error("--spectral-sky-test requires --image for blank-sky "
+                         "selection")
+        image = load_blank_image(args.image)
+        try:
+            run_spectral_sky_test(files[0], args.exposure, image,
+                                  args.output_dir)
+        finally:
+            image["hdul"].close()
+        return
     image = load_blank_image(args.image)
     results = []
     try:
