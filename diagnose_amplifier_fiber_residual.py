@@ -504,6 +504,483 @@ def make_figures(output_dir, profiles, records):
     plt.close(fig)
 
 
+def _candidate_physical_groups(groups):
+    keys = sorted(set((group["ifuslot"], group["amp"]) for group in groups),
+                  key=lambda key: (int(key[0]), key[1]))
+    by_key = {key: [] for key in keys}
+    for group in groups:
+        by_key[(group["ifuslot"], group["amp"])].append(group)
+    if any(len(value) != EXPECTED_EXPOSURES for value in by_key.values()):
+        raise ValueError("candidate FTF requires three exposure copies for "
+                         "every physical IFUSLOT/amplifier")
+    return keys, by_key
+
+
+def _broad_candidate_correction(master, wave):
+    """Make a deliberately broad, positive, center-normalized correction."""
+    nphys, nfiber, n_wave = master.shape
+    n_bins = 8
+    edges = np.linspace(0, n_wave, n_bins + 1, dtype=int)
+    reference = np.nanmedian(master[:, REFERENCE_J, :], axis=1)
+    c_raw = np.full(master.shape, np.nan, dtype=np.float32)
+    np.divide(master, reference[:, None, :], out=c_raw,
+              where=np.isfinite(reference[:, None, :])
+              & (reference[:, None, :] != 0.0))
+    correction = np.ones(master.shape, dtype=np.float32)
+    for p in range(nphys):
+        for j in range(nfiber):
+            values = c_raw[p, j]
+            centers = []
+            broad = []
+            for b in range(n_bins):
+                lo, hi = edges[b], edges[b + 1]
+                finite = np.isfinite(values[lo:hi]) & (values[lo:hi] > 0.0)
+                if finite.sum() >= max(3, (hi - lo) // 4):
+                    broad.append(float(np.nanmedian(values[lo:hi][finite])))
+                    centers.append(float(np.nanmedian(wave[p, j, lo:hi])))
+            if len(broad) >= 2:
+                valid = np.isfinite(centers) & np.isfinite(broad)
+                if valid.sum() >= 2:
+                    correction[p, j] = np.interp(
+                        wave[p, j], np.asarray(centers)[valid],
+                        np.asarray(broad)[valid],
+                        left=broad[np.flatnonzero(valid)[0]],
+                        right=broad[np.flatnonzero(valid)[-1]])
+            elif len(broad) == 1:
+                correction[p, j] = broad[0]
+    center_correction = np.nanmedian(
+        correction[:, REFERENCE_J, :], axis=1)
+    for p in range(nphys):
+        good = np.isfinite(center_correction[p]) & (
+            center_correction[p] != 0.0)
+        normalizer = np.ones(n_wave, dtype=np.float32)
+        normalizer[good] = center_correction[p, good]
+        correction[p] /= normalizer[None, :]
+    correction[~np.isfinite(correction) | (correction <= 0.0)] = 1.0
+    return correction
+
+
+def _candidate_read_h5(path, wave_center, half_width):
+    """Derive C from Raw.mscispectrum and test it on Raw.spectrum."""
+    with tables.open_file(path, mode="r") as h5:
+        if not {"Info", "Raw", "Fibers"}.issubset(h5.root._v_children):
+            raise ValueError("%s must contain Info, Raw, and Fibers" % path)
+        info = h5.root.Info
+        raw = h5.root.Raw
+        fibers = h5.root.Fibers
+        if int(info.nrows) != int(raw.nrows) or int(info.nrows) != int(fibers.nrows):
+            raise ValueError("%s Info/Raw/Fibers row mismatch" % path)
+        raw_required = {"mscispectrum", "spectrum", "wave"}
+        fiber_required = {"fiber_to_fiber"}
+        if not raw_required.issubset(raw.colnames):
+            raise ValueError("%s Raw table lacks candidate columns" % path)
+        if not fiber_required.issubset(fibers.colnames):
+            raise ValueError("%s Fibers table lacks fiber_to_fiber" % path)
+        nrows = int(raw.nrows)
+        n_wave = int(raw.coldtypes["mscispectrum"].shape[0])
+        if n_wave != 1032:
+            raise ValueError("%s Raw native spectrum has %d bins; expected 1032"
+                             % (path, n_wave))
+        if int(raw.coldtypes["wave"].shape[0]) != n_wave:
+            raise ValueError("%s Raw wave/spectrum shapes disagree" % path)
+        if int(fibers.coldtypes["fiber_to_fiber"].shape[0]) != 1036:
+            raise ValueError("%s Fibers FTF has unexpected length" % path)
+
+        info_rows = {
+            "ifuslot": np.asarray(info.cols.ifuslot[:]),
+            "amp": np.asarray([_text(value) for value in info.cols.amp[:]]),
+        }
+        groups, labels, nexp = build_amplifier_groups(info)
+        physical_keys, groups_by_key = _candidate_physical_groups(groups)
+        physical_id = {key: number for number, key
+                       in enumerate(physical_keys)}
+        row_pid = np.empty(nrows, dtype=np.int32)
+        row_j = np.empty(nrows, dtype=np.int16)
+        for key, physical_groups in groups_by_key.items():
+            pid = physical_id[key]
+            for group in physical_groups:
+                row_pid[group["indices"]] = pid
+                row_j[group["indices"]] = group["j"]
+        nphys = len(physical_keys)
+        master = np.full((nphys, FIBERS_PER_AMPLIFIER, n_wave),
+                         np.nan, dtype=np.float32)
+        master_wave = np.full_like(master, np.nan)
+        difference_sum = 0.0
+        difference_count = 0
+        difference_max = 0.0
+        for start in range(0, nrows, ROW_CHUNK):
+            stop = min(nrows, start + ROW_CHUNK)
+            mscispectrum = np.asarray(
+                raw.read(start=start, stop=stop, field="mscispectrum"),
+                dtype=np.float32)
+            wave = np.asarray(
+                raw.read(start=start, stop=stop, field="wave"),
+                dtype=np.float32)
+            ids = np.arange(start, stop)
+            first = labels[ids] == 1
+            if np.any(first):
+                master[row_pid[ids[first]], row_j[ids[first]]] = (
+                    mscispectrum[first])
+                master_wave[row_pid[ids[first]], row_j[ids[first]]] = (
+                    wave[first])
+            repeated = ~first
+            if np.any(repeated):
+                reference = master[row_pid[ids[repeated]],
+                                   row_j[ids[repeated]]]
+                values = mscispectrum[repeated]
+                valid = np.isfinite(values) & np.isfinite(reference)
+                differences = np.abs(values - reference)
+                differences = differences[valid]
+                if differences.size:
+                    difference_sum += float(differences.sum())
+                    difference_count += int(differences.size)
+                    difference_max = max(difference_max,
+                                         float(differences.max()))
+        band = ((RECTIFIED_WAVE >= wave_center - half_width) &
+                (RECTIFIED_WAVE <= wave_center + half_width))
+        band_indices = np.flatnonzero(band)
+        if band_indices.size == 0:
+            raise ValueError("requested continuum band has no wavelength bins")
+        correction = _broad_candidate_correction(master, master_wave)
+        c_rect = np.ones((nphys, FIBERS_PER_AMPLIFIER,
+                          band_indices.size), dtype=np.float32)
+        for p in range(nphys):
+            for j in range(FIBERS_PER_AMPLIFIER):
+                c_rect[p, j] = np.interp(
+                    RECTIFIED_WAVE[band_indices], master_wave[p, j],
+                    correction[p, j],
+                    left=1.0, right=1.0)
+        raw_legacy = np.full(nrows, np.nan, dtype=float)
+        raw_candidate = np.full(nrows, np.nan, dtype=float)
+        ftf_legacy = np.full(nrows, np.nan, dtype=float)
+        ftf_candidate = np.full(nrows, np.nan, dtype=float)
+        for start in range(0, nrows, ROW_CHUNK):
+            stop = min(nrows, start + ROW_CHUNK)
+            spectrum = np.asarray(
+                raw.read(start=start, stop=stop, field="spectrum"),
+                dtype=float)
+            wave = np.asarray(
+                raw.read(start=start, stop=stop, field="wave"),
+                dtype=float)
+            ftf = np.asarray(
+                fibers.read(start=start, stop=stop,
+                            field="fiber_to_fiber"), dtype=float)
+            ids = np.arange(start, stop)
+            for local, row in enumerate(ids):
+                pid = row_pid[row]
+                j = row_j[row]
+                c_native = np.interp(
+                    wave[local], master_wave[pid, j], correction[pid, j],
+                    left=1.0, right=1.0)
+                native_band = ((wave[local] >= wave_center - half_width) &
+                               (wave[local] <= wave_center + half_width))
+                raw_legacy[row] = np.nanmedian(
+                    spectrum[local, native_band])
+                raw_candidate[row] = np.nanmedian(
+                    spectrum[local, native_band] /
+                    c_native[native_band])
+                ftf_legacy[row] = np.nanmedian(ftf[local, band_indices])
+                ftf_candidate[row] = np.nanmedian(
+                    ftf[local, band_indices] * c_rect[pid, j])
+
+        candidate_records = []
+        cal_profiles = {amp: [] for amp in AMPLIFIERS}
+        raw_profiles = {amp: [] for amp in AMPLIFIERS}
+        for key, physical_groups in groups_by_key.items():
+            pid = physical_id[key]
+            master_c = np.nanmedian(c_rect[pid], axis=1)
+            cal_profiles[key[1]].append({
+                "C": master_c,
+                "legacy_ftf": ftf_legacy[
+                    physical_groups[0]["indices"]].copy(),
+                "candidate_ftf": ftf_candidate[
+                    physical_groups[0]["indices"]].copy(),
+                "C_minus_1": master_c - 1.0,
+            })
+            for group in physical_groups:
+                indices = group["indices"]
+                f = ftf_legacy[indices]
+                fc = ftf_candidate[indices]
+                s = raw_legacy[indices]
+                sc = raw_candidate[indices]
+                reference_f = np.nanmedian(f[REFERENCE_J])
+                reference_fc = np.nanmedian(fc[REFERENCE_J])
+                center_s = np.nanmedian(s[REFERENCE_J])
+                center_sc = np.nanmedian(sc[REFERENCE_J])
+                edge = EDGE_J[group["amp"]]
+                e_s = np.nanmedian(s[edge]) - center_s
+                e_sc = np.nanmedian(sc[edge]) - center_sc
+                candidate_records.append({
+                    "h5": Path(path).name,
+                    "exposure": group["exposure"],
+                    "specid": group["specid"],
+                    "ifuslot": group["ifuslot"],
+                    "ifuid": group["ifuid"],
+                    "amp": group["amp"],
+                    "legacy_ftf_edge_contrast": np.nanmedian(f[edge]) /
+                    reference_f - 1.0,
+                    "candidate_ftf_edge_contrast": np.nanmedian(fc[edge]) /
+                    reference_fc - 1.0,
+                    "median_C_edge": np.nanmedian(
+                        c_rect[pid, edge]),
+                    "median_C_center": np.nanmedian(
+                        c_rect[pid, REFERENCE_J]),
+                    "E_raw_legacy": e_s,
+                    "E_raw_candidate": e_sc,
+                    "fractional_E_raw_legacy": (
+                        e_s / center_s if np.isfinite(center_s)
+                        and center_s != 0.0 else np.nan),
+                    "fractional_E_raw_candidate": (
+                        e_sc / center_sc if np.isfinite(center_sc)
+                        and center_sc != 0.0 else np.nan),
+                    "B": np.nanmedian(
+                        np.asarray(c_rect[pid, REFERENCE_J])),
+                    "science_reference": center_s,
+                    "science_candidate_reference": center_sc,
+                    "science_edge": np.nanmedian(s[edge]),
+                    "science_candidate_edge": np.nanmedian(sc[edge]),
+                })
+                raw_profiles[group["amp"]].append({
+                    "legacy": s - center_s,
+                    "candidate": sc - center_sc,
+                })
+        return {
+            "records": candidate_records,
+            "cal_profiles": cal_profiles,
+            "raw_profiles": raw_profiles,
+            "repeat_mean_abs": (difference_sum / difference_count
+                                if difference_count else np.nan),
+            "repeat_max_abs": difference_max,
+            "n_repeat_values": difference_count,
+            "n_band": int(band_indices.size),
+            "nexp": nexp,
+            "nphys": nphys,
+            "physical_keys": physical_keys,
+        }
+
+
+def _candidate_profile_rows(cal_profiles, raw_profiles):
+    fields = ("C", "C_minus_1", "legacy_ftf", "candidate_ftf")
+    rows = []
+    for amp in AMPLIFIERS:
+        for field in fields:
+            arrays = [item[field] for item in cal_profiles[amp]]
+            values = np.asarray(arrays, dtype=float)
+            if field == "legacy_ftf":
+                values = values / np.nanmedian(values[:, REFERENCE_J], axis=1)[:, None]
+            elif field == "candidate_ftf":
+                values = values / np.nanmedian(values[:, REFERENCE_J], axis=1)[:, None]
+            if amp in ("LU", "RL"):
+                values = values[:, ::-1]
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                median = np.nanmedian(values, axis=0)
+                p16, p84 = np.nanpercentile(values, [16, 84], axis=0)
+            for q in range(FIBERS_PER_AMPLIFIER):
+                rows.append({
+                    "coordinate": "q", "amplifier": amp,
+                    "profile": field, "q": q,
+                    "median": median[q], "p16": p16[q], "p84": p84[q],
+                    "n_instances": int(np.isfinite(values[:, q]).sum()),
+                })
+        for field in ("legacy", "candidate"):
+            arrays = [item[field] for item in raw_profiles[amp]]
+            values = np.asarray(arrays, dtype=float)
+            if amp in ("LU", "RL"):
+                values = values[:, ::-1]
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                median = np.nanmedian(values, axis=0)
+                p16, p84 = np.nanpercentile(values, [16, 84], axis=0)
+            for q in range(FIBERS_PER_AMPLIFIER):
+                rows.append({
+                    "coordinate": "q", "amplifier": amp,
+                    "profile": "raw_" + field, "q": q,
+                    "median": median[q], "p16": p16[q], "p84": p84[q],
+                    "n_instances": int(np.isfinite(values[:, q]).sum()),
+                })
+    return rows
+
+
+def write_candidate_summary(path, records):
+    fields = ["h5", "exposure", "specid", "ifuslot", "ifuid", "amp",
+              "legacy_ftf_edge_contrast", "candidate_ftf_edge_contrast",
+              "median_C_edge", "median_C_center", "E_raw_legacy",
+              "E_raw_candidate", "fractional_E_raw_legacy",
+              "fractional_E_raw_candidate", "B", "science_reference",
+              "science_candidate_reference", "science_edge",
+              "science_candidate_edge"]
+    with Path(path).open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows({field: record[field] for field in fields}
+                         for record in records)
+
+
+def write_candidate_profiles(path, rows):
+    fields = ["coordinate", "amplifier", "profile", "q", "median",
+              "p16", "p84", "n_instances"]
+    with Path(path).open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def make_candidate_figures(output_dir, cal_profiles, raw_profiles):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    x = np.arange(FIBERS_PER_AMPLIFIER)
+    fig, axes = plt.subplots(3, 1, figsize=(10, 11), sharex=True)
+    colors = dict(zip(AMPLIFIERS, ("tab:blue", "tab:orange",
+                                   "tab:green", "tab:red")))
+    for amp in AMPLIFIERS:
+        c = np.asarray([item["C"] for item in cal_profiles[amp]])
+        f = np.asarray([item["legacy_ftf"] for item in cal_profiles[amp]])
+        fc = np.asarray([item["candidate_ftf"] for item in cal_profiles[amp]])
+        c = c[:, ::-1] if amp in ("LU", "RL") else c
+        if amp in ("LU", "RL"):
+            f = f[:, ::-1]
+            fc = fc[:, ::-1]
+        f = f / np.nanmedian(f[:, REFERENCE_J], axis=1)[:, None]
+        fc = fc / np.nanmedian(fc[:, REFERENCE_J], axis=1)[:, None]
+        for axis, values, label in (
+                (axes[0], c, amp),
+                (axes[1], f, amp + " legacy"),
+                (axes[1], fc, amp + " candidate")):
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                median = np.nanmedian(values, axis=0)
+                p16, p84 = np.nanpercentile(values, [16, 84], axis=0)
+            axis.plot(x, median, color=colors[amp],
+                      linestyle="--" if "candidate" in label else "-",
+                      label=label, lw=1.0)
+            if axis is axes[0]:
+                axis.fill_between(x, p16, p84, color=colors[amp], alpha=.10)
+    c_values = []
+    for amp in AMPLIFIERS:
+        values = np.asarray([item["C"] for item in cal_profiles[amp]])
+        values = values[:, ::-1] if amp in ("LU", "RL") else values
+        c_values.append(values)
+    if c_values:
+        axes[0].plot(x, np.nanmedian(np.vstack(c_values), axis=0),
+                     "k--", lw=1.5, label="all amps")
+    axes[2].plot(x, np.nanmedian(np.vstack(c_values), axis=0) - 1.0,
+                 "k-", lw=1.5, label="combined C-1")
+    axes[0].set_ylabel("C(q) at 4600 A")
+    axes[1].set_ylabel("relative FTF")
+    axes[2].set_ylabel("C(q)-1")
+    axes[2].set_xlabel("folded readout distance q")
+    for axis in axes:
+        axis.axvspan(0, 19, color="tab:red", alpha=.10)
+        axis.grid(alpha=.2)
+    axes[0].legend(ncol=5, fontsize=7)
+    axes[1].legend(ncol=4, fontsize=7)
+    fig.suptitle("Master-science residual response and candidate FTF")
+    fig.tight_layout()
+    fig.savefig(output_dir / "master_science_ftf_correction_readout.png",
+                dpi=160)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(1, 5, figsize=(18, 4), sharey=True)
+    all_legacy, all_candidate = [], []
+    for column, amp in enumerate(AMPLIFIERS):
+        for field, style, label in (("legacy", "-", "legacy"),
+                                    ("candidate", "--", "candidate")):
+            values = np.asarray([item[field] for item in raw_profiles[amp]])
+            values = values[:, ::-1] if amp in ("LU", "RL") else values
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                median = np.nanmedian(values, axis=0)
+                p16, p84 = np.nanpercentile(values, [16, 84], axis=0)
+            axes[column].fill_between(x, p16, p84, alpha=.15)
+            axes[column].plot(x, median, style, label=label)
+            (all_legacy if field == "legacy" else all_candidate).extend(values)
+        axes[column].set_title(amp)
+        axes[column].axvspan(0, 19, color="tab:red", alpha=.10)
+        axes[column].grid(alpha=.2)
+        axes[column].legend(fontsize=8)
+    axes[0].set_ylabel("Raw spectrum minus center")
+    axes[0].set_xlabel("q")
+    for axis in axes[1:]:
+        axis.set_xlabel("q")
+    if all_legacy and all_candidate:
+        axes[4].cla()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            axes[4].plot(x, np.nanmedian(np.asarray(all_legacy), axis=0),
+                         label="legacy")
+            axes[4].plot(x, np.nanmedian(np.asarray(all_candidate), axis=0),
+                         "--", label="candidate")
+        axes[4].set_title("all amps")
+        axes[4].axvspan(0, 19, color="tab:red", alpha=.10)
+        axes[4].grid(alpha=.2)
+        axes[4].legend(fontsize=8)
+    fig.suptitle("Independent Raw science before/after candidate FTF")
+    fig.tight_layout()
+    fig.savefig(output_dir / "raw_science_candidate_ftf_before_after.png",
+                dpi=160)
+    plt.close(fig)
+
+
+def run_candidate_ftf(files, output_dir, wave_center, half_width):
+    results = [_candidate_read_h5(path, wave_center, half_width)
+               for path in files]
+    records = [record for result in results for record in result["records"]]
+    cal_profiles = {amp: [item for result in results
+                          for item in result["cal_profiles"][amp]]
+                    for amp in AMPLIFIERS}
+    raw_profiles = {amp: [item for result in results
+                          for item in result["raw_profiles"][amp]]
+                    for amp in AMPLIFIERS}
+    profile_rows = _candidate_profile_rows(cal_profiles, raw_profiles)
+    write_candidate_summary(output_dir / "candidate_ftf_summary.csv", records)
+    write_candidate_profiles(output_dir / "candidate_ftf_profiles.csv",
+                             profile_rows)
+    make_candidate_figures(output_dir, cal_profiles, raw_profiles)
+
+    print("")
+    print("Candidate FTF experiment:")
+    print("  repeated master-science copies: mean/max absolute disagreement "
+          "%.6g / %.6g over %d finite values" %
+          (np.nanmean([result["repeat_mean_abs"] for result in results]),
+           np.nanmax([result["repeat_max_abs"] for result in results]),
+           sum(result["n_repeat_values"] for result in results)))
+    for amp in AMPLIFIERS:
+        subset = [record for record in records if record["amp"] == amp]
+        print("  %s: median C(edge)=%.6g, C(center)=%.6g, "
+              "legacy/candidate FTF edge contrast=%.6g/%.6g" %
+              (amp, np.nanmedian([record["median_C_edge"] for record in subset]),
+               np.nanmedian([record["median_C_center"] for record in subset]),
+               np.nanmedian([record["legacy_ftf_edge_contrast"]
+                             for record in subset]),
+               np.nanmedian([record["candidate_ftf_edge_contrast"]
+                             for record in subset])))
+    legacy = np.asarray([record["E_raw_legacy"] for record in records])
+    candidate = np.asarray([record["E_raw_candidate"] for record in records])
+    finite = np.isfinite(legacy) & np.isfinite(candidate)
+    legacy_median = np.nanmedian(legacy)
+    candidate_median = np.nanmedian(candidate)
+    reduction = (100.0 * (1.0 - abs(candidate_median) / abs(legacy_median))
+                 if legacy_median != 0.0 else np.nan)
+    print("  actual Raw science: median E legacy/candidate=%.6g/%.6g; "
+          "|E| change=%.6g%%" %
+          (legacy_median, candidate_median, reduction))
+    print("  combined fractional E legacy/candidate=%.6g/%.6g" %
+          (np.nanmedian([record["fractional_E_raw_legacy"]
+                         for record in records]),
+           np.nanmedian([record["fractional_E_raw_candidate"]
+                         for record in records])))
+    print("  master-science correction positive at expected readout edge: %s"
+          % ("YES" if np.nanmedian(
+              [record["median_C_edge"] - record["median_C_center"]
+               for record in records]) > 0.0 else "NO"))
+    print("  M101 readout-edge residual reduced by candidate correction: %s"
+          % ("YES" if np.nanmedian(np.abs(candidate[finite])) <
+             np.nanmedian(np.abs(legacy[finite])) else "NO"))
+
+
 def main():
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("h5_pattern", help="quoted H5 glob, e.g. '2*.h5'")
@@ -514,6 +991,8 @@ def main():
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--exclude", action="append", default=[],
                         help="shot stem or comma-separated shot stems to exclude")
+    parser.add_argument("--candidate-ftf", action="store_true",
+                        help="run the experimental Raw master-science FTF test")
     args = parser.parse_args()
     if args.half_width <= 0.0:
         parser.error("--half-width must be positive")
@@ -559,6 +1038,9 @@ def main():
     write_profile_csv(args.output_dir / "amplifier_profiles.csv",
                       all_profiles)
     make_figures(args.output_dir, profiles, records)
+    if args.candidate_ftf:
+        run_candidate_ftf(files, args.output_dir, args.wave_center,
+                          args.half_width)
 
     print("")
     print("Bookkeeping:")
