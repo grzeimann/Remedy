@@ -1187,7 +1187,8 @@ def _spectral_reference_profiles(data):
             })
         results[amp] = {
             "edge": edge_fit, "edge_global": edge_global_fit,
-            "q_fits": q_fits, "central": central, "global": global_sky,
+            "q_fits": q_fits, "central": central, "edge_spectrum": edge,
+            "global": global_sky,
         }
     return results
 
@@ -1266,6 +1267,121 @@ def _spectral_feature_centers(wave, spectrum, count=4):
         if len(selected) == count:
             break
     return [float(wave[index]) for index in sorted(selected)]
+
+
+def _robust_ylim(*arrays, pad_fraction=0.2):
+    values = []
+    for array in arrays:
+        finite = np.asarray(array, dtype=float)
+        values.append(finite[np.isfinite(finite)])
+    values = np.concatenate([value for value in values if value.size]) \
+        if any(value.size for value in values) else np.array([], dtype=float)
+    if values.size == 0:
+        return -1.0, 1.0
+    p01, p99 = np.percentile(values, [1.0, 99.0])
+    span = p99 - p01
+    if not np.isfinite(span) or span <= 0.0:
+        scale = max(abs(float(p01)), 1.0)
+        return float(p01 - 0.05 * scale), float(p99 + 0.05 * scale)
+    return (float(p01 - pad_fraction * span),
+            float(p99 + pad_fraction * span))
+
+
+def make_edge_center_blank_sky_figure(output_dir, wave, profiles):
+    """Plot the actual blank-sky edge/center spectra used by the test."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    amp_profiles = {}
+    for amp in AMPLIFIERS:
+        profile = profiles[amp]
+        central = np.asarray(profile["central"], dtype=float)
+        edge_fit = profile["edge"]
+        edge = np.asarray(profile["edge_spectrum"], dtype=float)
+        difference = np.asarray(edge_fit["D"], dtype=float)
+        # Reuse the exact broad component already made for D_hp in the
+        # spectral-sky experiment; this figure adds no new smoothing rule.
+        smooth_difference = difference - np.asarray(edge_fit["D_hp"],
+                                                     dtype=float)
+        safe_scale = max(1.0, np.nanmax(np.abs(central))) \
+            if np.any(np.isfinite(central)) else 1.0
+        ratio = np.full(central.shape, np.nan, dtype=float)
+        valid = (np.isfinite(edge) & np.isfinite(central) &
+                 (np.abs(central) > np.finfo(float).eps * safe_scale))
+        ratio[valid] = edge[valid] / central[valid] - 1.0
+        amp_profiles[amp] = {
+            "edge": edge, "center": central, "difference": difference,
+            "smooth_difference": smooth_difference, "ratio": ratio,
+        }
+
+    combined_edge = np.nanmedian(np.vstack([
+        amp_profiles[amp]["edge"] for amp in AMPLIFIERS]), axis=0)
+    combined_center = np.nanmedian(np.vstack([
+        amp_profiles[amp]["center"] for amp in AMPLIFIERS]), axis=0)
+    combined_difference = combined_edge - combined_center
+    combined_smooth = _broad_continuum_1d(combined_difference, wave)
+    combined_ratio = np.full(combined_center.shape, np.nan, dtype=float)
+    safe_scale = max(1.0, np.nanmax(np.abs(combined_center))) \
+        if np.any(np.isfinite(combined_center)) else 1.0
+    valid = (np.isfinite(combined_edge) & np.isfinite(combined_center) &
+             (np.abs(combined_center) > np.finfo(float).eps * safe_scale))
+    combined_ratio[valid] = combined_edge[valid] / combined_center[valid] - 1.0
+    amp_profiles["all amps"] = {
+        "edge": combined_edge, "center": combined_center,
+        "difference": combined_difference,
+        "smooth_difference": combined_smooth, "ratio": combined_ratio,
+    }
+
+    # Keep the x-axis to the common measured overlap rather than endpoint
+    # columns with no usable edge/center spectrum.
+    coverage = np.sum([
+        np.isfinite(amp_profiles[amp]["edge"]) &
+        np.isfinite(amp_profiles[amp]["center"])
+        for amp in AMPLIFIERS], axis=0)
+    usable_wave = coverage >= len(AMPLIFIERS)
+    if not np.any(usable_wave):
+        usable_wave = np.isfinite(wave)
+    x = np.asarray(wave)[usable_wave]
+
+    columns = (*AMPLIFIERS, "all amps")
+    fig, axes = plt.subplots(3, 5, figsize=(19, 10), sharex=True)
+    for column, name in enumerate(columns):
+        values = amp_profiles[name]
+        display = {
+            "edge": values["edge"][usable_wave],
+            "center": values["center"][usable_wave],
+            "difference": values["difference"][usable_wave],
+            "smooth_difference": values["smooth_difference"][usable_wave],
+            "ratio": values["ratio"][usable_wave],
+        }
+        axes[0, column].plot(x, display["edge"], label="E: edge q=0..19")
+        axes[0, column].plot(x, display["center"], label="C: center j=40..70")
+        axes[1, column].plot(x, display["difference"], label="E - C")
+        axes[1, column].plot(x, display["smooth_difference"],
+                             label="broad(E - C)")
+        axes[2, column].plot(x, display["ratio"], label="E / C - 1")
+        axes[2, column].axhline(0.0, color="k", linewidth=.8, alpha=.6)
+        axes[0, column].set_title(name)
+        for row in range(3):
+            axes[row, column].grid(alpha=.2)
+            axes[row, column].set_xlim(float(x[0]), float(x[-1]))
+        axes[0, column].set_ylim(*_robust_ylim(
+            display["edge"], display["center"]))
+        axes[1, column].set_ylim(*_robust_ylim(
+            display["difference"], display["smooth_difference"]))
+        axes[2, column].set_ylim(*_robust_ylim(display["ratio"]))
+        axes[2, column].set_xlabel("native wavelength (A)")
+    axes[0, 0].set_ylabel("spectrum")
+    axes[1, 0].set_ylabel("E - C")
+    axes[2, 0].set_ylabel("E / C - 1")
+    axes[0, 0].legend(fontsize=7)
+    axes[1, 0].legend(fontsize=7)
+    axes[2, 0].legend(fontsize=7)
+    fig.suptitle("Blank-sky spectra: readout edge versus amplifier center")
+    fig.tight_layout()
+    fig.savefig(output_dir / "edge_vs_center_blank_sky_spectra.png", dpi=160)
+    plt.close(fig)
 
 
 def make_spectral_figures(output_dir, wave, profiles):
@@ -1361,6 +1477,8 @@ def make_spectral_figures(output_dir, wave, profiles):
     fig.savefig(output_dir / "edge_excess_after_sky_component_removal.png",
                 dpi=160)
     plt.close(fig)
+
+    make_edge_center_blank_sky_figure(output_dir, wave, profiles)
 
 
 def run_spectral_sky_test(path, exposure, image, output_dir):
