@@ -1778,14 +1778,14 @@ def _fit_additive_amplitude(difference, basis, wave):
     return float(beta)
 
 
-def _additive_training_profiles(data):
+def _additive_training_profiles(data, train_partition=0):
     wave = data["wave"]
     raw_wave = data["raw_wave"]
     profiles = {}
     q_axis = np.arange(FIBERS_PER_AMPLIFIER, dtype=int)
     for amp in AMPLIFIERS:
         amp_rows = data["amp"] == amp
-        train = amp_rows & (data["partition"] == 0)
+        train = amp_rows & (data["partition"] == train_partition)
         central_selected = train & np.isin(data["j"], REFERENCE_J)
         central = _additive_median_rows(
             data["spectrum"], central_selected,
@@ -1804,11 +1804,13 @@ def _additive_training_profiles(data):
             basis = data["K"][model]
             raw = np.full(FIBERS_PER_AMPLIFIER, np.nan, dtype=float)
             scatter = np.full(FIBERS_PER_AMPLIFIER, np.nan, dtype=float)
+            n_train_q = np.zeros(FIBERS_PER_AMPLIFIER, dtype=int)
             train_q_values = {}
             for q in q_axis:
                 selected = train & (q_for_row == q)
                 if not np.any(selected):
                     continue
+                n_train_q[q] = int(selected.sum())
                 if model == "raw_constant":
                     r_q = _additive_median_rows(
                         data["raw_spectrum"], selected,
@@ -1839,6 +1841,7 @@ def _additive_training_profiles(data):
                 "basis": basis, "center": central, "raw": raw,
                 "smooth": smooth, "applied": applied,
                 "train_q_values": train_q_values, "scatter": scatter,
+                "n_train_q": n_train_q,
             }
         profiles[amp] = {
             "q": q_axis, "models": amp_models,
@@ -1849,7 +1852,7 @@ def _additive_training_profiles(data):
 
 
 def _additive_validation_profiles(data, training_profiles, wave_center,
-                                  half_width):
+                                  half_width, validation_partition=1):
     wave = data["wave"]
     raw_wave = data["raw_wave"]
     band = ((wave >= wave_center - half_width) &
@@ -1859,7 +1862,7 @@ def _additive_validation_profiles(data, training_profiles, wave_center,
     results = {}
     for amp in AMPLIFIERS:
         amp_rows = data["amp"] == amp
-        validation = amp_rows & (data["partition"] == 1)
+        validation = amp_rows & (data["partition"] == validation_partition)
         q_for_row = training_profiles[amp]["q_for_row"]
         central_selected = validation & np.isin(data["j"], REFERENCE_J)
         edge_selected = validation & (q_for_row < 20)
@@ -2506,6 +2509,444 @@ def run_additive_bandaid(path, exposure, image, output_dir,
     print("  no production model was selected by the diagnostic")
 
 
+def _scan_fold_metrics(validation_profiles, amp):
+    validation = validation_profiles[amp]
+    raw_legacy = validation["raw_validation"]["legacy"]
+    raw_corrected = validation["raw_validation"]["corrected"]
+    legacy = validation["continuum"]["legacy"]
+    corrected = validation["models"]["raw_constant"]
+    metrics = {
+        "raw_q20_before": float(np.nanmedian(
+            raw_legacy["difference"][:20])),
+        "raw_q20_after": float(np.nanmedian(
+            raw_corrected["difference"][:20])),
+        "raw_broad_before": _robust_amplitude_rms(
+            raw_legacy["smooth_difference"]),
+        "raw_broad_after": _robust_amplitude_rms(
+            raw_corrected["smooth_difference"]),
+        "fibers_q20_before": float(np.nanmedian(
+            legacy["difference"][:20])),
+        "fibers_q20_after": float(np.nanmedian(
+            corrected["difference"][:20])),
+        "fibers_q039_before": _robust_amplitude_rms(
+            validation["continuum"]["legacy"]["residual"][:40]),
+        "fibers_q039_after": _robust_amplitude_rms(
+            validation["continuum"]["raw_constant"]["residual"][:40]),
+        "fibers_broad_before": _robust_amplitude_rms(
+            legacy["smooth_difference"]),
+        "fibers_broad_after": _robust_amplitude_rms(
+            corrected["smooth_difference"]),
+        "fibers_highpass_before": _robust_rms(
+            legacy["difference"] - legacy["smooth_difference"]),
+        "fibers_highpass_after": _robust_rms(
+            corrected["difference"] - corrected["smooth_difference"]),
+    }
+    for prefix in ("raw_q20", "raw_broad", "fibers_q20", "fibers_q039",
+                   "fibers_broad", "fibers_highpass"):
+        before = metrics[prefix + "_before"]
+        after = metrics[prefix + "_after"]
+        metrics[prefix + "_reduction"] = before - after
+        metrics[prefix + "_percent_reduction"] = (
+            100.0 * (before - after) / before
+            if np.isfinite(before) and before != 0.0 else np.nan)
+    return metrics
+
+
+def _scan_profile_average(first, second, field):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        return np.nanmedian(np.vstack([
+            first[field], second[field]]), axis=0)
+
+
+def _scan_state(path, exposure, image, wave_center, half_width):
+    data = _additive_bandaid_rows(path, exposure, image)
+    fold1_training = _additive_training_profiles(data, train_partition=0)
+    fold1_validation = _additive_validation_profiles(
+        data, fold1_training, wave_center, half_width,
+        validation_partition=1)
+    fold2_training = _additive_training_profiles(data, train_partition=1)
+    fold2_validation = _additive_validation_profiles(
+        data, fold2_training, wave_center, half_width,
+        validation_partition=0)
+    states = []
+    for amp in AMPLIFIERS:
+        first = fold1_training[amp]["models"]["raw_constant"]
+        second = fold2_training[amp]["models"]["raw_constant"]
+        average = {
+            "raw": _scan_profile_average(first, second, "raw"),
+            "smooth": _scan_profile_average(first, second, "smooth"),
+            "applied": _scan_profile_average(first, second, "applied"),
+            "scatter": _scan_profile_average(first, second, "scatter"),
+        }
+        fold1_metrics = _scan_fold_metrics(fold1_validation, amp)
+        fold2_metrics = _scan_fold_metrics(fold2_validation, amp)
+        metric_names = tuple(fold1_metrics)
+        median_metrics = {
+            name: float(np.nanmedian([fold1_metrics[name],
+                                      fold2_metrics[name]]))
+            for name in metric_names}
+        finite_edge = np.isfinite(average["applied"][:20])
+        edge_amplitude = (float(np.nanmedian(average["applied"][:20]))
+                          if np.any(finite_edge) else np.nan)
+        finite_peak = np.isfinite(average["applied"][:40])
+        if np.any(finite_peak):
+            peak_index = int(np.nanargmax(average["applied"][:40]))
+            peak_value = float(average["applied"][peak_index])
+        else:
+            peak_index = np.nan
+            peak_value = np.nan
+        q_means = {}
+        for lo, hi in ((0, 9), (10, 19), (20, 29), (30, 39)):
+            q_means["A_q%d_%d" % (lo, hi)] = float(
+                np.nanmedian(average["applied"][lo:hi + 1]))
+        flags = []
+        if int(np.sum(data["amp"] == amp)) < M101_SKY_MIN_FIBERS:
+            flags.append("TOO_FEW_BLANK_SKY_FIBERS")
+        if not np.isfinite(edge_amplitude) or edge_amplitude <= 0.0:
+            flags.append("NONPOSITIVE_A_RAW_EDGE")
+        if any(np.isfinite(fold[name + "_before"]) and
+               np.isfinite(fold[name + "_after"]) and
+               fold[name + "_after"] > fold[name + "_before"]
+               for fold in (fold1_metrics, fold2_metrics)
+               for name in ("raw_broad", "fibers_broad")):
+            flags.append("VALIDATION_BROAD_RMS_WORSE")
+        if any(np.isfinite(fold["raw_q20_before"]) and
+               np.isfinite(fold["raw_q20_after"]) and
+               abs(fold["raw_q20_after"]) >
+               1.25 * max(abs(fold["raw_q20_before"]), 1e-12)
+               for fold in (fold1_metrics, fold2_metrics)):
+            flags.append("VALIDATION_Q20_MAGNITUDE_LARGER")
+        disagreement = np.abs(first["raw"][:40] - second["raw"][:40])
+        scale = np.maximum(np.maximum(np.abs(first["raw"][:40]),
+                                      np.abs(second["raw"][:40])), 1e-6)
+        relative_disagreement = np.nanmedian(disagreement / scale)
+        if np.isfinite(relative_disagreement) and relative_disagreement > .5:
+            flags.append("FOLD_PROFILE_DISAGREEMENT")
+        calibration = data["calibration"]
+        row = {
+            "h5": data["path"].name,
+            "date_observation": data["path"].stem,
+            "exposure": data["exposure"], "amplifier": amp,
+            "n_blank_sky_fibers": int(np.sum(data["amp"] == amp)),
+            "n_physical_ifus": data["n_ifus"],
+            "n_train_fibers_fold1": int(np.sum(
+                (data["amp"] == amp) & (data["partition"] == 0))),
+            "n_train_fibers_fold2": int(np.sum(
+                (data["amp"] == amp) & (data["partition"] == 1))),
+            "A_q20": edge_amplitude, "A_peak_q40": peak_value,
+            "A_peak_q": peak_index,
+            **q_means,
+            "millum": calibration["millum"],
+            "guider_throughput": calibration["guider_transparency"],
+            "Survey_offset": calibration["offset"],
+            "exptime": calibration["exptime"],
+            "gratio": calibration["gratio"],
+            "fold_profile_relative_disagreement": relative_disagreement,
+            "flags": ";".join(flags),
+        }
+        for name in metric_names:
+            row[name] = median_metrics[name]
+            row["fold1_" + name] = fold1_metrics[name]
+            row["fold2_" + name] = fold2_metrics[name]
+        states.append({
+            "row": row, "amp": amp, "data": data,
+            "fold1": fold1_training[amp]["models"]["raw_constant"],
+            "fold2": fold2_training[amp]["models"]["raw_constant"],
+            "average": average,
+            "fold1_metrics": fold1_metrics, "fold2_metrics": fold2_metrics,
+        })
+    return states
+
+
+def _scan_output_fields():
+    metrics = (
+        "raw_q20_before", "raw_q20_after", "raw_q20_reduction",
+        "raw_q20_percent_reduction", "raw_broad_before", "raw_broad_after",
+        "raw_broad_reduction", "raw_broad_percent_reduction",
+        "fibers_q20_before", "fibers_q20_after", "fibers_q20_reduction",
+        "fibers_q20_percent_reduction", "fibers_q039_before",
+        "fibers_q039_after", "fibers_q039_reduction",
+        "fibers_q039_percent_reduction", "fibers_broad_before",
+        "fibers_broad_after", "fibers_broad_reduction",
+        "fibers_broad_percent_reduction", "fibers_highpass_before",
+        "fibers_highpass_after", "fibers_highpass_reduction",
+        "fibers_highpass_percent_reduction")
+    fields = [
+        "h5", "date_observation", "exposure", "amplifier",
+        "n_blank_sky_fibers", "n_physical_ifus", "n_train_fibers_fold1",
+        "n_train_fibers_fold2", "A_q20", "A_peak_q40", "A_peak_q",
+        "A_q0_9", "A_q10_19", "A_q20_29", "A_q30_39", "millum",
+        "guider_throughput", "Survey_offset", "exptime", "gratio",
+        "fold_profile_relative_disagreement",
+    ]
+    fields.extend(metrics)
+    fields.extend("fold1_" + name for name in metrics)
+    fields.extend("fold2_" + name for name in metrics)
+    fields.append("flags")
+    return fields, metrics
+
+
+def _write_additive_scan_csvs(output_dir, states, failed_rows):
+    fields, _ = _scan_output_fields()
+    rows = [state["row"] for state in states] + failed_rows
+    with (output_dir / "additive_bandaid_scan_summary.csv").open(
+            "w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+
+    profile_fields = [
+        "h5", "date_observation", "exposure", "amplifier", "q",
+        "A_raw_fold1", "A_raw_fold2", "A_raw_average",
+        "A_raw_smoothed_average", "A_raw_applied_average",
+        "wavelength_scatter", "n_train_fibers_fold1",
+        "n_train_fibers_fold2", "n_train_fibers",
+    ]
+    profile_rows = []
+    for state in states:
+        average = state["average"]
+        for q in range(FIBERS_PER_AMPLIFIER):
+            n1 = int(state["fold1"]["n_train_q"][q])
+            n2 = int(state["fold2"]["n_train_q"][q])
+            profile_rows.append({
+                "h5": state["data"]["path"].name,
+                "date_observation": state["data"]["path"].stem,
+                "exposure": state["data"]["exposure"],
+                "amplifier": state["amp"], "q": q,
+                "A_raw_fold1": state["fold1"]["raw"][q],
+                "A_raw_fold2": state["fold2"]["raw"][q],
+                "A_raw_average": average["raw"][q],
+                "A_raw_smoothed_average": average["smooth"][q],
+                "A_raw_applied_average": average["applied"][q],
+                "wavelength_scatter": average["scatter"][q],
+                "n_train_fibers_fold1": n1,
+                "n_train_fibers_fold2": n2,
+                "n_train_fibers": (n1 + n2) / 2.0,
+            })
+    with (output_dir / "additive_bandaid_scan_profiles.csv").open(
+            "w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=profile_fields)
+        writer.writeheader()
+        writer.writerows(profile_rows)
+    return rows
+
+
+def make_additive_scan_figures(output_dir, states):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    colors = dict(zip(AMPLIFIERS, ("tab:blue", "tab:orange",
+                                   "tab:green", "tab:red")))
+    q = np.arange(FIBERS_PER_AMPLIFIER)
+    fig, axes = plt.subplots(1, 4, figsize=(16, 4.5), sharey=True)
+    for axis, amp in zip(axes, AMPLIFIERS):
+        values = [state["average"]["applied"] for state in states
+                  if state["amp"] == amp]
+        if not values:
+            continue
+        values = np.asarray(values)
+        for value in values:
+            axis.plot(q, value, color=colors[amp], alpha=.18)
+        median = np.nanmedian(values, axis=0)
+        p16, p84 = np.nanpercentile(values, [16, 84], axis=0)
+        axis.fill_between(q, p16, p84, color=colors[amp], alpha=.2,
+                          label="p16--p84")
+        axis.plot(q, median, color=colors[amp], linewidth=2, label="median")
+        axis.axvspan(0, 19, color="k", alpha=.08)
+        axis.axvline(40, color="k", linestyle=":", linewidth=.8)
+        axis.set_title(amp)
+        axis.set_xlabel("folded readout distance q")
+        axis.grid(alpha=.2)
+    axes[0].set_ylabel("A_raw(q) [e-/A]")
+    axes[0].legend(fontsize=7)
+    fig.suptitle("All-exposure Raw additive profiles")
+    fig.tight_layout()
+    fig.savefig(output_dir / "additive_bandaid_all_profiles.png", dpi=160)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(1, 4, figsize=(16, 4.5), sharey=True)
+    for axis, amp in zip(axes, AMPLIFIERS):
+        values = []
+        for state in states:
+            if state["amp"] != amp:
+                continue
+            profile = state["average"]["applied"]
+            scale = np.nanmedian(profile[:20])
+            values.append(profile / scale if np.isfinite(scale) and scale != 0.0
+                          else np.full(profile.shape, np.nan))
+        if not values:
+            continue
+        values = np.asarray(values)
+        for value in values:
+            axis.plot(q, value, color=colors[amp], alpha=.16)
+        median = np.nanmedian(values, axis=0)
+        p16, p84 = np.nanpercentile(values, [16, 84], axis=0)
+        axis.fill_between(q, p16, p84, color=colors[amp], alpha=.2)
+        axis.plot(q, median, color=colors[amp], linewidth=2)
+        axis.axvspan(0, 19, color="k", alpha=.08)
+        axis.axvline(40, color="k", linestyle=":", linewidth=.8)
+        axis.set_title(amp)
+        axis.set_xlabel("q")
+        axis.grid(alpha=.2)
+    axes[0].set_ylabel("A_raw / median(A_raw[0:20])")
+    fig.suptitle("Normalized additive-profile shape stability")
+    fig.tight_layout()
+    fig.savefig(output_dir / "additive_bandaid_normalized_shapes.png", dpi=160)
+    plt.close(fig)
+
+    states_order = []
+    for state in states:
+        key = (state["data"]["path"].name, state["data"]["exposure"])
+        if key not in states_order:
+            states_order.append(key)
+    index = {key: value for value, key in enumerate(states_order)}
+    labels = ["%s/e%d" % (Path(key[0]).stem[:8], key[1])
+              for key in states_order]
+    fig, axes = plt.subplots(2, 1, figsize=(max(10, len(labels) * .25), 7),
+                             sharex=True)
+    for amp in AMPLIFIERS:
+        subset = [state for state in states if state["amp"] == amp]
+        x = [index[(state["data"]["path"].name, state["data"]["exposure"])]
+             for state in subset]
+        y = [state["row"]["A_q20"] for state in subset]
+        axes[0].plot(x, y, "o-", color=colors[amp], label=amp)
+    gratio = []
+    for key in states_order:
+        matching = [state for state in states
+                    if (state["data"]["path"].name,
+                        state["data"]["exposure"]) == key]
+        gratio.append(matching[0]["data"]["calibration"]["gratio"])
+    axes[1].plot(range(len(gratio)), gratio, "ko-")
+    axes[0].set_ylabel("median A_raw(q<20) [e-/A]")
+    axes[1].set_ylabel("Survey guider gratio")
+    axes[1].set_xlabel("H5/exposure order")
+    axes[1].set_xticks(range(len(labels)))
+    axes[1].set_xticklabels(labels, rotation=90, fontsize=6)
+    axes[0].grid(alpha=.2)
+    axes[1].grid(alpha=.2)
+    axes[0].legend(fontsize=8)
+    fig.suptitle("Additive amplitude versus exposure")
+    fig.tight_layout()
+    fig.savefig(output_dir / "additive_bandaid_amplitudes.png", dpi=160)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    for amp in AMPLIFIERS:
+        subset = [state for state in states if state["amp"] == amp]
+        before = [state["row"]["raw_q20_before"] for state in subset]
+        after = [state["row"]["raw_q20_after"] for state in subset]
+        axes[0].plot(before, after, "o", color=colors[amp], label=amp)
+        reduction = [state["row"]["raw_broad_percent_reduction"]
+                     for state in subset]
+        axes[1].plot(reduction, "o-", color=colors[amp], label=amp)
+        for state, value in zip(subset, reduction):
+            axes[1].plot([], [], color=colors[amp])
+    finite_before = np.concatenate([
+        np.asarray([state["row"]["raw_q20_before"] for state in states]),
+        np.asarray([state["row"]["raw_q20_after"] for state in states])])
+    if np.any(np.isfinite(finite_before)):
+        lo, hi = _robust_ylim(finite_before)
+        axes[0].plot([lo, hi], [lo, hi], "k:", linewidth=.8)
+    axes[0].set(xlabel="Raw q<20 E-C before [e-/A]",
+                ylabel="Raw q<20 E-C after [e-/A]")
+    axes[1].set(xlabel="state order",
+                ylabel="Raw broad-RMS reduction (%)")
+    for axis in axes:
+        axis.grid(alpha=.2)
+        axis.legend(fontsize=8)
+    fig.suptitle("Two-fold additive Band-Aid cross-validation")
+    fig.tight_layout()
+    fig.savefig(output_dir / "additive_bandaid_cross_validation.png", dpi=160)
+    plt.close(fig)
+
+
+def run_additive_bandaid_scan(files, image, output_dir,
+                              wave_center, half_width):
+    states = []
+    failed_rows = []
+    attempted = 0
+    fields, metrics = _scan_output_fields()
+    for path in files:
+        for exposure in range(1, EXPECTED_EXPOSURES + 1):
+            attempted += 1
+            try:
+                states.extend(_scan_state(
+                    path, exposure, image, wave_center, half_width))
+            except Exception as error:
+                message = "%s: %s" % (type(error).__name__, error)
+                print("WARNING additive scan %s exposure %d: %s" %
+                      (Path(path).name, exposure, message))
+                for amp in AMPLIFIERS:
+                    row = {field: np.nan for field in fields}
+                    row.update({
+                        "h5": Path(path).name,
+                        "date_observation": Path(path).stem,
+                        "exposure": exposure, "amplifier": amp,
+                        "flags": "SCAN_ERROR:" + message,
+                    })
+                    failed_rows.append(row)
+    if not states:
+        raise ValueError("no additive scan exposure completed successfully")
+    _write_additive_scan_csvs(output_dir, states, failed_rows)
+    make_additive_scan_figures(output_dir, states)
+
+    print("")
+    print("Additive Raw-space Band-Aid dataset scan:")
+    print("  H5 files analyzed: %d" % len(files))
+    print("  exposure states attempted: %d; completed: %d" %
+          (attempted, len(set((state["data"]["path"].name,
+                               state["data"]["exposure"])
+                              for state in states))))
+    print("  amplifier/exposure combinations: %d" % len(states))
+    for amp in AMPLIFIERS:
+        subset = [state for state in states if state["amp"] == amp]
+        rows = [state["row"] for state in subset]
+        print("  %s: median A_raw(q<20)=%.6g, p16/p84=%.6g/%.6g; "
+              "median peak q=%.6g; Raw q20 reduction=%.6g; "
+              "Raw broad-RMS reduction=%.6g; Fibers broad-RMS reduction=%.6g; "
+              "high-pass RMS change=%.6g" %
+              (amp, np.nanmedian([row["A_q20"] for row in rows]),
+               np.nanpercentile([row["A_q20"] for row in rows], 16),
+               np.nanpercentile([row["A_q20"] for row in rows], 84),
+               np.nanmedian([row["A_peak_q"] for row in rows]),
+               np.nanmedian([row["raw_q20_reduction"] for row in rows]),
+               np.nanmedian([row["raw_broad_reduction"] for row in rows]),
+               np.nanmedian([row["fibers_broad_reduction"] for row in rows]),
+               np.nanmedian([row["fibers_highpass_after"] -
+                             row["fibers_highpass_before"] for row in rows])))
+        improving = sum(row["fold1_raw_broad_after"] <
+                        row["fold1_raw_broad_before"] for row in rows)
+        improving += sum(row["fold2_raw_broad_after"] <
+                         row["fold2_raw_broad_before"] for row in rows)
+        total_folds = 2 * len(rows)
+        reversing = 0
+        for row in rows:
+            for fold in ("fold1_", "fold2_"):
+                before = row[fold + "raw_q20_before"]
+                after = row[fold + "raw_q20_after"]
+                if np.isfinite(before) and np.isfinite(after) and before * after < 0:
+                    reversing += 1
+        print("      improving Raw broad-RMS folds=%d/%d; "
+              "fraction=%.4f; q<20 sign reversals=%d/%d fraction=%.4f" %
+              (improving, total_folds, improving / total_folds
+               if total_folds else np.nan, reversing, total_folds,
+               reversing / total_folds if total_folds else np.nan))
+    all_rows = [state["row"] for state in states]
+    print("  combined: median A_raw(q<20)=%.6g; Raw q20 reduction=%.6g; "
+          "Raw broad-RMS reduction=%.6g; Fibers broad-RMS reduction=%.6g; "
+          "high-pass RMS change=%.6g" %
+          (np.nanmedian([row["A_q20"] for row in all_rows]),
+           np.nanmedian([row["raw_q20_reduction"] for row in all_rows]),
+           np.nanmedian([row["raw_broad_reduction"] for row in all_rows]),
+           np.nanmedian([row["fibers_broad_reduction"] for row in all_rows]),
+           np.nanmedian([row["fibers_highpass_after"] -
+                         row["fibers_highpass_before"] for row in all_rows])))
+    print("  flags: %d amplifier/exposure rows flagged" % sum(
+        bool(row["row"]["flags"]) for row in states) + len(failed_rows))
+
+
 def main():
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("h5_pattern", nargs="?",
@@ -2525,6 +2966,8 @@ def main():
                         help="run only the selected Raw sky spectral test")
     parser.add_argument("--additive-bandaid", action="store_true",
                         help="run only the held-out Fibers additive test")
+    parser.add_argument("--additive-bandaid-scan", action="store_true",
+                        help="scan the additive test over all H5 exposures")
     parser.add_argument("--exposure", type=int, default=1,
                         help="1-based exposure for spectral/additive tests")
     args = parser.parse_args()
@@ -2574,6 +3017,18 @@ def main():
             run_additive_bandaid(
                 files[0], args.exposure, image, args.output_dir,
                 args.wave_center, args.half_width)
+        finally:
+            image["hdul"].close()
+        return
+    if args.additive_bandaid_scan:
+        if args.image is None:
+            parser.error("--additive-bandaid-scan requires --image for "
+                         "blank-sky selection")
+        image = load_blank_image(args.image)
+        try:
+            run_additive_bandaid_scan(
+                files, image, args.output_dir, args.wave_center,
+                args.half_width)
         finally:
             image["hdul"].close()
         return
