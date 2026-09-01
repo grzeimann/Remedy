@@ -2943,8 +2943,9 @@ def run_additive_bandaid_scan(files, image, output_dir,
            np.nanmedian([row["fibers_broad_reduction"] for row in all_rows]),
            np.nanmedian([row["fibers_highpass_after"] -
                          row["fibers_highpass_before"] for row in all_rows])))
-    print("  flags: %d amplifier/exposure rows flagged" % sum(
-        bool(row["row"]["flags"]) for row in states) + len(failed_rows))
+    print("  flags: %d amplifier/exposure rows flagged" % (
+        sum(bool(state["row"]["flags"]) for state in states) +
+        len(failed_rows)))
 
 
 def main():
