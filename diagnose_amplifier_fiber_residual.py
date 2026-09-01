@@ -4,7 +4,7 @@
 The utility is read-only and processes one H5 at a time.  The normal path
 uses rectified Fibers products; the opt-in ``--spectral-sky-test`` path uses
 one exposure of the native Raw science spectra to test for sky-like edge
-structure.
+structure, and ``--additive-bandaid`` tests an in-memory Fibers correction.
 """
 
 from argparse import ArgumentParser
@@ -16,6 +16,7 @@ import warnings
 import numpy as np
 import tables
 from astropy.io import fits
+from astropy.table import Table
 from astropy.wcs import WCS
 from scipy.stats import spearmanr, theilslopes
 
@@ -1530,41 +1531,77 @@ def run_spectral_sky_test(path, exposure, image, output_dir):
           % conclusion)
 
 
-ADDITIVE_MODELS = ("constant_final", "preflux_norm")
+ADDITIVE_MODELS = ("constant_final", "raw_constant")
 ADDITIVE_MODEL_LABELS = {
     "constant_final": "Model A: constant final units",
-    "preflux_norm": "Model B: pre-flux constant / norm(lambda)",
+    "raw_constant": "Model B: constant Raw e-/A propagated through calibration",
 }
 ADDITIVE_SAFE_WAVE = (3700.0, 5350.0)
 ADDITIVE_SMOOTH_SIGMA = 2.5
 
 
-def _additive_flux_basis(h5, n_wave):
-    """Return the exact quick-reduction flux factor, normalized for fitting."""
+def _additive_flux_basis(h5, n_wave, exposure):
+    """Return the exact Raw-spectrum to Fibers wavelength basis."""
     if n_wave != RECTIFIED_WAVE.size:
         raise ValueError("Fibers spectrum has %d bins; expected %d" %
                          (n_wave, RECTIFIED_WAVE.size))
-    norm = (1e-29 * 2.99792e18 / RECTIFIED_WAVE**2 * 1e17).astype(float)
-    finite_offsets = np.array([], dtype=float)
-    if "Survey" in h5.root._v_children and \
-            "offset" in h5.root.Survey.colnames:
-        offsets = np.asarray(h5.root.Survey.cols.offset[:], dtype=float)
-        finite_offsets = offsets[np.isfinite(offsets)]
-    if finite_offsets.size:
-        offset = float(finite_offsets[0])
-        if not np.allclose(finite_offsets, offset, rtol=1e-5, atol=1e-7):
-            raise ValueError("Survey.offset is inconsistent in selected H5")
-        norm *= offset
-        note = "K_flux = quick-reduction norm(lambda) * Survey.offset"
-    else:
-        offset = 1.0
-        note = "K_flux = quick-reduction norm(lambda); no finite Survey.offset"
+    if "Survey" not in h5.root._v_children:
+        raise ValueError("selected H5 lacks Survey table")
+    survey = h5.root.Survey
+    required = {"exptime", "millum", "throughput", "offset", "exp"}
+    if not required.issubset(survey.colnames):
+        raise ValueError("Survey lacks the Raw->Fibers calibration columns")
+    exps = np.asarray(survey.cols.exp[:], dtype=int)
+    selected = np.flatnonzero(exps == int(exposure))
+    if selected.size != 1:
+        raise ValueError("Survey must contain one row for selected exposure")
+    survey_row = survey[selected[0]]
+    exptime = float(survey_row["exptime"])
+    millum = float(survey_row["millum"])
+    guider_transparency = float(survey_row["throughput"])
+    offset_value = float(survey_row["offset"])
+    if not np.isfinite(exptime) or exptime == 0.0:
+        raise ValueError("selected Survey.exptime is invalid")
+    if not np.isfinite(millum) or not np.isfinite(guider_transparency):
+        raise ValueError("selected Survey illumination/transparency is invalid")
+    gratio = millum * guider_transparency / 5e5
+    if not np.isfinite(gratio) or gratio == 0.0:
+        raise ValueError("selected Survey guider ratio is invalid")
+
+    throughput_path = Path(__file__).resolve().parent / "CALS" / "throughput.txt"
+    table = Table.read(throughput_path, format="ascii.fixed_width_two_line")
+    standard_wavelength = np.asarray(table["wavelength"], dtype=float)
+    standard_throughput = np.asarray(table["throughput"], dtype=float)
+    if (standard_wavelength.size != n_wave or
+            not np.allclose(standard_wavelength, RECTIFIED_WAVE,
+                            rtol=0.0, atol=1e-6)):
+        raise ValueError("CALS/throughput.txt wavelength grid does not match "
+                         "the production def_wave")
+
+    # These expressions intentionally mirror quick_reduction.py.  A finite
+    # Survey.offset is applied to SCI; a nonfinite offset leaves the factor at
+    # unity, matching the production ``if np.isfinite(offset)`` branch.
+    offset = offset_value if np.isfinite(offset_value) else 1.0
+    mult_fac = (6.626e-27 * (3e18 / RECTIFIED_WAVE) / 360.0 /
+                5e5 / 0.92 * 5)
+    mult_fac *= 1e29 * RECTIFIED_WAVE**2 / 2.99792e18
+    final_norm = 1e-29 * 2.99792e18 / RECTIFIED_WAVE**2 * 1e17
+    raw_to_fibers = (mult_fac * (360.0 / exptime) /
+                     standard_throughput / gratio * final_norm * offset)
     reference = ((RECTIFIED_WAVE >= 4000.0) &
                  (RECTIFIED_WAVE <= 5000.0))
-    scale = float(np.nanmedian(norm[reference]))
+    scale = float(np.nanmedian(raw_to_fibers[reference]))
     if not np.isfinite(scale) or scale == 0.0:
         raise ValueError("cannot normalize the quick-reduction flux basis")
-    return norm / scale, note, offset
+    note = ("K_raw_to_fibers = mult_fac*(360/exptime)/standard_throughput/"
+            "gratio*final_norm*offset; CALS/throughput.txt used")
+    metadata = {
+        "exptime": exptime, "millum": millum,
+        "guider_transparency": guider_transparency, "gratio": gratio,
+        "offset": offset, "raw_basis_scale": scale,
+        "raw_basis_unscaled": raw_to_fibers,
+    }
+    return raw_to_fibers / scale, note, metadata
 
 
 def _additive_median_rows(values, selected, description):
@@ -1667,16 +1704,17 @@ def _additive_bandaid_rows(path, exposure, image):
         partition = partition[kept_position]
         j = row_j[kept_rows].astype(int)
         amp = row_amp[kept_rows]
-        K_flux, norm_note, offset = _additive_flux_basis(h5, n_wave)
+        K_flux, norm_note, calibration = _additive_flux_basis(
+            h5, n_wave, exposure)
         return {
             "path": Path(path), "exposure": int(exposure),
             "wave": RECTIFIED_WAVE.copy(), "spectrum": spectra,
             "j": j, "amp": amp, "partition": partition,
             "identity": physical_identity, "K": {
                 "constant_final": np.ones(n_wave, dtype=float),
-                "preflux_norm": K_flux,
+                "raw_constant": K_flux,
             },
-            "norm_note": norm_note, "survey_offset": offset,
+            "norm_note": norm_note, "calibration": calibration,
             "candidate_count": int(candidate_indices.size),
             "n_fibers": int(spectra.shape[0]),
             "n_ifus": len(unique_identity),
@@ -1872,6 +1910,8 @@ def _write_additive_outputs(output_dir, data, training_profiles,
         "q0_39_rms_legacy", "q0_39_rms_corrected",
         "q_ge40_median_change", "broad_rms_legacy", "broad_rms_corrected",
         "highpass_rms_legacy", "highpass_rms_corrected",
+        "raw_basis_scale", "exptime", "millum", "guider_throughput",
+        "gratio", "survey_offset", "median_A_edge_raw_units",
     ]
     summary_rows = []
     profile_fields = [
@@ -1907,6 +1947,11 @@ def _write_additive_outputs(output_dir, data, training_profiles,
                 validation["legacy"]["smooth_difference"])
             highpass_corrected = _robust_rms(
                 corrected["difference"] - corrected["smooth_difference"])
+            calibration = data["calibration"]
+            raw_scale = calibration["raw_basis_scale"]
+            median_A_edge_raw = (
+                float(np.nanmedian(fit["applied"][:20]) / raw_scale)
+                if model == "raw_constant" else np.nan)
             summary_rows.append({
                 "h5": data["path"].name, "exposure": data["exposure"],
                 "amplifier": amp, "model": model,
@@ -1924,6 +1969,13 @@ def _write_additive_outputs(output_dir, data, training_profiles,
                 "broad_rms_corrected": broad_corrected,
                 "highpass_rms_legacy": highpass_legacy,
                 "highpass_rms_corrected": highpass_corrected,
+                "raw_basis_scale": raw_scale,
+                "exptime": calibration["exptime"],
+                "millum": calibration["millum"],
+                "guider_throughput": calibration["guider_transparency"],
+                "gratio": calibration["gratio"],
+                "survey_offset": calibration["offset"],
+                "median_A_edge_raw_units": median_A_edge_raw,
             })
             for q in range(FIBERS_PER_AMPLIFIER):
                 profile_rows.append({
@@ -1950,6 +2002,30 @@ def _write_additive_outputs(output_dir, data, training_profiles,
 def _additive_plot_wave(validation_profiles, wave):
     mask = _additive_common_wave_mask(validation_profiles, wave)
     return np.asarray(wave)[mask], mask
+
+
+def make_additive_basis_figure(output_dir, data):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    wave = data["wave"]
+    constant = np.ones(wave.size, dtype=float)
+    raw_basis = data["K"]["raw_constant"]
+    finite = np.isfinite(raw_basis)
+    fig, axis = plt.subplots(figsize=(8, 4.5))
+    axis.plot(wave, constant, label="constant-final basis = 1")
+    axis.plot(wave[finite], raw_basis[finite],
+              label="Raw-constant propagated basis")
+    axis.set(xlabel="wavelength (A)", ylabel="normalized basis",
+             title="Additive Band-Aid wavelength bases")
+    axis.set_xlim(float(wave[0]), float(wave[-1]))
+    axis.set_ylim(*_robust_ylim(constant, raw_basis))
+    axis.grid(alpha=.2)
+    axis.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(output_dir / "additive_bandaid_wavelength_basis.png", dpi=160)
+    plt.close(fig)
 
 
 def make_additive_bandaid_figures(output_dir, data, training_profiles,
@@ -2029,7 +2105,7 @@ def make_additive_bandaid_figures(output_dir, data, training_profiles,
         legacy = entry["legacy"]
         edge = legacy["edge"][wave_mask]
         corr_a = entry["models"]["constant_final"]["edge"][wave_mask]
-        corr_b = entry["models"]["preflux_norm"]["edge"][wave_mask]
+        corr_b = entry["models"]["raw_constant"]["edge"][wave_mask]
         axes[0, column].plot(x, edge, label="E legacy")
         axes[0, column].plot(x, center, label="C")
         axes[0, column].plot(x, corr_a, "--", label="E corrected A")
@@ -2040,7 +2116,7 @@ def make_additive_bandaid_figures(output_dir, data, training_profiles,
             x, legacy["smooth_difference"][wave_mask],
             "--", label="broad legacy E - C")
         for model, style in (("constant_final", "-"),
-                             ("preflux_norm", ":")):
+                             ("raw_constant", ":")):
             corrected = entry["models"][model]
             axes[1, column].plot(
                 x, corrected["difference"][wave_mask], style,
@@ -2055,7 +2131,7 @@ def make_additive_bandaid_figures(output_dir, data, training_profiles,
             x, entry["models"]["constant_final"]["ratio"][wave_mask],
             "--", label="corrected A")
         axes[2, column].plot(
-            x, entry["models"]["preflux_norm"]["ratio"][wave_mask],
+            x, entry["models"]["raw_constant"]["ratio"][wave_mask],
             ":", label="corrected B")
         axes[2, column].axhline(0.0, color="k", linewidth=.8, alpha=.6)
         axes[0, column].set_title(name)
@@ -2067,11 +2143,11 @@ def make_additive_bandaid_figures(output_dir, data, training_profiles,
             legacy["difference"][wave_mask],
             legacy["smooth_difference"][wave_mask],
             entry["models"]["constant_final"]["difference"][wave_mask],
-            entry["models"]["preflux_norm"]["difference"][wave_mask]))
+            entry["models"]["raw_constant"]["difference"][wave_mask]))
         axes[2, column].set_ylim(*_robust_ylim(
             legacy["ratio"][wave_mask],
             entry["models"]["constant_final"]["ratio"][wave_mask],
-            entry["models"]["preflux_norm"]["ratio"][wave_mask]))
+            entry["models"]["raw_constant"]["ratio"][wave_mask]))
         axes[2, column].set_xlabel("wavelength (A)")
     axes[0, 0].set_ylabel("spectrum")
     axes[1, 0].set_ylabel("E - C")
@@ -2100,7 +2176,7 @@ def make_additive_bandaid_figures(output_dir, data, training_profiles,
                           label="legacy")
         axes[column].plot(np.arange(112), stacks["constant_final"],
                           "--", label="corrected A")
-        axes[column].plot(np.arange(112), stacks["preflux_norm"],
+        axes[column].plot(np.arange(112), stacks["raw_constant"],
                           ":", label="corrected B")
         axes[column].axvspan(0, 19, color="tab:red", alpha=.10)
         axes[column].axvline(40, color="k", linestyle=":", linewidth=.8)
@@ -2109,13 +2185,14 @@ def make_additive_bandaid_figures(output_dir, data, training_profiles,
         axes[column].set_xlabel("folded readout distance q")
         axes[column].set_ylim(*_robust_ylim(
             stacks["legacy"], stacks["constant_final"],
-            stacks["preflux_norm"]))
+            stacks["raw_constant"]))
     axes[0].set_ylabel("4600 A continuum residual")
     axes[0].legend(fontsize=7)
     fig.suptitle("Held-out continuum profile before/after additive correction")
     fig.tight_layout()
     fig.savefig(output_dir / "additive_bandaid_folded_profile.png", dpi=160)
     plt.close(fig)
+    make_additive_basis_figure(output_dir, data)
 
 
 def run_additive_bandaid(path, exposure, image, output_dir,
@@ -2141,8 +2218,13 @@ def run_additive_bandaid(path, exposure, image, output_dir,
           (int(np.sum(data["partition"] == 0)),
            int(np.sum(data["partition"] == 1))))
     print("  %s" % data["norm_note"])
-    print("  K_flux normalized to median 4000--5000 A = 1; Survey.offset=%.6g"
-          % data["survey_offset"])
+    print("  K_raw_to_fibers normalized to median 4000--5000 A = 1; "
+          "Survey.offset=%.6g; exptime=%.6g; millum=%.6g; "
+          "guider throughput=%.6g; gratio=%.6g" %
+          (data["calibration"]["offset"], data["calibration"]["exptime"],
+           data["calibration"]["millum"],
+           data["calibration"]["guider_transparency"],
+           data["calibration"]["gratio"]))
     print("  validation metrics by amplifier/model:")
     for row in summary_rows:
         print("    %s %s: q<20 %.6g -> %.6g (%.3g%%); "
@@ -2173,6 +2255,12 @@ def run_additive_bandaid(path, exposure, image, output_dir,
     print("  inferred correction positive at expected readout edge: %s" %
           ", ".join("%s=%s" % (model, "YES" if positive[model] else "NO")
                     for model in ADDITIVE_MODELS))
+    raw_scale = data["calibration"]["raw_basis_scale"]
+    print("  median inferred A(q<20) in Raw-spectrum units (e-/A):")
+    for amp in AMPLIFIERS:
+        amplitude = np.nanmedian(
+            training[amp]["models"]["raw_constant"]["applied"][:20])
+        print("    %s: %.6g" % (amp, amplitude / raw_scale))
     print("  no production model was selected by the diagnostic")
 
 
@@ -2196,7 +2284,7 @@ def main():
     parser.add_argument("--additive-bandaid", action="store_true",
                         help="run only the held-out Fibers additive test")
     parser.add_argument("--exposure", type=int, default=1,
-                        help="1-based exposure for --spectral-sky-test")
+                        help="1-based exposure for spectral/additive tests")
     args = parser.parse_args()
     if args.half_width <= 0.0:
         parser.error("--half-width must be positive")
