@@ -167,6 +167,7 @@ def _residual_sky_band(fibers, finite_counts, band_spectrum, ra, dec,
             continue
 
         # Check the production full-spectrum residual finite-fraction test.
+        candidate_indices = np.flatnonzero(selected)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
             candidate_spectrum = np.asarray(
