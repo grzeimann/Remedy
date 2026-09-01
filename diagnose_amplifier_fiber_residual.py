@@ -1737,7 +1737,7 @@ def _additive_bandaid_rows(path, exposure, image):
             "raw_wave": common_raw_wave, "raw_spectrum": raw_rectified,
             "j": j, "amp": amp, "partition": partition,
             "identity": physical_identity, "K": {
-                "constant_final": np.ones(n_wave, dtype=float),
+                "constant_final": np.ones(n_fiber_wave, dtype=float),
                 "raw_constant": K_normalized,
             },
             "K_raw_to_fibers_absolute": K_absolute,
