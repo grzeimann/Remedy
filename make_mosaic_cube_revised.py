@@ -10,6 +10,7 @@ matplotlib.use('agg')
 import argparse as ap
 import csv
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from numba import njit
 from astropy.convolution import convolve, Gaussian2DKernel
 from astropy.convolution import Gaussian1DKernel, interpolate_replace_nans
