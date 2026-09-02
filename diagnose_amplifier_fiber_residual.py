@@ -2326,6 +2326,513 @@ def run_physical_amp_residual_test(path, exposure, image, output_dir):
     print("  diagnostic conclusion: %s" % conclusion)
 
 
+def _physical_amp_offset_row(group, global_profile, calibration):
+    """Measure q>=40 and full-profile physical-amplifier offsets."""
+    measurements = [item for item in group["measurements"]
+                    if np.isfinite(item["y"])]
+    q = np.asarray([item["q"] for item in measurements], dtype=int)
+    y = np.asarray([item["y"] for item in measurements], dtype=float)
+    A = global_profile["applied"][q] if q.size else np.array([], dtype=float)
+    q_lt40 = q < 40
+    q_ge40 = q >= 40
+    n_blank = len(group["measurements"])
+    n_q_lt40 = int(np.sum(q_lt40))
+    n_q_ge40 = int(np.sum(q_ge40))
+    global_A_q20 = float(np.nanmedian(global_profile["applied"][:20]))
+    exptime = float(calibration["exptime"])
+    flags = []
+    if n_q_ge40 < PHYSICAL_AMP_MIN_Q_GE40:
+        flags.append("INSUFFICIENT_Q_GE40")
+    if n_q_lt40 < PHYSICAL_AMP_MIN_Q_LT40:
+        flags.append("INSUFFICIENT_Q_LT40_VALIDATION")
+    row = {
+        "h5": group["h5"], "exposure": group["exposure"],
+        "specid": group["specid"], "ifuslot": group["ifuslot"],
+        "ifuid": group["ifuid"], "amplifier": group["amplifier"],
+        "n_blank_total": n_blank, "n_q_lt40": n_q_lt40,
+        "n_q_ge40": n_q_ge40,
+        "C_p_q40_e_per_A": np.nan, "C_p_full_e_per_A": np.nan,
+        "delta_C_e_per_A": np.nan, "C_p_q40_per_second": np.nan,
+        "rms_A": np.nan, "rms_Cq40": np.nan, "rms_Cfull": np.nan,
+        "improvement_Cq40": np.nan, "improvement_Cfull": np.nan,
+        "qlt40_rms_A": np.nan, "qlt40_rms_Cq40": np.nan,
+        "qlt40_improvement": np.nan,
+        "residual_q20_after_A": np.nan,
+        "residual_q20_after_A_Cq40": np.nan,
+        "residual_q40plus_after_A": np.nan,
+        "residual_q40plus_after_A_Cq40": np.nan,
+        "global_A_q20": global_A_q20,
+        "exptime": exptime, "millum": calibration["millum"],
+        "guider_throughput": calibration["guider_transparency"],
+        "Survey.offset": calibration["offset"],
+        "flags": ";".join(flags),
+    }
+    if n_q_ge40 < PHYSICAL_AMP_MIN_Q_GE40:
+        return row
+
+    finite = np.isfinite(y) & np.isfinite(A)
+    q = q[finite]
+    y = y[finite]
+    A = A[finite]
+    q_lt40 = q < 40
+    q_ge40 = q >= 40
+    if not np.any(q_ge40):
+        row["flags"] = ";".join(flags + ["NO_FINITE_Q_GE40"])
+        return row
+
+    C_q40 = float(np.nanmedian(y[q_ge40]))
+    C_full = float(np.nanmedian(y - A))
+    residual_A = y - A
+    residual_Cq40 = residual_A - C_q40
+    residual_Cfull = residual_A - C_full
+    row.update({
+        "C_p_q40_e_per_A": C_q40,
+        "C_p_full_e_per_A": C_full,
+        "delta_C_e_per_A": C_q40 - C_full,
+        "C_p_q40_per_second": (C_q40 / exptime
+                                if np.isfinite(exptime) and exptime != 0.0
+                                else np.nan),
+        "rms_A": _physical_amp_absolute_rms(residual_A),
+        "rms_Cq40": _physical_amp_absolute_rms(residual_Cq40),
+        "rms_Cfull": _physical_amp_absolute_rms(residual_Cfull),
+        "improvement_Cq40": _physical_amp_reduction(
+            _physical_amp_absolute_rms(residual_A),
+            _physical_amp_absolute_rms(residual_Cq40)),
+        "improvement_Cfull": _physical_amp_reduction(
+            _physical_amp_absolute_rms(residual_A),
+            _physical_amp_absolute_rms(residual_Cfull)),
+        "residual_q20_after_A": float(np.nanmedian(
+            residual_A[q < 20])) if np.any(q < 20) else np.nan,
+        "residual_q20_after_A_Cq40": float(np.nanmedian(
+            residual_Cq40[q < 20])) if np.any(q < 20) else np.nan,
+        "residual_q40plus_after_A": float(np.nanmedian(
+            residual_A[q >= 40])) if np.any(q >= 40) else np.nan,
+        "residual_q40plus_after_A_Cq40": float(np.nanmedian(
+            residual_Cq40[q >= 40])) if np.any(q >= 40) else np.nan,
+    })
+    if np.any(q_lt40):
+        row["qlt40_rms_A"] = _physical_amp_absolute_rms(
+            residual_A[q_lt40])
+        row["qlt40_rms_Cq40"] = _physical_amp_absolute_rms(
+            residual_Cq40[q_lt40])
+        row["qlt40_improvement"] = _physical_amp_reduction(
+            row["qlt40_rms_A"], row["qlt40_rms_Cq40"])
+    return row
+
+
+def _physical_amp_offset_repeatability(summary_rows):
+    grouped = {}
+    for row in summary_rows:
+        if not np.isfinite(row["C_p_q40_e_per_A"]):
+            continue
+        key = (row["specid"], row["ifuslot"], row["ifuid"],
+               row["amplifier"])
+        grouped.setdefault(key, []).append(row)
+    repeat_rows = []
+    correlations = {amp: [] for amp in AMPLIFIERS}
+    for key in sorted(grouped, key=lambda value: (value[3],) + value[:3]):
+        rows = sorted(grouped[key],
+                      key=lambda row: (row["_state_index"], row["exposure"]))
+        values = np.asarray([row["C_p_q40_e_per_A"] for row in rows])
+        rates = np.asarray([row["C_p_q40_per_second"] for row in rows])
+        if values.size < 2:
+            continue
+        median, p16, p84 = _physical_amp_stat(values)
+        rate_median, _, _ = _physical_amp_stat(rates)
+        repeat_rows.append({
+            "specid": key[0], "ifuslot": key[1], "ifuid": key[2],
+            "amplifier": key[3], "n_measurements": int(values.size),
+            "median_C_p_q40": median, "p16_C_p_q40": p16,
+            "p84_C_p_q40": p84,
+            "robust_scatter_C_p_q40": _robust_rms(values),
+            "median_C_p_rate": rate_median,
+            "robust_scatter_C_p_rate": _robust_rms(rates),
+        })
+        if values.size >= 3:
+            state_index = np.asarray([row["_state_index"] for row in rows],
+                                     dtype=float)
+            if np.ptp(values) > 0.0 and np.ptp(state_index) > 0.0:
+                correlations[key[3]].append({
+                    "pearson": float(np.corrcoef(state_index, values)[0, 1]),
+                    "spearman": float(spearmanr(state_index, values).statistic),
+                })
+    return repeat_rows, correlations
+
+
+def _write_physical_amp_offset_outputs(output_dir, summary_rows,
+                                       repeat_rows):
+    summary_fields = [
+        "h5", "exposure", "specid", "ifuslot", "ifuid", "amplifier",
+        "n_blank_total", "n_q_lt40", "n_q_ge40",
+        "C_p_q40_e_per_A", "C_p_full_e_per_A", "delta_C_e_per_A",
+        "C_p_q40_per_second", "rms_A", "rms_Cq40", "rms_Cfull",
+        "improvement_Cq40", "improvement_Cfull", "qlt40_rms_A",
+        "qlt40_rms_Cq40", "qlt40_improvement",
+        "residual_q20_after_A", "residual_q20_after_A_Cq40",
+        "residual_q40plus_after_A", "residual_q40plus_after_A_Cq40",
+        "global_A_q20", "exptime", "millum", "guider_throughput",
+        "Survey.offset", "flags",
+    ]
+    with (output_dir / "physical_amp_offset_scan_summary.csv").open(
+            "w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=summary_fields)
+        writer.writeheader()
+        writer.writerows({field: row.get(field, np.nan)
+                          for field in summary_fields}
+                         for row in summary_rows)
+
+    repeat_fields = [
+        "specid", "ifuslot", "ifuid", "amplifier", "n_measurements",
+        "median_C_p_q40", "p16_C_p_q40", "p84_C_p_q40",
+        "robust_scatter_C_p_q40", "median_C_p_rate",
+        "robust_scatter_C_p_rate",
+    ]
+    with (output_dir / "physical_amp_offset_repeatability.csv").open(
+            "w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=repeat_fields)
+        writer.writeheader()
+        writer.writerows(repeat_rows)
+
+
+def make_physical_amp_offset_figures(output_dir, summary_rows, repeat_rows):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    colors = dict(zip(AMPLIFIERS, ("tab:blue", "tab:orange",
+                                   "tab:green", "tab:red")))
+    fitted = [row for row in summary_rows
+              if np.isfinite(row["C_p_q40_e_per_A"])]
+
+    fig, axes = plt.subplots(1, 4, figsize=(16, 4.5), sharey=True)
+    for axis, amp in zip(axes, AMPLIFIERS):
+        values = np.asarray([row["C_p_q40_e_per_A"] for row in fitted
+                             if row["amplifier"] == amp], dtype=float)
+        values = values[np.isfinite(values)]
+        if values.size:
+            bins = 10 if values.size > 2 else 5
+            axis.hist(values, bins=bins, color=colors[amp], alpha=.65)
+            median, p16, p84 = _physical_amp_stat(values)
+            axis.axvline(0.0, color="k", linestyle=":", linewidth=.8)
+            axis.axvline(median, color=colors[amp], linewidth=2,
+                         label="median")
+            axis.axvspan(p16, p84, color=colors[amp], alpha=.18,
+                         label="p16--p84")
+        axis.set_title(amp)
+        axis.set_xlabel("C_p,q40 [e-/A]")
+        axis.grid(axis="y", alpha=.2)
+    axes[0].set_ylabel("physical amplifier instances")
+    axes[0].legend(fontsize=7)
+    fig.tight_layout()
+    fig.savefig(output_dir / "physical_amp_offset_distribution.png", dpi=160)
+    plt.close(fig)
+
+    fig, axis = plt.subplots(figsize=(7, 6))
+    for amp in AMPLIFIERS:
+        subset = [row for row in fitted if row["amplifier"] == amp]
+        x = np.asarray([row["C_p_full_e_per_A"] for row in subset])
+        y = np.asarray([row["C_p_q40_e_per_A"] for row in subset])
+        finite = np.isfinite(x) & np.isfinite(y)
+        axis.scatter(x[finite], y[finite], color=colors[amp], alpha=.55,
+                     label=amp)
+    values = np.asarray([
+        value for row in fitted
+        for value in (row["C_p_full_e_per_A"], row["C_p_q40_e_per_A"])
+        if np.isfinite(value)], dtype=float)
+    if values.size:
+        lo, hi = _robust_ylim(values, pad_fraction=.08)
+        axis.plot([lo, hi], [lo, hi], "k:", linewidth=.8)
+    axis.set_xlabel("C_p,full [e-/A]")
+    axis.set_ylabel("C_p,q40 [e-/A]")
+    axis.grid(alpha=.2)
+    axis.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(output_dir / "physical_amp_offset_estimators.png", dpi=160)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    for amp in AMPLIFIERS:
+        subset = [row for row in fitted if row["amplifier"] == amp and
+                  np.isfinite(row["qlt40_rms_A"]) and
+                  np.isfinite(row["qlt40_rms_Cq40"])]
+        x = np.asarray([row["qlt40_rms_A"] for row in subset])
+        y = np.asarray([row["qlt40_rms_Cq40"] for row in subset])
+        improvement = np.asarray([row["qlt40_improvement"] for row in subset])
+        axes[0].scatter(x, y, color=colors[amp], alpha=.55, label=amp)
+        axes[1].scatter(np.arange(improvement.size), improvement,
+                        color=colors[amp], alpha=.55, label=amp)
+    values = np.asarray([
+        value for row in fitted
+        for value in (row["qlt40_rms_A"], row["qlt40_rms_Cq40"])
+        if np.isfinite(value)], dtype=float)
+    if values.size:
+        lo, hi = _robust_ylim(values, pad_fraction=.08)
+        axes[0].plot([lo, hi], [lo, hi], "k:", linewidth=.8)
+    axes[1].axhline(0.0, color="k", linestyle=":", linewidth=.8)
+    axes[0].set_xlabel("q<40 RMS after A(q) [e-/A]")
+    axes[0].set_ylabel("q<40 RMS after A(q)+C_p,q40 [e-/A]")
+    axes[1].set_xlabel("fitted physical amplifier index")
+    axes[1].set_ylabel("q<40 fractional improvement")
+    for axis in axes:
+        axis.grid(alpha=.2)
+        axis.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(output_dir / "physical_amp_offset_cross_validation.png",
+                dpi=160)
+    plt.close(fig)
+
+    state_keys = sorted(set((row["h5"], row["exposure"])
+                            for row in summary_rows))
+    state_index = {key: index for index, key in enumerate(state_keys)}
+    fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
+    for amp in AMPLIFIERS:
+        subset = [row for row in fitted if row["amplifier"] == amp]
+        x = np.asarray([state_index[(row["h5"], row["exposure"])]
+                        for row in subset])
+        y = np.asarray([row["C_p_q40_e_per_A"] for row in subset])
+        rate = np.asarray([row["C_p_q40_per_second"] for row in subset])
+        axes[0].scatter(x, y, color=colors[amp], alpha=.22, s=12,
+                        label=amp)
+        axes[1].scatter(x, rate, color=colors[amp], alpha=.22, s=12,
+                        label=amp)
+        medians = []
+        median_rates = []
+        for index in range(len(state_keys)):
+            selected = x == index
+            medians.append(np.nanmedian(y[selected])
+                           if np.any(selected) else np.nan)
+            median_rates.append(np.nanmedian(rate[selected])
+                                if np.any(selected) else np.nan)
+        axes[0].plot(range(len(state_keys)), medians, color=colors[amp],
+                     linewidth=1.5)
+        axes[1].plot(range(len(state_keys)), median_rates, color=colors[amp],
+                     linewidth=1.5)
+    axes[0].axhline(0.0, color="k", linestyle=":", linewidth=.8)
+    axes[1].axhline(0.0, color="k", linestyle=":", linewidth=.8)
+    axes[0].set_ylabel("C_p,q40 [e-/A]")
+    axes[1].set_ylabel("C_p,q40 / exptime [e-/s/A]")
+    axes[1].set_xlabel("chronological H5/exposure state")
+    for axis in axes:
+        axis.grid(alpha=.2)
+        axis.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(output_dir / "physical_amp_offset_vs_exposure.png", dpi=160)
+    plt.close(fig)
+
+    repeat_groups = {}
+    for row in fitted:
+        key = (row["specid"], row["ifuslot"], row["ifuid"],
+               row["amplifier"])
+        repeat_groups.setdefault(key, []).append(row)
+    fig, axes = plt.subplots(1, 4, figsize=(16, 4.5), sharey=True)
+    for axis, amp in zip(axes, AMPLIFIERS):
+        candidates = [(key, rows) for key, rows in repeat_groups.items()
+                      if key[3] == amp and len(rows) >= 2]
+        candidates.sort(key=lambda item: (-len(item[1]), item[0]))
+        for key, rows in candidates[:20]:
+            rows = sorted(rows, key=lambda row: row["_state_index"])
+            axis.plot([row["_state_index"] for row in rows],
+                      [row["C_p_q40_e_per_A"] for row in rows], ".-",
+                      color=colors[amp], alpha=.35, linewidth=.7,
+                      markersize=2.5)
+        axis.axhline(0.0, color="k", linestyle=":", linewidth=.8)
+        axis.set_title(amp)
+        axis.set_xlabel("state index")
+        axis.grid(alpha=.2)
+    axes[0].set_ylabel("C_p,q40 [e-/A]")
+    fig.tight_layout()
+    fig.savefig(output_dir / "physical_amp_offset_repeatability.png", dpi=160)
+    plt.close(fig)
+
+
+def _physical_amp_offset_correlation(rows):
+    finite = [row for row in rows if np.isfinite(row["delta_C_e_per_A"])]
+    if len(finite) < 2:
+        return np.nan, np.nan, np.nan
+    x = np.asarray([row["C_p_full_e_per_A"] for row in finite])
+    y = np.asarray([row["C_p_q40_e_per_A"] for row in finite])
+    if np.ptp(x) == 0.0 or np.ptp(y) == 0.0:
+        pearson = np.nan
+        spearman = np.nan
+    else:
+        pearson = float(np.corrcoef(x, y)[0, 1])
+        spearman = float(spearmanr(x, y).statistic)
+    return pearson, spearman, _robust_rms(y - x)
+
+
+def _physical_amp_acceptance_label(value, strong, moderate, weak=0.0):
+    if not np.isfinite(value) or value <= weak:
+        return "FAILED"
+    if value >= strong:
+        return "STRONG"
+    if value >= moderate:
+        return "MODERATE"
+    return "WEAK"
+
+
+def _print_physical_amp_offset_summary(files, summary_rows,
+                                       successful_states, failed_states,
+                                       repeat_rows, correlations):
+    fitted = [row for row in summary_rows
+              if np.isfinite(row["C_p_q40_e_per_A"])]
+    print("")
+    print("Physical-amplifier C_p dataset scan:")
+    print("  H5 files analyzed: %d/%d" %
+          (len(set(row["h5"] for row in summary_rows)), len(files)))
+    print("  exposures analyzed: %d/%d" %
+          (successful_states, len(files) * EXPECTED_EXPOSURES))
+    print("  physical amplifier instances attempted: %d" % len(summary_rows))
+    print("  successfully fitted: %d" % len(fitted))
+    print("  skipped for insufficient q>=40 coverage: %d" %
+          sum("INSUFFICIENT_Q_GE40" in row["flags"]
+              for row in summary_rows))
+    print("  failed H5/exposure states: %d" % failed_states)
+
+    for amp in AMPLIFIERS:
+        rows = [row for row in fitted if row["amplifier"] == amp]
+        C = _physical_amp_stat([row["C_p_q40_e_per_A"] for row in rows])
+        rate = _physical_amp_stat([row["C_p_q40_per_second"] for row in rows])
+        delta = _physical_amp_stat([row["delta_C_e_per_A"] for row in rows])
+        rms = [_physical_amp_stat([row[field] for row in rows])[0]
+               for field in ("rms_A", "rms_Cq40")]
+        qlt_rms = [_physical_amp_stat([row[field] for row in rows])[0]
+                   for field in ("qlt40_rms_A", "qlt40_rms_Cq40")]
+        improvements = _physical_amp_stat(
+            [row["improvement_Cq40"] for row in rows])
+        qlt_improvements = _physical_amp_stat(
+            [row["qlt40_improvement"] for row in rows])
+        print("  %s: fitted=%d; median C_q40=%.6g "
+              "(p16/p84=%.6g/%.6g), median |C_q40|=%.6g" %
+              (amp, len(rows), C[0], C[1], C[2],
+               _physical_amp_stat([abs(row["C_p_q40_e_per_A"])
+                                   for row in rows])[0]))
+        print("    median C_q40/exptime=%.6g; median delta_C=%.6g "
+              "(robust scatter=%.6g)" % (rate[0], delta[0],
+                                          _robust_rms([row["delta_C_e_per_A"]
+                                                       for row in rows])))
+        print("    median RMS A/Cq40=%.6g/%.6g; fractional improvement=%.6g"
+              % (rms[0], rms[1], improvements[0]))
+        print("    median q<40 RMS A/Cq40=%.6g/%.6g; "
+              "fractional improvement=%.6g" %
+              (qlt_rms[0], qlt_rms[1], qlt_improvements[0]))
+        print("    improved overall=%d/%d; improved q<40=%d/%d" %
+              (sum(row["rms_Cq40"] < row["rms_A"] for row in rows),
+               len(rows),
+               sum(row["qlt40_rms_Cq40"] < row["qlt40_rms_A"]
+                   for row in rows if np.isfinite(row["qlt40_rms_A"])),
+               sum(np.isfinite(row["qlt40_rms_A"]) for row in rows)))
+        pearson, spearman, rms_delta = _physical_amp_offset_correlation(rows)
+        print("    estimator agreement Pearson/Spearman/delta RMS="
+              "%.6g/%.6g/%.6g" % (pearson, spearman, rms_delta))
+
+    overall = fitted
+    rms = [_physical_amp_stat([row[field] for row in overall])[0]
+           for field in ("rms_A", "rms_Cq40")]
+    qlt_rms = [_physical_amp_stat([row[field] for row in overall])[0]
+               for field in ("qlt40_rms_A", "qlt40_rms_Cq40")]
+    improvements = _physical_amp_stat(
+        [row["improvement_Cq40"] for row in overall])
+    qlt_improvements = _physical_amp_stat(
+        [row["qlt40_improvement"] for row in overall])
+    print("  combined: median RMS A/Cq40=%.6g/%.6g; "
+          "fractional improvement=%.6g" %
+          (rms[0], rms[1], improvements[0]))
+    print("    median q<40 RMS A/Cq40=%.6g/%.6g; "
+          "fractional improvement=%.6g" %
+          (qlt_rms[0], qlt_rms[1], qlt_improvements[0]))
+    print("    improved overall=%d/%d; improved q<40=%d/%d" %
+          (sum(row["rms_Cq40"] < row["rms_A"] for row in overall),
+           len(overall),
+           sum(row["qlt40_rms_Cq40"] < row["qlt40_rms_A"]
+               for row in overall if np.isfinite(row["qlt40_rms_A"])),
+           sum(np.isfinite(row["qlt40_rms_A"]) for row in overall)))
+    pearson, spearman, rms_delta = _physical_amp_offset_correlation(overall)
+    print("    estimator agreement Pearson/Spearman/delta RMS="
+          "%.6g/%.6g/%.6g" % (pearson, spearman, rms_delta))
+
+    print("  repeated-identity temporal correlations (median within identity):")
+    for amp in AMPLIFIERS:
+        values = correlations[amp]
+        print("    %s: Pearson=%.6g, Spearman=%.6g, identities=%d" %
+              (amp, _physical_amp_stat([item["pearson"] for item in values])[0],
+               _physical_amp_stat([item["spearman"] for item in values])[0],
+               len(values)))
+
+    coverage = (len(fitted) / float(len(summary_rows))
+                if summary_rows else np.nan)
+    agreement_scale = _physical_amp_stat(
+        [abs(row["C_p_q40_e_per_A"]) for row in fitted])[0]
+    agreement_delta = _robust_rms(
+        [row["delta_C_e_per_A"] for row in fitted])
+    agreement_ratio = (agreement_delta / agreement_scale
+                       if np.isfinite(agreement_delta) and
+                       np.isfinite(agreement_scale) and agreement_scale > 0.0
+                       else np.nan)
+    qlt_finite = [row for row in fitted if np.isfinite(row["qlt40_improvement"])]
+    qlt_fraction = (sum(row["qlt40_improvement"] > 0.0 for row in qlt_finite) /
+                    float(len(qlt_finite)) if qlt_finite else np.nan)
+    fitted_h5 = len(set(row["h5"] for row in fitted))
+    state_consistency = (fitted_h5 / float(len(files)) if files else np.nan)
+    global_A = _physical_amp_stat([row["global_A_q20"] for row in fitted])[0]
+    magnitude = (agreement_scale / abs(global_A)
+                 if np.isfinite(agreement_scale) and
+                 np.isfinite(global_A) and global_A != 0.0 else np.nan)
+    print("  acceptance criteria (descriptive only):")
+    print("    COVERAGE: %s (%.3f fitted with q>=40 coverage)" %
+          (_physical_amp_acceptance_label(coverage, .80, .60), coverage))
+    print("    ESTIMATOR_AGREEMENT: %s (robust delta/|C|=%.3f)" %
+          (_physical_amp_acceptance_label(
+              1.0 - agreement_ratio if np.isfinite(agreement_ratio) else np.nan,
+              .75, .50), agreement_ratio))
+    print("    INDEPENDENT_PREDICTION: %s (q<40 improved fraction=%.3f, "
+          "median improvement=%.3f)" %
+          (_physical_amp_acceptance_label(
+              min(qlt_fraction, max(0.0, qlt_improvements[0]))
+              if np.isfinite(qlt_fraction) and np.isfinite(qlt_improvements[0])
+              else np.nan, .50, .25), qlt_fraction, qlt_improvements[0]))
+    print("    DATASET_CONSISTENCY: %s (%d/%d H5 files with fitted instances)" %
+          (_physical_amp_acceptance_label(state_consistency, .80, .50),
+           fitted_h5, len(files)))
+    print("    MAGNITUDE: %s (median |C|/|global A_q20|=%.3f)" %
+          (_physical_amp_acceptance_label(magnitude, .25, .05), magnitude))
+
+
+def run_physical_amp_offset_scan(files, image, output_dir):
+    summary_rows = []
+    state_order = []
+    successful_states = 0
+    failed_states = 0
+    for path in files:
+        for exposure in range(1, EXPECTED_EXPOSURES + 1):
+            state_order.append((Path(path).name, exposure))
+            try:
+                data = _additive_bandaid_rows(path, exposure, image)
+                global_profiles = _physical_amp_global_profiles(data)
+                groups = _physical_amp_measurements(data, global_profiles)
+                for group in groups:
+                    row = _physical_amp_offset_row(
+                        group, global_profiles[group["amplifier"]],
+                        data["calibration"])
+                    summary_rows.append(row)
+                successful_states += 1
+            except Exception as error:
+                failed_states += 1
+                print("WARNING physical-amplifier offset scan %s exposure %d: %s" %
+                      (Path(path).name, exposure, error))
+
+    if not summary_rows:
+        raise ValueError("no physical-amplifier offset scan states completed")
+    state_index = {key: index for index, key in enumerate(state_order)}
+    for row in summary_rows:
+        row["_state_index"] = state_index[(row["h5"], row["exposure"])]
+    repeat_rows, correlations = _physical_amp_offset_repeatability(summary_rows)
+    _write_physical_amp_offset_outputs(output_dir, summary_rows, repeat_rows)
+    make_physical_amp_offset_figures(output_dir, summary_rows, repeat_rows)
+    _print_physical_amp_offset_summary(
+        files, summary_rows, successful_states, failed_states,
+        repeat_rows, correlations)
+
+
 def _additive_validation_profiles(data, training_profiles, wave_center,
                                   half_width, validation_partition=1):
     wave = data["wave"]
@@ -3446,6 +3953,8 @@ def main():
                         help="scan the additive test over all H5 exposures")
     parser.add_argument("--physical-amp-residual-test", action="store_true",
                         help="diagnose residuals by physical amplifier")
+    parser.add_argument("--physical-amp-offset-scan", action="store_true",
+                        help="scan physical-amplifier additive offsets")
     parser.add_argument("--exposure", type=int, default=1,
                         help="1-based exposure for spectral/additive tests")
     args = parser.parse_args()
@@ -3510,6 +4019,16 @@ def main():
         try:
             run_physical_amp_residual_test(
                 files[0], args.exposure, image, args.output_dir)
+        finally:
+            image["hdul"].close()
+        return
+    if args.physical_amp_offset_scan:
+        if args.image is None:
+            parser.error("--physical-amp-offset-scan requires --image for "
+                         "blank-sky selection")
+        image = load_blank_image(args.image)
+        try:
+            run_physical_amp_offset_scan(files, image, args.output_dir)
         finally:
             image["hdul"].close()
         return
