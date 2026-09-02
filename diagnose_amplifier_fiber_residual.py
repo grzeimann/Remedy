@@ -1944,6 +1944,15 @@ def _physical_amp_curve(group, global_profile, offset=0.0):
     return curve - global_profile["applied"] - offset
 
 
+def _physical_amp_absolute_rms(values):
+    """Return RMS magnitude without recentering the residuals."""
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return np.nan
+    return float(np.sqrt(np.nanmedian(values * values)))
+
+
 def _physical_amp_fit(group, global_profile):
     measurements = [item for item in group["measurements"]
                     if np.isfinite(item["y"])]
@@ -1959,9 +1968,12 @@ def _physical_amp_fit(group, global_profile):
         "ifuid": group["ifuid"], "amplifier": group["amplifier"],
         "n_blank": n_blank, "n_q_lt40": n_q_lt40, "n_q_ge40": n_q_ge40,
         "C_p_e_per_A": np.nan, "alpha_p": np.nan,
-        "rms_raw": _robust_rms(y), "rms_model0": np.nan,
+        "rms_raw": _physical_amp_absolute_rms(y), "rms_model0": np.nan,
         "rms_offset": np.nan, "rms_scale": np.nan,
         "rms_offset_scale": np.nan,
+        "offset_fractional_improvement": np.nan,
+        "scale_fractional_improvement": np.nan,
+        "offset_scale_fractional_improvement": np.nan,
         "residual_q20_after_global_A": np.nan,
         "residual_q40plus_after_global_A": np.nan,
         "fit_status": "SKIP_INSUFFICIENT_COVERAGE",
@@ -1998,10 +2010,10 @@ def _physical_amp_fit(group, global_profile):
     residual_offset = residual0 - C
     row.update({
         "C_p_e_per_A": C, "alpha_p": alpha,
-        "rms_model0": _robust_rms(residual0),
-        "rms_offset": _robust_rms(residual_offset),
-        "rms_scale": _robust_rms(residual_scale),
-        "rms_offset_scale": _robust_rms(residual_both),
+        "rms_model0": _physical_amp_absolute_rms(residual0),
+        "rms_offset": _physical_amp_absolute_rms(residual_offset),
+        "rms_scale": _physical_amp_absolute_rms(residual_scale),
+        "rms_offset_scale": _physical_amp_absolute_rms(residual_both),
         "residual_q20_after_global_A": float(
             np.nanmedian(residual0[q[finite] < 20]))
         if np.any(q[finite] < 20) else np.nan,
@@ -2012,6 +2024,12 @@ def _physical_amp_fit(group, global_profile):
                         np.isfinite(both_C) and np.isfinite(both_alpha)
                         else "OK_PARTIAL_MODEL_FIT"),
     })
+    row["offset_fractional_improvement"] = _physical_amp_reduction(
+        row["rms_model0"], row["rms_offset"])
+    row["scale_fractional_improvement"] = _physical_amp_reduction(
+        row["rms_model0"], row["rms_scale"])
+    row["offset_scale_fractional_improvement"] = _physical_amp_reduction(
+        row["rms_model0"], row["rms_offset_scale"])
     row["_offset_fit_C"] = C
     row["_offset_scale_fit_C"] = both_C
     row["_offset_scale_fit_alpha"] = both_alpha
@@ -2023,7 +2041,10 @@ def _write_physical_amp_outputs(output_dir, summary_rows, profile_rows):
         "h5", "exposure", "specid", "ifuslot", "ifuid", "amplifier",
         "n_blank", "n_q_lt40", "n_q_ge40", "C_p_e_per_A", "alpha_p",
         "rms_raw", "rms_model0", "rms_offset", "rms_scale",
-        "rms_offset_scale", "residual_q20_after_global_A",
+        "rms_offset_scale", "offset_fractional_improvement",
+        "scale_fractional_improvement",
+        "offset_scale_fractional_improvement",
+        "residual_q20_after_global_A",
         "residual_q40plus_after_global_A", "fit_status",
     ]
     with (output_dir / "physical_amp_residual_summary.csv").open(
@@ -2222,6 +2243,20 @@ def run_physical_amp_residual_test(path, exposure, image, output_dir):
                 "residual_after_global_A_e_per_A": y - profile["applied"][q]
                 if np.isfinite(y) else np.nan,
             })
+    sanity_rows = [row for row in summary_rows
+                   if row["fit_status"].startswith("OK") and
+                   np.isfinite(row["C_p_e_per_A"]) and
+                   row["C_p_e_per_A"] != 0.0 and
+                   np.isfinite(row["rms_model0"]) and
+                   np.isfinite(row["rms_offset"])]
+    identical = [row for row in sanity_rows
+                 if np.isclose(row["rms_model0"], row["rms_offset"],
+                               rtol=1e-12, atol=1e-12)]
+    if identical:
+        raise RuntimeError(
+            "absolute RMS sanity check failed: rms_model0 and rms_offset "
+            "are numerically identical for %d fitted physical amplifiers"
+            % len(identical))
     _write_physical_amp_outputs(output_dir, summary_rows, profile_rows)
     make_physical_amp_residual_figures(
         output_dir, groups, global_profiles, summary_by_key)
@@ -2245,16 +2280,19 @@ def run_physical_amp_residual_test(path, exposure, image, output_dir):
                       "rms_offset_scale")
         rms_stats = [_physical_amp_stat([row[field] for row in fitted_rows])[0]
                      for field in rms_fields]
+        improvement_stats = [
+            _physical_amp_stat([row[field] for row in fitted_rows])[0]
+            for field in ("offset_fractional_improvement",
+                          "scale_fractional_improvement",
+                          "offset_scale_fractional_improvement")]
         print("  %s: fitted=%d/%d" % (amp, len(fitted_rows), len(rows)))
         print("    C_p median/p16/p84=%.6g/%.6g/%.6g e-/A; "
               "alpha median/p16/p84=%.6g/%.6g/%.6g" %
               (C[0], C[1], C[2], alpha[0], alpha[1], alpha[2]))
-        print("    RMS A/C+A/alphaA/C+alphaA=%.6g/%.6g/%.6g/%.6g; "
-              "reductions=%.3g%%/%.3g%%/%.3g%%" %
-              (*rms_stats,
-               100.0 * _physical_amp_reduction(rms_stats[0], rms_stats[1]),
-               100.0 * _physical_amp_reduction(rms_stats[0], rms_stats[2]),
-               100.0 * _physical_amp_reduction(rms_stats[0], rms_stats[3])))
+        print("    median RMS A/C+A/alphaA/C+alphaA="
+              "%.6g/%.6g/%.6g/%.6g e-/A" % tuple(rms_stats))
+        print("    median fractional improvement C/alpha/C+alpha="
+              "%.6g/%.6g/%.6g" % tuple(improvement_stats))
 
     fitted_all = [row for row in summary_rows
                   if row["fit_status"].startswith("OK")]
@@ -2263,6 +2301,11 @@ def run_physical_amp_residual_test(path, exposure, image, output_dir):
                              "rms_offset_scale")]
     improvements = [_physical_amp_reduction(overall[0], value)
                     for value in overall[1:]]
+    overall_improvements = [
+        _physical_amp_stat([row[field] for row in fitted_all])[0]
+        for field in ("offset_fractional_improvement",
+                      "scale_fractional_improvement",
+                      "offset_scale_fractional_improvement")]
     if (np.isfinite(improvements[2]) and improvements[2] >= .05 and
             improvements[2] >= max(improvements[0], improvements[1]) + .05):
         conclusion = "BOTH_HELP"
@@ -2274,9 +2317,12 @@ def run_physical_amp_residual_test(path, exposure, image, output_dir):
         conclusion = "SCALE_DOMINANT"
     else:
         conclusion = "NEITHER_SIMPLE_MODEL"
-    print("  overall fitted RMS reductions relative to A(q): "
-          "C+A=%.3g%%, alpha*A=%.3g%%, C+alpha*A=%.3g%%" %
-          tuple(100.0 * value for value in improvements))
+    print("  combined median RMS A/C+A/alphaA/C+alphaA="
+          "%.6g/%.6g/%.6g/%.6g e-/A" % tuple(overall))
+    print("  combined median fractional improvement C/alpha/C+alpha="
+          "%.6g/%.6g/%.6g" % tuple(overall_improvements))
+    print("  RMS zero-point sanity check: PASS (%d fitted nonzero-C rows; "
+          "rms_model0 != rms_offset)" % len(sanity_rows))
     print("  diagnostic conclusion: %s" % conclusion)
 
 
