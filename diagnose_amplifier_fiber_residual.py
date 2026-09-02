@@ -1538,6 +1538,9 @@ ADDITIVE_MODEL_LABELS = {
 }
 ADDITIVE_SAFE_WAVE = (3700.0, 5350.0)
 ADDITIVE_SMOOTH_SIGMA = 2.5
+PHYSICAL_AMP_MIN_BLANK = 20
+PHYSICAL_AMP_MIN_Q_LT40 = 5
+PHYSICAL_AMP_MIN_Q_GE40 = 10
 
 
 def _additive_flux_basis(h5, n_wave, exposure):
@@ -1849,6 +1852,432 @@ def _additive_training_profiles(data, train_partition=0):
             "central_raw": central_raw,
         }
     return profiles
+
+
+def _physical_amp_global_profiles(data):
+    """Derive the all-blank-sky exposure/amplifier A_raw(q) profiles."""
+    raw_wave = np.asarray(data["raw_wave"], dtype=float)
+    safe = ((raw_wave >= ADDITIVE_SAFE_WAVE[0]) &
+            (raw_wave <= ADDITIVE_SAFE_WAVE[1]))
+    q_axis = np.arange(FIBERS_PER_AMPLIFIER, dtype=int)
+    profiles = {}
+    for amp in AMPLIFIERS:
+        amp_rows = data["amp"] == amp
+        central_selected = amp_rows & np.isin(data["j"], REFERENCE_J)
+        central_raw = _additive_median_rows(
+            data["raw_spectrum"], central_selected,
+            "%s global Raw central reference" % amp)
+        if amp in ("LL", "RU"):
+            q_for_row = data["j"]
+            q_for_reference = REFERENCE_J
+        else:
+            q_for_row = 111 - data["j"]
+            q_for_reference = 111 - REFERENCE_J
+
+        raw = np.full(FIBERS_PER_AMPLIFIER, np.nan, dtype=float)
+        for q in q_axis:
+            selected = amp_rows & (q_for_row == q)
+            if not np.any(selected):
+                continue
+            q_spectrum = _additive_median_rows(
+                data["raw_spectrum"], selected,
+                "%s global Raw q=%d" % (amp, q))
+            difference = q_spectrum - central_raw
+            finite = safe & np.isfinite(difference)
+            if np.any(finite):
+                raw[q] = float(np.nanmedian(difference[finite]))
+
+        smooth = _smooth_additive_profile(raw)
+        center_level = np.nanmedian(smooth[q_for_reference])
+        if np.isfinite(center_level):
+            smooth = smooth - center_level
+        applied = smooth.copy()
+        applied[q_axis >= 40] = 0.0
+        applied[~np.isfinite(applied)] = 0.0
+        profiles[amp] = {
+            "q": q_axis, "raw": raw, "smooth": smooth,
+            "applied": applied, "central_raw": central_raw,
+            "q_for_row": q_for_row, "q_for_reference": q_for_reference,
+        }
+    return profiles
+
+
+def _physical_amp_measurements(data, global_profiles):
+    """Make one safe-band Raw residual measurement per blank fiber."""
+    raw_wave = np.asarray(data["raw_wave"], dtype=float)
+    safe = ((raw_wave >= ADDITIVE_SAFE_WAVE[0]) &
+            (raw_wave <= ADDITIVE_SAFE_WAVE[1]))
+    grouped = {}
+    for index, (identity, amp) in enumerate(
+            zip(data["identity"], data["amp"])):
+        key = (str(identity), str(amp))
+        if key not in grouped:
+            parts = key[0].split("|")
+            if len(parts) != 3:
+                raise ValueError("invalid physical amplifier identity: %s" %
+                                 key[0])
+            grouped[key] = {
+                "h5": data["path"].name,
+                "exposure": int(data["exposure"]),
+                "specid": parts[0], "ifuslot": parts[1], "ifuid": parts[2],
+                "amplifier": key[1], "measurements": [],
+            }
+        q = int(global_profiles[amp]["q_for_row"][index])
+        difference = (np.asarray(data["raw_spectrum"][index], dtype=float) -
+                      global_profiles[amp]["central_raw"])
+        finite = safe & np.isfinite(difference)
+        y = float(np.nanmedian(difference[finite])) if np.any(finite) else np.nan
+        grouped[key]["measurements"].append({"q": q, "y": y})
+    return [grouped[key] for key in sorted(grouped,
+                                            key=lambda value: (value[1], value[0]))]
+
+
+def _physical_amp_curve(group, global_profile, offset=0.0):
+    curve = np.full(FIBERS_PER_AMPLIFIER, np.nan, dtype=float)
+    for measurement in group["measurements"]:
+        q = measurement["q"]
+        if np.isfinite(measurement["y"]):
+            if np.isfinite(curve[q]):
+                curve[q] = np.nanmedian([curve[q], measurement["y"]])
+            else:
+                curve[q] = measurement["y"]
+    return curve - global_profile["applied"] - offset
+
+
+def _physical_amp_fit(group, global_profile):
+    measurements = [item for item in group["measurements"]
+                    if np.isfinite(item["y"])]
+    q = np.asarray([item["q"] for item in measurements], dtype=int)
+    y = np.asarray([item["y"] for item in measurements], dtype=float)
+    A = global_profile["applied"][q] if q.size else np.array([], dtype=float)
+    n_blank = len(group["measurements"])
+    n_q_lt40 = int(np.sum(q < 40))
+    n_q_ge40 = int(np.sum(q >= 40))
+    row = {
+        "h5": group["h5"], "exposure": group["exposure"],
+        "specid": group["specid"], "ifuslot": group["ifuslot"],
+        "ifuid": group["ifuid"], "amplifier": group["amplifier"],
+        "n_blank": n_blank, "n_q_lt40": n_q_lt40, "n_q_ge40": n_q_ge40,
+        "C_p_e_per_A": np.nan, "alpha_p": np.nan,
+        "rms_raw": _robust_rms(y), "rms_model0": np.nan,
+        "rms_offset": np.nan, "rms_scale": np.nan,
+        "rms_offset_scale": np.nan,
+        "residual_q20_after_global_A": np.nan,
+        "residual_q40plus_after_global_A": np.nan,
+        "fit_status": "SKIP_INSUFFICIENT_COVERAGE",
+    }
+    if (n_blank < PHYSICAL_AMP_MIN_BLANK or
+            n_q_lt40 < PHYSICAL_AMP_MIN_Q_LT40 or
+            n_q_ge40 < PHYSICAL_AMP_MIN_Q_GE40):
+        return row
+
+    finite = np.isfinite(y) & np.isfinite(A)
+    y_fit = y[finite]
+    A_fit = A[finite]
+    if y_fit.size == 0:
+        row["fit_status"] = "SKIP_NO_FINITE_RAW_RESIDUALS"
+        return row
+
+    residual0 = y_fit - A_fit
+    C = float(np.nanmedian(residual0))
+    alpha, _, _ = _robust_zero_slope(A_fit, y_fit)
+    residual_scale = (y_fit - alpha * A_fit
+                      if np.isfinite(alpha)
+                      else np.full(y_fit.shape, np.nan))
+    both_C = np.nan
+    both_alpha = np.nan
+    residual_both = np.full(y_fit.shape, np.nan)
+    if A_fit.size >= 5 and np.unique(A_fit).size >= 2:
+        try:
+            fit = theilslopes(y_fit, A_fit)
+            both_alpha = float(fit.slope)
+            both_C = float(fit.intercept)
+            residual_both = y_fit - (both_C + both_alpha * A_fit)
+        except (ValueError, FloatingPointError):
+            pass
+    residual_offset = residual0 - C
+    row.update({
+        "C_p_e_per_A": C, "alpha_p": alpha,
+        "rms_model0": _robust_rms(residual0),
+        "rms_offset": _robust_rms(residual_offset),
+        "rms_scale": _robust_rms(residual_scale),
+        "rms_offset_scale": _robust_rms(residual_both),
+        "residual_q20_after_global_A": float(
+            np.nanmedian(residual0[q[finite] < 20]))
+        if np.any(q[finite] < 20) else np.nan,
+        "residual_q40plus_after_global_A": float(
+            np.nanmedian(residual0[q[finite] >= 40]))
+        if np.any(q[finite] >= 40) else np.nan,
+        "fit_status": ("OK" if np.isfinite(alpha) and
+                        np.isfinite(both_C) and np.isfinite(both_alpha)
+                        else "OK_PARTIAL_MODEL_FIT"),
+    })
+    row["_offset_fit_C"] = C
+    row["_offset_scale_fit_C"] = both_C
+    row["_offset_scale_fit_alpha"] = both_alpha
+    return row
+
+
+def _write_physical_amp_outputs(output_dir, summary_rows, profile_rows):
+    summary_fields = [
+        "h5", "exposure", "specid", "ifuslot", "ifuid", "amplifier",
+        "n_blank", "n_q_lt40", "n_q_ge40", "C_p_e_per_A", "alpha_p",
+        "rms_raw", "rms_model0", "rms_offset", "rms_scale",
+        "rms_offset_scale", "residual_q20_after_global_A",
+        "residual_q40plus_after_global_A", "fit_status",
+    ]
+    with (output_dir / "physical_amp_residual_summary.csv").open(
+            "w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=summary_fields)
+        writer.writeheader()
+        writer.writerows({field: row.get(field, np.nan)
+                          for field in summary_fields}
+                         for row in summary_rows)
+
+    profile_fields = [
+        "h5", "exposure", "specid", "ifuslot", "ifuid", "amplifier",
+        "q", "y_raw_e_per_A", "global_A_e_per_A",
+        "residual_after_global_A_e_per_A",
+    ]
+    with (output_dir / "physical_amp_residual_profiles.csv").open(
+            "w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=profile_fields)
+        writer.writeheader()
+        writer.writerows(profile_rows)
+
+
+def _physical_amp_profile_envelope(curves):
+    if not curves:
+        nan = np.full(FIBERS_PER_AMPLIFIER, np.nan)
+        return nan, nan, nan
+    values = np.asarray(curves, dtype=float)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        median = np.nanmedian(values, axis=0)
+        p16, p84 = np.nanpercentile(values, [16, 84], axis=0)
+    return median, p16, p84
+
+
+def make_physical_amp_residual_figures(output_dir, groups, global_profiles,
+                                       summary_by_key):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    colors = dict(zip(AMPLIFIERS, ("tab:blue", "tab:orange",
+                                   "tab:green", "tab:red")))
+    q_axis = np.arange(FIBERS_PER_AMPLIFIER)
+
+    def make_profile_figure(filename, subtract_offset):
+        fig, axes = plt.subplots(1, 4, figsize=(16, 4.5), sharey=True)
+        for axis, amp in zip(axes, AMPLIFIERS):
+            profile = global_profiles[amp]
+            curves = []
+            for group in groups:
+                if group["amplifier"] != amp:
+                    continue
+                key = (group["specid"], group["ifuslot"], group["ifuid"],
+                       group["amplifier"])
+                row = summary_by_key[key]
+                offset = (row.get("C_p_e_per_A", np.nan)
+                          if subtract_offset else 0.0)
+                if subtract_offset and not np.isfinite(offset):
+                    continue
+                curve = _physical_amp_curve(group, profile, offset=offset)
+                finite = np.isfinite(curve)
+                if np.any(finite):
+                    axis.plot(q_axis[finite], curve[finite], ".-",
+                              color=colors[amp], alpha=.16, linewidth=.55,
+                              markersize=2.0)
+                    curves.append(curve)
+            median, p16, p84 = _physical_amp_profile_envelope(curves)
+            finite = np.isfinite(median)
+            if np.any(finite):
+                axis.fill_between(q_axis, p16, p84, color=colors[amp],
+                                  alpha=.22, label="p16--p84")
+                axis.plot(q_axis[finite], median[finite], color=colors[amp],
+                          linewidth=2.0, label="median")
+            axis.axvspan(0, 19, color="k", alpha=.08)
+            axis.axvline(40, color="k", linestyle=":", linewidth=.8)
+            axis.axhline(0.0, color="0.35", linewidth=.7)
+            axis.set_title(amp)
+            axis.set_xlabel("folded readout distance q")
+            axis.grid(alpha=.2)
+        axes[0].set_ylabel("y(q) - global A(q) [e-/A]" if not subtract_offset
+                           else "y(q) - global A(q) - C_p [e-/A]")
+        axes[0].legend(fontsize=7)
+        fig.tight_layout()
+        fig.savefig(output_dir / filename, dpi=160)
+        plt.close(fig)
+
+    make_profile_figure("physical_amp_residual_profiles.png", False)
+    make_profile_figure("physical_amp_residual_after_offset.png", True)
+
+    fitted = [group for group in groups
+              if summary_by_key[(group["specid"], group["ifuslot"],
+                                group["ifuid"], group["amplifier"])]
+              ["fit_status"].startswith("OK")]
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), sharex=True)
+    start = 0
+    for amp in AMPLIFIERS:
+        subset = [group for group in fitted if group["amplifier"] == amp]
+        x = np.arange(start, start + len(subset))
+        C = [summary_by_key[(group["specid"], group["ifuslot"],
+                             group["ifuid"], amp)]["C_p_e_per_A"]
+             for group in subset]
+        alpha = [summary_by_key[(group["specid"], group["ifuslot"],
+                                 group["ifuid"], amp)]["alpha_p"]
+                 for group in subset]
+        axes[0].scatter(x, C, color=colors[amp], label=amp)
+        axes[1].scatter(x, alpha, color=colors[amp], label=amp)
+        start += len(subset)
+    axes[0].axhline(0.0, color="k", linestyle=":", linewidth=.8)
+    axes[1].axhline(1.0, color="k", linestyle=":", linewidth=.8)
+    axes[0].set_ylabel("C_p [e-/A]")
+    axes[1].set_ylabel("alpha_p")
+    for axis in axes:
+        axis.set_xlabel("physical amplifier instance index")
+        axis.grid(alpha=.2)
+        axis.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(output_dir / "physical_amp_parameters.png", dpi=160)
+    plt.close(fig)
+
+    model_fields = ("rms_model0", "rms_offset", "rms_scale",
+                    "rms_offset_scale")
+    model_labels = ("A(q)", "C + A(q)", "alpha A(q)", "C + alpha A(q)")
+    fig, axis = plt.subplots(figsize=(9, 5))
+    box_data = []
+    box_positions = []
+    for position, field in enumerate(model_fields, start=1):
+        values = np.asarray([row[field] for row in summary_by_key.values()],
+                            dtype=float)
+        values = values[np.isfinite(values)]
+        if values.size:
+            box_data.append(values)
+            box_positions.append(position)
+    if box_data:
+        axis.boxplot(box_data, positions=box_positions, widths=.55,
+                     showfliers=False)
+    for amp_index, amp in enumerate(AMPLIFIERS):
+        rows = [row for row in summary_by_key.values()
+                if row["amplifier"] == amp]
+        for position, field in enumerate(model_fields, start=1):
+            values = np.asarray([row[field] for row in rows], dtype=float)
+            values = values[np.isfinite(values)]
+            if values.size:
+                jitter = (amp_index - 1.5) * .035
+                axis.scatter(np.full(values.size, position + jitter), values,
+                             color=colors[amp], alpha=.45, s=14, label=amp
+                             if position == 1 else None)
+    axis.set_xticks(range(1, len(model_labels) + 1))
+    axis.set_xticklabels(model_labels)
+    axis.set_ylabel("robust RMS [e-/A]")
+    axis.grid(axis="y", alpha=.2)
+    axis.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(output_dir / "physical_amp_model_comparison.png", dpi=160)
+    plt.close(fig)
+
+
+def _physical_amp_stat(values):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return np.nan, np.nan, np.nan
+    return (float(np.nanmedian(values)),
+            float(np.nanpercentile(values, 16)),
+            float(np.nanpercentile(values, 84)))
+
+
+def _physical_amp_reduction(before, after):
+    return (1.0 - after / before
+            if np.isfinite(before) and np.isfinite(after) and before != 0.0
+            else np.nan)
+
+
+def run_physical_amp_residual_test(path, exposure, image, output_dir):
+    data = _additive_bandaid_rows(path, exposure, image)
+    global_profiles = _physical_amp_global_profiles(data)
+    groups = _physical_amp_measurements(data, global_profiles)
+    summary_rows = []
+    summary_by_key = {}
+    profile_rows = []
+    for group in groups:
+        row = _physical_amp_fit(group, global_profiles[group["amplifier"]])
+        key = (group["specid"], group["ifuslot"], group["ifuid"],
+               group["amplifier"])
+        summary_rows.append(row)
+        summary_by_key[key] = row
+        profile = global_profiles[group["amplifier"]]
+        for measurement in group["measurements"]:
+            q = measurement["q"]
+            y = measurement["y"]
+            profile_rows.append({
+                "h5": group["h5"], "exposure": group["exposure"],
+                "specid": group["specid"], "ifuslot": group["ifuslot"],
+                "ifuid": group["ifuid"], "amplifier": group["amplifier"],
+                "q": q, "y_raw_e_per_A": y,
+                "global_A_e_per_A": profile["applied"][q],
+                "residual_after_global_A_e_per_A": y - profile["applied"][q]
+                if np.isfinite(y) else np.nan,
+            })
+    _write_physical_amp_outputs(output_dir, summary_rows, profile_rows)
+    make_physical_amp_residual_figures(
+        output_dir, groups, global_profiles, summary_by_key)
+
+    print("")
+    print("Physical-amplifier Raw residual diagnostic:")
+    print("  selected H5/exposure: %s / %d" % (path, exposure))
+    print("  blank-sky candidates: %d; usable fibers: %d" %
+          (data["candidate_count"], data["n_fibers"]))
+    print("  global A_raw(q): all blank fibers, safe Raw wavelength %.0f--%.0f A, "
+          "Gaussian sigma=%.1f, center anchored, applied A=0 for q>=40" %
+          (ADDITIVE_SAFE_WAVE[0], ADDITIVE_SAFE_WAVE[1],
+           ADDITIVE_SMOOTH_SIGMA))
+    for amp in AMPLIFIERS:
+        rows = [row for row in summary_rows if row["amplifier"] == amp]
+        fitted_rows = [row for row in rows
+                       if row["fit_status"].startswith("OK")]
+        C = _physical_amp_stat([row["C_p_e_per_A"] for row in fitted_rows])
+        alpha = _physical_amp_stat([row["alpha_p"] for row in fitted_rows])
+        rms_fields = ("rms_model0", "rms_offset", "rms_scale",
+                      "rms_offset_scale")
+        rms_stats = [_physical_amp_stat([row[field] for row in fitted_rows])[0]
+                     for field in rms_fields]
+        print("  %s: fitted=%d/%d" % (amp, len(fitted_rows), len(rows)))
+        print("    C_p median/p16/p84=%.6g/%.6g/%.6g e-/A; "
+              "alpha median/p16/p84=%.6g/%.6g/%.6g" %
+              (C[0], C[1], C[2], alpha[0], alpha[1], alpha[2]))
+        print("    RMS A/C+A/alphaA/C+alphaA=%.6g/%.6g/%.6g/%.6g; "
+              "reductions=%.3g%%/%.3g%%/%.3g%%" %
+              (*rms_stats,
+               100.0 * _physical_amp_reduction(rms_stats[0], rms_stats[1]),
+               100.0 * _physical_amp_reduction(rms_stats[0], rms_stats[2]),
+               100.0 * _physical_amp_reduction(rms_stats[0], rms_stats[3])))
+
+    fitted_all = [row for row in summary_rows
+                  if row["fit_status"].startswith("OK")]
+    overall = [_physical_amp_stat([row[field] for row in fitted_all])[0]
+               for field in ("rms_model0", "rms_offset", "rms_scale",
+                             "rms_offset_scale")]
+    improvements = [_physical_amp_reduction(overall[0], value)
+                    for value in overall[1:]]
+    if (np.isfinite(improvements[2]) and improvements[2] >= .05 and
+            improvements[2] >= max(improvements[0], improvements[1]) + .05):
+        conclusion = "BOTH_HELP"
+    elif (np.isfinite(improvements[0]) and improvements[0] >= .05 and
+          improvements[0] >= improvements[1] + .05):
+        conclusion = "OFFSET_DOMINANT"
+    elif (np.isfinite(improvements[1]) and improvements[1] >= .05 and
+          improvements[1] >= improvements[0] + .05):
+        conclusion = "SCALE_DOMINANT"
+    else:
+        conclusion = "NEITHER_SIMPLE_MODEL"
+    print("  overall fitted RMS reductions relative to A(q): "
+          "C+A=%.3g%%, alpha*A=%.3g%%, C+alpha*A=%.3g%%" %
+          tuple(100.0 * value for value in improvements))
+    print("  diagnostic conclusion: %s" % conclusion)
 
 
 def _additive_validation_profiles(data, training_profiles, wave_center,
@@ -2969,6 +3398,8 @@ def main():
                         help="run only the held-out Fibers additive test")
     parser.add_argument("--additive-bandaid-scan", action="store_true",
                         help="scan the additive test over all H5 exposures")
+    parser.add_argument("--physical-amp-residual-test", action="store_true",
+                        help="diagnose residuals by physical amplifier")
     parser.add_argument("--exposure", type=int, default=1,
                         help="1-based exposure for spectral/additive tests")
     args = parser.parse_args()
@@ -3018,6 +3449,21 @@ def main():
             run_additive_bandaid(
                 files[0], args.exposure, image, args.output_dir,
                 args.wave_center, args.half_width)
+        finally:
+            image["hdul"].close()
+        return
+    if args.physical_amp_residual_test:
+        if len(files) != 1:
+            parser.error("--physical-amp-residual-test requires exactly one "
+                         "resolved H5; select one file with --h5 or a single "
+                         "positional path")
+        if args.image is None:
+            parser.error("--physical-amp-residual-test requires --image for "
+                         "blank-sky selection")
+        image = load_blank_image(args.image)
+        try:
+            run_physical_amp_residual_test(
+                files[0], args.exposure, image, args.output_dir)
         finally:
             image["hdul"].close()
         return
