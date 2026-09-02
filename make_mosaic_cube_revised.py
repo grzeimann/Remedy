@@ -308,29 +308,45 @@ def _m101_amplifier_groups(info):
 
 
 def _m101_amp_blank_selection(ra, dec, row_exposure, exposure,
-                              fiber_spectrum, binimage, xg, yg, tp):
+                              fiber_spectrum, original_image_data,
+                              original_image_wcs):
     """Use the production M101-safe blank-sky selection for one exposure."""
     nrows, n_wave = fiber_spectrum.shape
-    if binimage is None:
+    if original_image_data is None or original_image_wcs is None:
         return np.zeros(nrows, dtype=bool)
     dra = ((ra - M101_RA_DEG) * np.cos(np.deg2rad(M101_DEC_DEG)) * 60.0)
     ddec = (dec - M101_DEC_DEG) * 60.0
     radial_blank = np.hypot(dra, ddec) > M101_SKY_MIN_RADIUS_ARCMIN
 
-    # Match subtract_m101_residual_sky exactly: TP uses origin=1 and the
-    # output-grid coordinates are rounded after interpolation onto xg/yg.
-    x, y = tp.wcs_world2pix(ra, dec, 1)
-    xc = np.rint(np.interp(x, xg, np.arange(len(xg)), left=0.,
-                           right=len(xg))).astype(int)
-    yc = np.rint(np.interp(y, yg, np.arange(len(yg)), left=0.,
-                           right=len(yg))).astype(int)
-    valid_image = (np.isfinite(x) & np.isfinite(y) &
-                   (xc >= 0) & (xc < len(xg)) &
-                   (yc >= 0) & (yc < len(yg)))
+    x, y = original_image_wcs.world_to_pixel_values(ra, dec)
+    finite = np.isfinite(x) & np.isfinite(y)
+    xi = np.zeros(x.shape, dtype=int)
+    yi = np.zeros(y.shape, dtype=int)
+    xi[finite] = np.rint(x[finite]).astype(int)
+    yi[finite] = np.rint(y[finite]).astype(int)
+    valid_image = (
+        finite
+        & (xi >= 0)
+        & (xi < original_image_data.shape[1])
+        & (yi >= 0)
+        & (yi < original_image_data.shape[0])
+    )
     image_blank = np.zeros(nrows, dtype=bool)
     image_blank[valid_image] = (
-        np.isfinite(binimage[yc[valid_image], xc[valid_image]]) &
-        (binimage[yc[valid_image], xc[valid_image]] < 0.01))
+        np.isfinite(
+            original_image_data[
+                yi[valid_image],
+                xi[valid_image]
+            ]
+        )
+        &
+        (
+            original_image_data[
+                yi[valid_image],
+                xi[valid_image]
+            ] < 0.01
+        )
+    )
     sufficient = (np.isfinite(fiber_spectrum).sum(axis=1) >= int(np.ceil(
         M101_SKY_MIN_FINITE_FRACTION * n_wave)))
     return ((row_exposure == exposure) & radial_blank & valid_image &
@@ -414,8 +430,8 @@ def _m101_amp_raw_to_fibers_basis(h5, exposure):
 
 
 def correct_m101_amplifier_edge_background(h5, fiber_spectrum, ra, dec,
-                                            binimage, xg, yg, tp, h5file,
-                                            log):
+                                            original_image_data,
+                                            original_image_wcs, h5file, log):
     """Apply the measured M101 amplifier-edge additive background in memory.
 
     M101 has a small additive detector-coordinate residual near the
@@ -447,8 +463,8 @@ def correct_m101_amplifier_edge_background(h5, fiber_spectrum, ra, dec,
     profile_states = []
     for exposure in range(1, M101_SKY_NEXPOSURES + 1):
         selected = _m101_amp_blank_selection(
-            ra, dec, row_exposure, exposure, fiber_spectrum, binimage, xg, yg,
-            tp)
+            ra, dec, row_exposure, exposure, fiber_spectrum,
+            original_image_data, original_image_wcs)
         selected_indices = np.flatnonzero(selected)
         common_raw_wave = None
         raw_rectified = None
@@ -2076,16 +2092,20 @@ if args.filter_file is not None:
     
 
     
+original_image_data = None
+original_image_wcs = None
 binimage = None
 if args.image_file is not None:
+    image_file = fits.open(args.image_file)
+    original_image_data = image_file[0].data
+    original_image_wcs = WCS(image_file[0].header)
     name = op.basename(args.image_file)[:-5] + '_rect.fits'
     if op.exists(name):
         f = fits.open(name)
         binimage = f[0].data
     else:
-        image_file = fits.open(args.image_file)
-        wc = WCS(image_file[0].header)
-        ny, nx = image_file[0].data.shape
+        wc = original_image_wcs
+        ny, nx = original_image_data.shape
         yind, xind = np.indices((ny, nx))
         xn, yn = wc.wcs_world2pix(A.ra0, A.dec0, 1)
         tpn = A.setup_TP(A.ra0, A.dec0, 0., xn, yn, x_scale=-0.25, y_scale=0.25)
@@ -2099,7 +2119,7 @@ if args.image_file is not None:
         N = 4 * len(xg)
         x = np.reshape(x, image_file[0].data.shape)
         y = np.reshape(y, image_file[0].data.shape)
-        newimage = image_file[0].data[yi:yi+N, xi:xi+N]
+        newimage = original_image_data[yi:yi+N, xi:xi+N]
         binimage = rebin(newimage, (newimage.shape[0]//4, newimage.shape[1]//4))
         ximage = rebin(x[yi:yi+N, xi:xi+N], (newimage.shape[0]//4, newimage.shape[1]//4))
         yimage = rebin(y[yi:yi+N, xi:xi+N], (newimage.shape[0]//4, newimage.shape[1]//4))
@@ -2148,8 +2168,8 @@ for jk, h5file in enumerate(h5files):
         try:
             corrected_spectra, qa_rows, profile_states = \
                 correct_m101_amplifier_edge_background(
-                    t, source_spectra, ra, dec, binimage, xg, yg, tp,
-                    op.basename(h5file), args.log)
+                    t, source_spectra, ra, dec, original_image_data,
+                    original_image_wcs, op.basename(h5file), args.log)
             m101_amp_background_qa_rows.extend(qa_rows)
             m101_amp_background_profile_states.extend(profile_states)
         except Exception as error:
