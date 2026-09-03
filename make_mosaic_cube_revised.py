@@ -33,6 +33,8 @@ import matplotlib.pyplot as plt
 
 import glob
 
+import diagnose_m101_hierarchical as validated_m101
+
 mask_dict = {'20200430-20200501': ['057RL', '057RU', '057LL', '057LU', '058RU', 
                                    '058RL', '021RL', '021RU', '021LL', '021LU'],
              '20200430-20200715': ['092LU', '094RU', '046RU', '104LL', '104LU',
@@ -680,6 +682,523 @@ warnings.filterwarnings("ignore")
 
 DIRNAME = get_script_path()
 
+
+# -----------------------------------------------------------------------------
+# Validated M101 hierarchical calibration.
+#
+# The implementation below deliberately delegates the mathematical pieces to
+# diagnose_m101_hierarchical.py.  The production builder therefore uses the
+# same exact aperture, ADR, fixed-f(q), alpha, g/z_source_fit,
+# delta_illumination, source+sky IFU scalar, plane, and robust beta estimators.
+# Only compact calibration products survive PASS 1; spectra are reopened in
+# PASS 2.  No calibration correction is applied to the historical cube
+# estimator after specarray/errarray are populated.
+# -----------------------------------------------------------------------------
+
+M101_SECONDARY_H5 = {
+    '20200622_0000015.h5', '20200625_0000017.h5',
+    '20200710_0000013.h5', '20200710_0000014.h5',
+}
+
+
+def _m101_production_survey_by_exp(h5):
+    if 'Survey' not in h5.root._v_children:
+        raise ValueError('M101 hierarchical calibration requires Survey')
+    survey_by_exp = {}
+    for row in h5.root.Survey:
+        exposure = int(row['exp'])
+        if exposure in survey_by_exp:
+            raise ValueError('Survey has duplicate exposure %d' % exposure)
+        survey_by_exp[exposure] = {name: row[name] for name in h5.root.Survey.colnames}
+    if set(survey_by_exp) != {1, 2, 3}:
+        raise ValueError('Survey must contain exactly exposures 1, 2, 3')
+    return survey_by_exp
+
+
+def _m101_temporary_matched_images(image, virus_fwhm, band):
+    """Match one fixed external image for one exposure, without caching it."""
+    image_fwhm = float(image['psf']['fwhm_arcsec'])
+    if virus_fwhm <= image_fwhm:
+        return image['data'], image['object_data']
+    kernel_fwhm = np.sqrt(virus_fwhm ** 2 - image_fwhm ** 2)
+    sigma_pix = (kernel_fwhm * validated_m101.FWHM_TO_SIGMA /
+                 image['pixel_scale_arcsec'])
+    kernel = Gaussian2DKernel(sigma_pix)
+    matched_raw = convolve(image['data'], kernel, boundary='extend',
+                           nan_treatment='interpolate', preserve_nan=True)
+    matched_object = convolve(image['object_data'], kernel, boundary='extend',
+                              nan_treatment='interpolate', preserve_nan=True)
+    return matched_raw, matched_object
+
+
+def _m101_load_state_template(path, log):
+    required = {'SPECID', 'IFUSLOT', 'IFUID', 'C_state1', 'C_state2'}
+    with Path(path).open(newline='') as stream:
+        reader = csv.DictReader(stream)
+        if not required.issubset(reader.fieldnames or ()):
+            raise ValueError('state template lacks required columns: %s' %
+                             sorted(required - set(reader.fieldnames or ())))
+        primary, secondary = {}, {}
+        for row in reader:
+            key = (int(row['SPECID']), int(row['IFUSLOT']), int(row['IFUID']))
+            c1 = float(row['C_state1']) if row['C_state1'].strip() else np.nan
+            c2 = float(row['C_state2']) if row['C_state2'].strip() else np.nan
+            if np.isfinite(c1): primary[key] = c1
+            if np.isfinite(c2): secondary[key] = c2
+    log.info('M101 state template mapping verified from explicit C_state1/C_state2 '
+             'columns: primary finite=%d secondary finite=%d', len(primary), len(secondary))
+    return {1: primary, 2: secondary}
+
+
+def _m101_fit_production_response(rows, groups, good_groups, planes,
+                                  state_template, production_state, h5file, log):
+    """Fit beta only and make the compact physical-IFU response mapping."""
+    template = state_template[production_state]
+    selected = [row for row in rows if row.get('well_constrained_common') and
+                np.isfinite(row.get('s_common_normalized', np.nan)) and
+                row['ifu_key'] in template and np.isfinite(template[row['ifu_key']])]
+    x = np.asarray([template[row['ifu_key']] for row in selected], dtype=float)
+    y = np.asarray([row['plane_residual'] for row in selected], dtype=float)
+    beta_fit = validated_m101.robust_zero_slope(x, y)
+    beta = beta_fit['slope']
+    if not np.isfinite(beta):
+        raise ValueError('%s state template beta is invalid' % h5file)
+    response = {}
+    response_details = {}
+    missing = set()
+    for group in groups:
+        if group['exposure'] not in planes:
+            continue
+        plane = planes[group['exposure']]
+        ra0, dec0 = plane['ra0'], plane['dec0']
+        if not np.isfinite(ra0) or not np.isfinite(dec0):
+            raise ValueError('%s exposure %d has invalid illumination plane center' %
+                             (h5file, group['exposure']))
+        x_arcmin = ((group['mean_RA'] - ra0) * np.cos(np.deg2rad(dec0)) * 60.0)
+        y_arcmin = (group['mean_Dec'] - dec0) * 60.0
+        s_plane = 1.0 + plane['cx'] * x_arcmin + plane['cy'] * y_arcmin
+        key = (group['specid'], group['ifuslot'], group['ifuid'])
+        c = template.get(key, 0.0)
+        if key not in template:
+            missing.add(key)
+        s_response = s_plane + beta * c
+        if not np.isfinite(s_response) or s_response <= 0.0:
+            raise ValueError('%s exposure %d IFU %s has nonpositive response %.8g' %
+                             (h5file, group['exposure'], key, s_response))
+        response[(group['exposure'],) + key] = float(s_response)
+        response_details[(group['exposure'],) + key] = {
+            's_plane': float(s_plane), 'C_state': float(c),
+            'beta_times_C': float(beta * c), 's_response': float(s_response),
+            'template_present': key in template}
+    if missing:
+        log.warning('%s state %d template missing %d physical IFUs; using C=0: %s',
+                    h5file, production_state, len(missing), sorted(missing))
+    record_by_exposure = {}
+    for exposure in sorted(planes):
+        exposure_rows = [row for row in rows if row['exposure'] == exposure]
+        exposure_selected = [row for row in selected if row['exposure'] == exposure]
+        before = np.asarray([row['s_common_normalized'] - 1.0 for row in exposure_rows
+                             if np.isfinite(row['s_common_normalized'])])
+        after_plane = np.asarray([row['plane_residual'] for row in exposure_rows
+                                  if np.isfinite(row['plane_residual'])])
+        after_template = np.asarray([row['plane_residual'] - beta * template[row['ifu_key']]
+                                     for row in exposure_selected])
+        local_values = np.asarray([response[(exposure, row['SPECID'], row['IFUSLOT'], row['IFUID'])]
+                                   for row in exposure_rows
+                                   if (exposure, row['SPECID'], row['IFUSLOT'], row['IFUID']) in response])
+        record_by_exposure[exposure] = {
+            'exposure': exposure, 'production_state': production_state,
+            'beta': beta, 'n_template_IFUs': len(exposure_selected),
+            'n_well_constrained_IFUs': sum(row['exposure'] == exposure and
+                                          row.get('well_constrained_common', False)
+                                          for row in rows),
+            'n_good_physical_amps': sum(group['exposure'] == exposure and good_groups[i]
+                                       for i, group in enumerate(groups)),
+            'RMS_scalar_before_plane': validated_m101.robust_rms(before),
+            'RMS_scalar_after_plane': validated_m101.robust_rms(after_plane),
+            'RMS_scalar_after_template': validated_m101.robust_rms(after_template),
+            'response_min': np.min(local_values) if local_values.size else np.nan,
+            'response_p16': np.percentile(local_values, 16) if local_values.size else np.nan,
+            'response_median': np.median(local_values) if local_values.size else np.nan,
+            'response_p84': np.percentile(local_values, 84) if local_values.size else np.nan,
+            'response_max': np.max(local_values) if local_values.size else np.nan,
+        }
+        log.info('%s exposure %d state=%d beta=%+.8g response min/p16/med/p84/max='
+                 '%.8g/%.8g/%.8g/%.8g/%.8g', h5file, exposure, production_state,
+                 beta, *[record_by_exposure[exposure][name]
+                          for name in ('response_min', 'response_p16', 'response_median',
+                                       'response_p84', 'response_max')])
+    return response, response_details, record_by_exposure
+
+
+def _m101_calibrate_one_h5(h5file, images, filters, f, iterations,
+                           state_template, production_state, log):
+    """PASS 1: reproduce the validated single-H5 hierarchy and discard spectra."""
+    groups = []
+    datasets = []
+    with tables.open_file(h5file, mode='r') as h5:
+        info, fibers = h5.root.Info, h5.root.Fibers
+        groups, labels = validated_m101.build_groups(info)
+        ra = np.asarray(info.cols.ra[:], dtype=float)
+        dec = np.asarray(info.cols.dec[:], dtype=float)
+        for group in groups:
+            group['mean_RA'] = float(np.nanmean(ra[group['indices']]))
+            group['mean_Dec'] = float(np.nanmean(dec[group['indices']]))
+        if 'skyspectrum' not in fibers.colnames:
+            raise ValueError('%s Fibers lacks skyspectrum' % h5file)
+        spectra = np.asarray(fibers.cols.spectrum[:], dtype=float)
+        skyspectra = np.asarray(fibers.cols.skyspectrum[:], dtype=float)
+        survey_by_exp = _m101_production_survey_by_exp(h5)
+        ifuslot = np.asarray(info.cols.ifuslot[:])
+        amp = np.asarray([validated_m101.as_text(value) for value in info.cols.amp[:]])
+        bad = validated_m101.masked_rows(h5file, ifuslot, amp)
+        row_q = np.full(int(info.nrows), -1, dtype=int)
+        for group in groups:
+            j = np.arange(validated_m101.N_FIBER_AMP)
+            row_q[group['indices']] = j if group['amp'] in ('LL', 'RU') else 111 - j
+        for exposure in (1, 2, 3):
+            survey_row = survey_by_exp[exposure]
+            offset = float(survey_row['offset'])
+            if not np.isfinite(offset) or offset == 0.0:
+                raise ValueError('%s exposure %d Survey.offset is invalid: %s' %
+                                 (h5file, exposure, offset))
+            working = spectra / offset
+            exposure_rows = labels == exposure
+            for band in ('ON', 'OFF'):
+                response = filters[band]
+                V = validated_m101.synthetic_mean(working, response)
+                B_sky = validated_m101.synthetic_mean(skyspectra, response)
+                eff_ra, eff_dec = validated_m101.adr_positions(ra, dec, survey_row, response)
+                images[band]['_production_exposure'] = exposure
+                matched_raw, matched_object = _m101_temporary_matched_images(
+                    images[band], float(survey_row['fwhm']), band)
+                raw_I, _ = validated_m101.sample_image_exact(images[band], matched_raw,
+                                                               eff_ra, eff_dec)
+                I, image_valid = validated_m101.sample_image_exact(images[band], matched_object,
+                                                                    eff_ra, eff_dec)
+                K = validated_m101.weighted_scalar(
+                    validated_m101.raw_work_basis(survey_row), response)
+                valid = (exposure_rows & ~bad & np.isfinite(V) & image_valid & np.isfinite(I))
+                datasets.append({'exposure': exposure, 'band': band, 'V': V, 'I': I,
+                                 'B_sky': B_sky, 'V_total': V + B_sky,
+                                 'ra': eff_ra, 'dec': eff_dec, 'K': K, 'q': row_q,
+                                 'valid': valid})
+
+    initial_good = np.asarray([not np.any(bad[group['indices']]) for group in groups], dtype=bool)
+    alpha = {(exposure, band): validated_m101.ALPHA_INITIAL
+             for exposure in (1, 2, 3) for band in validated_m101.AMPS}
+    good_groups = initial_good.copy()
+    for _ in range(iterations):
+        globals_, _, _, good_groups = validated_m101.broad_stage(
+            datasets, groups, f, alpha, initial_good, good_groups)
+        alpha = validated_m101.fit_bounded_alphas(
+            datasets, groups, globals_, f, good_groups, alpha, (1, 2, 3))
+    globals_, _, _, good_groups = validated_m101.broad_stage(
+        datasets, groups, f, alpha, initial_good, good_groups)
+    for dataset in datasets:
+        dataset['V_total_corrected'] = dataset['V0'] + dataset['B_sky']
+    delta_by_band = {}
+    global_rows = []
+    for exposure in (1, 2, 3):
+        for band in ('ON', 'OFF'):
+            row = validated_m101.solve_illumination_delta(
+                datasets, groups, globals_, alpha, f, good_groups, (1, 2, 3), exposure, band)
+            delta_by_band[(exposure, band)] = row['delta_illumination']
+            global_rows.append(row)
+    illumination_rows, leverage_qa = validated_m101.build_illumination_scalars(
+        datasets, groups, globals_, alpha, f, good_groups, (1, 2, 3), delta_by_band)
+    validated_m101.normalize_illumination_scalars(illumination_rows, (1, 2, 3))
+    planes = {exposure: validated_m101.fit_illumination_plane(illumination_rows, exposure)
+              for exposure in (1, 2, 3)}
+    for row in illumination_rows:
+        plane = planes[row['exposure']]
+        x_arcmin = ((row['mean_RA'] - plane['ra0']) * np.cos(np.deg2rad(plane['dec0'])) * 60.0)
+        y_arcmin = (row['mean_Dec'] - plane['dec0']) * 60.0
+        row['plane_model'] = 1.0 + plane['cx'] * x_arcmin + plane['cy'] * y_arcmin
+        row['plane_residual'] = row['s_common_normalized'] - row['plane_model']
+        row['ifu_key'] = (int(row['SPECID']), int(row['IFUSLOT']), int(row['IFUID']))
+    response, response_details, exposure_records = _m101_fit_production_response(
+        illumination_rows, groups, good_groups, planes, state_template,
+        production_state, Path(h5file).name, log)
+    return {'h5': Path(h5file).name, 'alpha': alpha, 'globals': globals_,
+            'delta': delta_by_band, 'global_rows': global_rows,
+            'planes': planes, 'illumination_rows': illumination_rows,
+            'leverage': leverage_qa, 'groups': groups, 'response': response,
+            'response_details': response_details,
+            'survey_by_exp': survey_by_exp,
+            'exposure_records': exposure_records,
+            'production_state': production_state, 'labels': labels}
+
+
+def _m101_derive_gray_factors(calibrations, log):
+    """Replace historical norm_array with ensemble log-g normalization."""
+    logs = {band: [] for band in ('ON', 'OFF')}
+    for calibration in calibrations:
+        for band in logs:
+            for exposure in (1, 2, 3):
+                g = calibration['globals'][(exposure, band)]['g']
+                if np.isfinite(g) and g > 0.0:
+                    logs[band].append(np.log(g))
+    reference = {band: validated_m101.robust_location(values)
+                 for band, values in logs.items()}
+    if not all(np.isfinite(value) for value in reference.values()):
+        raise ValueError('cannot derive ensemble gray normalization: invalid g population')
+    raw = []
+    for calibration in calibrations:
+        per_exposure = {}
+        for exposure in (1, 2, 3):
+            deviations = {}
+            for band in ('ON', 'OFF'):
+                g = calibration['globals'][(exposure, band)]['g']
+                deviations[band] = (np.log(g) - reference[band]
+                                    if np.isfinite(g) and g > 0.0 else np.nan)
+            valid = [value for value in deviations.values() if np.isfinite(value)]
+            if not valid:
+                raise ValueError('%s exposure %d has no valid positive g for gray factor' %
+                                 (calibration['h5'], exposure))
+            if len(valid) == 1:
+                log.warning('%s exposure %d gray factor uses only one valid band',
+                            calibration['h5'], exposure)
+            d = float(np.mean(valid))
+            per_exposure[exposure] = {
+                'gray_ON_relative': np.exp(-deviations['ON']) if np.isfinite(deviations['ON']) else np.nan,
+                'gray_OFF_relative': np.exp(-deviations['OFF']) if np.isfinite(deviations['OFF']) else np.nan,
+                'gray_combined_raw': np.exp(-d),
+                'log_gray_ON_minus_OFF': (deviations['ON'] - deviations['OFF']
+                                          if all(np.isfinite(deviations[b]) for b in ('ON', 'OFF')) else np.nan),
+                'n_valid_bands_for_gray': len(valid)}
+            if (np.isfinite(per_exposure[exposure]['gray_ON_relative']) and
+                    np.isfinite(per_exposure[exposure]['gray_OFF_relative']) and
+                    per_exposure[exposure]['gray_OFF_relative'] != 0.0):
+                per_exposure[exposure]['gray_ON_minus_OFF_fractional'] = (
+                    per_exposure[exposure]['gray_ON_relative'] /
+                    per_exposure[exposure]['gray_OFF_relative'] - 1.0)
+            else:
+                per_exposure[exposure]['gray_ON_minus_OFF_fractional'] = np.nan
+            raw.append(per_exposure[exposure]['gray_combined_raw'])
+        calibration['gray_by_exposure'] = per_exposure
+    center = validated_m101.robust_location(np.log(np.asarray(raw, dtype=float)))
+    if not np.isfinite(center):
+        raise ValueError('cannot center ensemble gray normalization')
+    for calibration in calibrations:
+        for exposure in (1, 2, 3):
+            calibration['gray_by_exposure'][exposure]['gray_combined'] = (
+                calibration['gray_by_exposure'][exposure]['gray_combined_raw'] / np.exp(center))
+    log.info('M101 gray normalization: log center=%+.8g; positive g values ON=%d OFF=%d',
+             center, len(logs['ON']), len(logs['OFF']))
+    return reference
+
+
+def _m101_write_calibration_qa(calibrations, images, output_name, log):
+    calibration_rows = []
+    ifu_rows = []
+    for calibration in calibrations:
+        h5 = calibration['h5']
+        for exposure in (1, 2, 3):
+            survey = calibration['survey_by_exp'][exposure]
+            record = calibration['exposure_records'][exposure]
+            plane = calibration['planes'][exposure]
+            gray = calibration['gray_by_exposure'][exposure]
+            row = {'H5': h5, 'exposure': exposure,
+                   'production_state': calibration['production_state'],
+                   'Survey.offset': float(survey['offset']),
+                   'Survey.fwhm': float(survey['fwhm']),
+                   'plane_cx': plane['cx'], 'plane_cy': plane['cy'],
+                   'beta': record['beta'],
+                   'gray_ON_relative': gray['gray_ON_relative'],
+                   'gray_OFF_relative': gray['gray_OFF_relative'],
+                   'gray_combined': gray['gray_combined'],
+                   'log_gray_ON_minus_OFF': gray['log_gray_ON_minus_OFF'],
+                   'gray_ON_minus_OFF_fractional': gray['gray_ON_minus_OFF_fractional'],
+                   'n_good_physical_amps': record['n_good_physical_amps'],
+                   'n_well_constrained_IFUs': record['n_well_constrained_IFUs'],
+                   'n_template_IFUs': record['n_template_IFUs'],
+                   'RMS_scalar_before_plane': record['RMS_scalar_before_plane'],
+                   'RMS_scalar_after_plane': record['RMS_scalar_after_plane'],
+                   'RMS_scalar_after_template': record['RMS_scalar_after_template'],
+                   'response_min': record['response_min'], 'response_p16': record['response_p16'],
+                   'response_median': record['response_median'], 'response_p84': record['response_p84'],
+                   'response_max': record['response_max'],
+                   'external_FWHM_ON': images['ON']['psf']['fwhm_arcsec'],
+                   'external_FWHM_OFF': images['OFF']['psf']['fwhm_arcsec'],
+                   'external_background_ON': images['ON']['background'],
+                   'external_background_OFF': images['OFF']['background']}
+            for band in ('ON', 'OFF'):
+                fit = calibration['globals'][(exposure, band)]
+                delta = calibration['delta'][(exposure, band)]
+                row['g_%s' % band] = fit['g']
+                row['z_source_fit_%s' % band] = fit['z']
+                row['delta_illumination_%s' % band] = delta
+            for amp in validated_m101.AMPS:
+                row['alpha_%s' % amp] = calibration['alpha'][(exposure, amp)]
+            calibration_rows.append(row)
+
+            illumination = {tuple((int(r['SPECID']), int(r['IFUSLOT']), int(r['IFUID']))): r
+                            for r in calibration['illumination_rows']
+                            if int(r['exposure']) == exposure}
+            identities = sorted({(group['specid'], group['ifuslot'], group['ifuid'])
+                                 for group in calibration['groups'] if group['exposure'] == exposure},
+                                key=lambda key: (key[1], key[0], key[2]))
+            for key in identities:
+                details = calibration['response_details'][(exposure,) + key]
+                measured = illumination.get(key, {})
+                c = details['C_state']
+                if not details['template_present']:
+                    c = 0.0
+                ifu_rows.append({'H5': h5, 'exposure': exposure,
+                                 'production_state': calibration['production_state'],
+                                 'SPECID': key[0], 'IFUSLOT': key[1], 'IFUID': key[2],
+                                 's_common_normalized': measured.get('s_common_normalized', np.nan),
+                                 'well_constrained_common': measured.get('well_constrained_common', False),
+                                 's_plane': details['s_plane'], 'C_state': c,
+                                 'beta': record['beta'], 'beta_times_C': details['beta_times_C'],
+                                 's_response': details['s_response'],
+                                 'template_present': details['template_present']})
+    calibration_fields = ['H5', 'exposure', 'production_state', 'Survey.offset', 'Survey.fwhm']
+    calibration_fields += ['alpha_%s' % amp for amp in validated_m101.AMPS]
+    calibration_fields += ['g_ON', 'z_source_fit_ON', 'delta_illumination_ON',
+                           'g_OFF', 'z_source_fit_OFF', 'delta_illumination_OFF',
+                           'plane_cx', 'plane_cy', 'beta', 'gray_ON_relative',
+                           'gray_OFF_relative', 'gray_combined', 'log_gray_ON_minus_OFF',
+                           'gray_ON_minus_OFF_fractional',
+                           'n_good_physical_amps', 'n_well_constrained_IFUs', 'n_template_IFUs',
+                           'RMS_scalar_before_plane', 'RMS_scalar_after_plane',
+                           'RMS_scalar_after_template', 'response_min', 'response_p16',
+                           'response_median', 'response_p84', 'response_max',
+                           'external_FWHM_ON', 'external_FWHM_OFF',
+                           'external_background_ON', 'external_background_OFF']
+    ifu_fields = ['H5', 'exposure', 'production_state', 'SPECID', 'IFUSLOT', 'IFUID',
+                  's_common_normalized', 'well_constrained_common', 's_plane', 'C_state',
+                  'beta', 'beta_times_C', 's_response', 'template_present']
+    with Path(output_name).open('w', newline='') as stream:
+        writer = csv.DictWriter(stream, fieldnames=calibration_fields)
+        writer.writeheader(); writer.writerows(calibration_rows)
+    with Path(output_name).with_name('m101_production_ifu_response.csv').open('w', newline='') as stream:
+        writer = csv.DictWriter(stream, fieldnames=ifu_fields)
+        writer.writeheader(); writer.writerows(ifu_rows)
+    _m101_plot_calibration_summary(calibration_rows, output_name, log)
+    _m101_plot_response_maps(calibrations, output_name, log)
+    return calibration_rows, ifu_rows
+
+
+def _m101_plot_calibration_summary(rows, output_name, log):
+    rows = sorted(rows, key=lambda row: (row['H5'], row['exposure']))
+    x = np.arange(len(rows))
+    fig, axes = plt.subplots(4, 1, figsize=(15, 12), sharex=True)
+    axes[0].plot(x, [row['beta'] for row in rows], 'o-', ms=2, label='beta')
+    axes[0].plot(x, [row['gray_combined'] for row in rows], 'o-', ms=2, label='gray combined')
+    axes[0].set_ylabel('factor'); axes[0].legend(fontsize=8)
+    axes[1].plot(x, [row['log_gray_ON_minus_OFF'] for row in rows], 'o-', ms=2)
+    axes[1].axhline(0, color='k', lw=.7); axes[1].set_ylabel('log gray ON-OFF')
+    axes[2].plot(x, [row['RMS_scalar_before_plane'] for row in rows], 'o-', ms=2, label='before plane')
+    axes[2].plot(x, [row['RMS_scalar_after_plane'] for row in rows], 'o-', ms=2, label='after plane')
+    axes[2].plot(x, [row['RMS_scalar_after_template'] for row in rows], 'o-', ms=2, label='after beta*C')
+    axes[2].set_ylabel('scalar RMS'); axes[2].legend(fontsize=8)
+    for name in ('response_min', 'response_median', 'response_max'):
+        axes[3].plot(x, [row[name] for row in rows], 'o-', ms=2, label=name)
+    axes[3].set_ylabel('s_response'); axes[3].set_xlabel('chronological H5/exposure'); axes[3].legend(fontsize=8)
+    boundaries = [i for i in range(1, len(rows)) if rows[i]['H5'] != rows[i - 1]['H5']]
+    for axis in axes:
+        for boundary in boundaries: axis.axvline(boundary - .5, color='k', lw=.7)
+        axis.grid(alpha=.2)
+    fig.suptitle('M101 production hierarchical calibration')
+    fig.tight_layout(rect=(0, 0, 1, .95))
+    fig.savefig(Path(output_name).with_name('m101_production_calibration_summary.png'), dpi=170)
+    plt.close(fig)
+
+
+def _m101_plot_response_maps(calibrations, output_name, log):
+    selected_names = []
+    for calibration in calibrations:
+        if calibration['h5'] not in M101_SECONDARY_H5 and not selected_names:
+            selected_names.append(calibration['h5'])
+    selected_names += [name for name in ('20200622_0000015.h5', '20200710_0000013.h5',
+                                         '20200710_0000014.h5') if name not in selected_names]
+    selected = [calibration for calibration in calibrations if calibration['h5'] in selected_names]
+    fig, axes = plt.subplots(2, 2, figsize=(12, 9), squeeze=False)
+    for axis, calibration in zip(axes.flat, selected[:4]):
+        exposure = 1
+        values = []; ra = []; dec = []
+        seen = set()
+        for group in calibration['groups']:
+            if group['exposure'] != exposure:
+                continue
+            key = (group['specid'], group['ifuslot'], group['ifuid'])
+            if key in seen:
+                continue
+            seen.add(key); details = calibration['response_details'][(exposure,) + key]
+            values.append(details['s_response'] - 1.0); ra.append(group['mean_RA']); dec.append(group['mean_Dec'])
+        scale = max(np.percentile(np.abs(values), 95) if values else .01, .01)
+        axis.scatter(ra, dec, c=values, cmap='coolwarm', vmin=-scale, vmax=scale, s=25)
+        axis.set_title('%s e1 state=%d' % (calibration['h5'], calibration['production_state']), fontsize=9)
+        axis.set_xlabel('RA'); axis.set_ylabel('Dec'); axis.grid(alpha=.2)
+    for axis in axes.flat[len(selected[:4]):]: axis.set_visible(False)
+    fig.suptitle('M101 production s_response map QA (exposure 1)')
+    fig.tight_layout(rect=(0, 0, 1, .95))
+    fig.savefig(Path(output_name).with_name('m101_production_response_maps.png'), dpi=170)
+    plt.close(fig)
+
+
+def _m101_apply_h5_calibration(h5file, calibration, f_template, binimage,
+                               xg, yg, tp, log):
+    """PASS 2: apply detector, local response, residual sky, and gray scale."""
+    with tables.open_file(h5file, mode='r') as h5:
+        info, fibers = h5.root.Info, h5.root.Fibers
+        groups, labels = validated_m101.build_groups(info)
+        ra = np.asarray(info.cols.ra[:], dtype=float)
+        dec = np.asarray(info.cols.dec[:], dtype=float)
+        if 'skyspectrum' not in fibers.colnames:
+            raise ValueError('%s Fibers lacks skyspectrum' % h5file)
+        source = np.asarray(fibers.cols.spectrum[:], dtype=float)
+        error_source = np.asarray(fibers.cols.error[:], dtype=float)
+        sky = np.asarray(fibers.cols.skyspectrum[:], dtype=float)
+        survey_by_exp = _m101_production_survey_by_exp(h5)
+        ifuslot = np.asarray(info.cols.ifuslot[:])
+        amp = np.asarray([validated_m101.as_text(value) for value in info.cols.amp[:]])
+        bad = validated_m101.masked_rows(h5file, ifuslot, amp)
+        spectra = np.full(source.shape, np.nan, dtype=float)
+        errors = np.full(error_source.shape, np.nan, dtype=float)
+        for exposure in (1, 2, 3):
+            survey = survey_by_exp[exposure]
+            offset = float(survey['offset'])
+            if not np.isfinite(offset) or offset == 0.0:
+                raise ValueError('%s exposure %d Survey.offset is invalid: %s' %
+                                 (h5file, exposure, offset))
+            working = source / offset
+            error_work = error_source / offset
+            K_work = validated_m101.raw_work_basis(survey)
+            for group in groups:
+                if group['exposure'] != exposure:
+                    continue
+                key = (exposure, group['specid'], group['ifuslot'], group['ifuid'])
+                s_response = calibration['response'].get(key)
+                if s_response is None:
+                    raise ValueError('%s missing s_response for %s' % (h5file, key))
+                indices = group['indices']
+                j = np.arange(validated_m101.N_FIBER_AMP)
+                q = j if group['amp'] in ('LL', 'RU') else 111 - j
+                additive = (K_work[None, :] *
+                            calibration['alpha'][(exposure, group['amp'])] *
+                            f_template[q, None])
+                # Complete validated spectral equation:
+                # S_local = (S_Fibers/offset - A + B_sky)/s_response - B_sky.
+                spectra[indices] = ((working[indices] - additive + sky[indices]) /
+                                    s_response - sky[indices])
+                errors[indices] = error_work[indices] / s_response
+        spectra[bad] = np.nan
+        errors[bad] = np.nan
+        # binimage is retained solely for subtract_m101_residual_sky's frozen
+        # blank-region criterion; it is not used for photometric normalization.
+        spectra = subtract_m101_residual_sky(
+            spectra, ra, dec, xg, yg, tp, binimage=binimage, log=log,
+            h5file=op.basename(h5file))
+        for exposure in (1, 2, 3):
+            gray = calibration['gray_by_exposure'][exposure]['gray_combined']
+            selected = labels == exposure
+            spectra[selected] *= gray
+            errors[selected] *= gray
+    return spectra, errors, ra, dec, labels, survey_by_exp
+
 parser = ap.ArgumentParser(add_help=True)
 
 parser.add_argument("-d", "--directory",
@@ -707,13 +1226,28 @@ parser.add_argument("-ps", "--pixel_scale",
                     help='''Pixel scale for output image in arcsec''',
                     default=1.0, type=float)
 
-parser.add_argument("-if", "--image_file",
-                    help='''Image filename''',
+parser.add_argument("-if", "--image_file", "--m101-on-image",
+                    dest="m101_on_image",
+                    help='''M101 ON external image (historical -if alias)''',
                     default=None, type=str)
 
-parser.add_argument("-ff", "--filter_file",
-                    help='''Filter filename''',
+parser.add_argument("-ff", "--filter_file", "--m101-on-filter",
+                    dest="m101_on_filter",
+                    help='''M101 ON filter (historical -ff alias)''',
                     default=None, type=str)
+
+parser.add_argument("--m101-off-image", required=True,
+                    help='''M101 OFF external image''', type=str)
+parser.add_argument("--m101-off-filter", required=True,
+                    help='''M101 OFF filter''', type=str)
+parser.add_argument("--m101-fq-template", required=True,
+                    help='''Fixed common f(q) template''', type=str)
+parser.add_argument("--m101-ifu-state-template", required=True,
+                    help='''Fixed physical-IFU response state template''', type=str)
+parser.add_argument("--m101-calibration-only", action="store_true",
+                    help='''Run one-time image setup and PASS 1 calibration, then exit''')
+parser.add_argument("--m101-iterations", type=int, default=3,
+                    help='''Validated M101 alpha iterations (default: 3)''')
 
 parser.add_argument("--wave-workers",
                     help='''Number of threads used to build wavelength planes (default: 1)''',
@@ -723,7 +1257,7 @@ parser.add_argument("--make-lsf", action="store_true",
                     help='''Also propagate master-arc features sparsely and write empirical FWHM products''')
 
 parser.add_argument("--no-m101-amplifier-background", action="store_true",
-                    help='''Disable the default empirical M101 amplifier-edge background correction''')
+                    help='''Deprecated compatibility flag; the validated fixed alpha*f(q) hierarchy is always used''')
 
 def rebin(arr, new_shape):
     """Rebin 2D array arr to shape new_shape by averaging."""
@@ -1994,6 +2528,10 @@ def_wave = np.linspace(3470., 5540., 1036)
 
 h5files = sorted(glob.glob(args.h5files))
 args.log.info(f"Detected {len(h5files)} input file(s). Assuming each h5 contains 3 interleaved dithers by default.")
+if not h5files:
+    raise ValueError('no H5 files matched the production input pattern')
+if any(op.basename(h5file) == '20200523_0000023.h5' for h5file in h5files):
+    raise ValueError('20200523_0000023.h5 is explicitly excluded from the M101 sample')
 
 bounding_box = [float(corner.replace(' ', ''))
                         for corner in args.image_center_size.split(',')]
@@ -2007,12 +2545,6 @@ xg = np.arange(N) + 1
 yg = np.arange(N) + 1
 xgrid, ygrid = np.meshgrid(xg, yg)
 
-cube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
-variancecube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
-weightcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
-ncontribcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='uint8')
-dqcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='uint16')
-
 cnt = 0
 cnt_array = np.zeros((len(h5files), 2), dtype=int)
 # Build per-exposure (shot) index selections assuming 3 interleaved dithers per h5
@@ -2020,8 +2552,6 @@ nexp_default = 3
 shot_indices = []  # list of numpy arrays of global indices for each exposure
 shot_names = []
 lsf_center_records = []
-m101_amp_background_qa_rows = []
-m101_amp_background_profile_states = []
 for i, h5file in enumerate(h5files):
     t = tables.open_file(h5file)
     ra = t.root.Info.cols.ra[:]
@@ -2048,11 +2578,6 @@ args.log.info(f'Total shots (exposures) assumed: {len(shot_indices)} (3 per h5fi
 if args.make_lsf:
     args.log.info('LSF QA retained %d amplifier-center records before WCS mapping.',
                   len(lsf_center_records))
-
-raarray = np.zeros((cnt, len(def_wave)), dtype='float32')
-decarray = np.zeros((cnt, len(def_wave)), dtype='float32')
-specarray = np.zeros((cnt, len(def_wave)), dtype='float32')
-errarray = np.zeros((cnt, len(def_wave)), dtype='float32')
 
 # Astrometry with CRPIX at image center (not lower-left)
 _x0 = (N + 1) / 2.0
@@ -2086,271 +2611,125 @@ try:
 except Exception as e:
     args.log.warning(f'Coverage precheck failed with {e}; proceeding anyway.')
 
-if args.filter_file is not None:
-    R = Table.read(args.filter_file, format='ascii')
-    response = np.interp(def_wave, R['Wavelength'], R['R'], left=0.0, right=0.0)
-    
+# One-time fixed external-image setup.  These images are characterized once;
+# only temporary per-H5/per-exposure PSF matches are made during PASS 1.
+if args.m101_on_image is None or args.m101_on_filter is None:
+    parser.error('M101 hierarchy requires --m101-on-image and --m101-on-filter '
+                 '(historical -if/-ff aliases are accepted)')
+if args.m101_iterations < 1:
+    parser.error('--m101-iterations must be positive')
+f_global = validated_m101.load_fq(args.m101_fq_template)
+filters_global = {
+    'ON': validated_m101.read_filter(args.m101_on_filter),
+    'OFF': validated_m101.read_filter(args.m101_off_filter),
+}
+images_global = {
+    'ON': validated_m101.load_image(args.m101_on_image),
+    'OFF': validated_m101.load_image(args.m101_off_image),
+}
+for band in ('ON', 'OFF'):
+    validated_m101.estimate_external_background(images_global[band])
+    validated_m101.characterize_external_image(images_global[band], band)
+    args.log.info('M101 %s external image characterized once: FWHM=%.8g arcsec, '
+                  'background=%.8g +/- %.8g', band,
+                  images_global[band]['psf']['fwhm_arcsec'],
+                  images_global[band]['background'],
+                  images_global[band]['background_scatter'])
 
-    
-original_image_data = None
-original_image_wcs = None
-binimage = None
-if args.image_file is not None:
-    image_file = fits.open(args.image_file)
-    original_image_data = image_file[0].data
-    original_image_wcs = WCS(image_file[0].header)
-    name = op.basename(args.image_file)[:-5] + '_rect.fits'
-    if op.exists(name):
-        f = fits.open(name)
-        binimage = f[0].data
-    else:
-        wc = original_image_wcs
-        ny, nx = original_image_data.shape
-        yind, xind = np.indices((ny, nx))
-        xn, yn = wc.wcs_world2pix(A.ra0, A.dec0, 1)
-        tpn = A.setup_TP(A.ra0, A.dec0, 0., xn, yn, x_scale=-0.25, y_scale=0.25)
-        r, d = wc.wcs_pix2world(xind.ravel()+1.0, yind.ravel()+1.0, 1)
-        P = np.zeros((len(r), 2))
-        x, y = tp.wcs_world2pix(r, d, 1)
-        P[:, 0], P[:, 1] = (x, y)
-        d = np.sqrt((P[:, 0]-xg[0])**2 + (P[:, 1]-yg[0])**2)
-        I = np.argmin(d)
-        yi, xi = np.unravel_index(I, yind.shape)
-        N = 4 * len(xg)
-        x = np.reshape(x, image_file[0].data.shape)
-        y = np.reshape(y, image_file[0].data.shape)
-        newimage = original_image_data[yi:yi+N, xi:xi+N]
-        binimage = rebin(newimage, (newimage.shape[0]//4, newimage.shape[1]//4))
-        ximage = rebin(x[yi:yi+N, xi:xi+N], (newimage.shape[0]//4, newimage.shape[1]//4))
-        yimage = rebin(y[yi:yi+N, xi:xi+N], (newimage.shape[0]//4, newimage.shape[1]//4))
-        P = np.zeros((len(ximage.ravel()), 2))
-        P[:, 0], P[:, 1] = (ximage.ravel(), yimage.ravel())
-        binimage = griddata(P, binimage.ravel(), (xgrid, ygrid), method='cubic')
-        h = tp.to_header()
-        N = len(xg)
-        h['CRPIX1'] = np.interp(0., xg, np.arange(len(xg)))+1.0
-        h['CRPIX2'] = np.interp(0., xg, np.arange(len(xg)))+1.0
-        args.log.info('Writing %s' % name)
-        fits.PrimaryHDU(np.array(binimage, dtype='float32'), header=h).writeto(name, overwrite=True)
+# The residual-sky routine retains only this coarse ON-image binimage as a
+# blank-region criterion.  It is not used for external photometry or
+# normalization; all calibration photometry uses the exact aperture above.
+image_for_sky = images_global['ON']
+original_image_data = image_for_sky['data']
+original_image_wcs = image_for_sky['wcs']
+wc = original_image_wcs
+ny, nx = original_image_data.shape
+yind, xind = np.indices((ny, nx))
+r, d = wc.wcs_pix2world(xind.ravel() + 1.0, yind.ravel() + 1.0, 1)
+P = np.zeros((len(r), 2))
+px, py = tp.wcs_world2pix(r, d, 1)
+P[:, 0], P[:, 1] = px, py
+distance = np.sqrt((P[:, 0] - xg[0]) ** 2 + (P[:, 1] - yg[0]) ** 2)
+nearest = np.argmin(distance)
+yi, xi = np.unravel_index(nearest, yind.shape)
+cut_size = 4 * len(xg)
+newimage = original_image_data[yi:yi + cut_size, xi:xi + cut_size]
+if newimage.shape != (cut_size, cut_size):
+    raise ValueError('ON image does not contain the requested residual-sky cutout')
+binimage = rebin(newimage, (len(xg), len(xg)))
+xcoord_image = P[:, 0].reshape(original_image_data.shape)[yi:yi + cut_size, xi:xi + cut_size]
+ycoord_image = P[:, 1].reshape(original_image_data.shape)[yi:yi + cut_size, xi:xi + cut_size]
+ximage = rebin(xcoord_image, (len(xg), len(xg)))
+yimage = rebin(ycoord_image, (len(xg), len(xg)))
+P_small = np.column_stack((ximage.ravel(), yimage.ravel()))
+binimage = griddata(P_small, binimage.ravel(), (xgrid, ygrid), method='cubic')
 
+state_templates_global = _m101_load_state_template(args.m101_ifu_state_template, args.log)
+calibrations = []
+for h5file in h5files:
+    if op.basename(h5file) == '20200523_0000023.h5':
+        raise ValueError('excluded H5 was passed to the production builder: %s' % h5file)
+    production_state = 2 if op.basename(h5file) in M101_SECONDARY_H5 else 1
+    args.log.info('M101 PASS 1 calibration %s: production state=%d',
+                  op.basename(h5file), production_state)
+    calibrations.append(_m101_calibrate_one_h5(
+        h5file, images_global, filters_global, f_global, args.m101_iterations,
+        state_templates_global, production_state, args.log))
+_m101_derive_gray_factors(calibrations, args.log)
+_m101_write_calibration_qa(
+    calibrations, images_global, 'm101_production_calibration.csv', args.log)
+if args.m101_calibration_only:
+    args.log.info('M101 calibration-only requested; stopping before PASS 2 cube ingestion.')
+    sys.exit(0)
+# Allocate cube products only after calibration-only has passed.  PASS 1 has
+# retained compact calibration products, not H5 spectra or cube planes.
+cube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
+variancecube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
+weightcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='float32')
+ncontribcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='uint8')
+dqcube = np.zeros((len(def_wave),) + xgrid.shape, dtype='uint16')
+raarray = np.zeros((cnt, len(def_wave)), dtype='float32')
+decarray = np.zeros((cnt, len(def_wave)), dtype='float32')
+specarray = np.zeros((cnt, len(def_wave)), dtype='float32')
+errarray = np.zeros((cnt, len(def_wave)), dtype='float32')
+# PASS 2: reopen each H5, apply compact calibration products, and populate the
+# existing arrays.  The historical norm_array and external normalization path
+# are intentionally absent.
 cnt = 0
-norm_array = np.ones((len(h5files),))
-for jk, h5file in enumerate(h5files):
-    args.log.info('Working on %s' % h5file)
-    t = tables.open_file(h5file)
-    date = int(op.basename(h5file).split('_')[0])
-    ifuslots = t.root.Info.cols.ifuslot[:]
-    amps = np.array([i.decode("utf-8") for i in t.root.Info.cols.amp[:]])
-                
-            
-    ra = t.root.Info.cols.ra[:]
-    dec = t.root.Info.cols.dec[:]
-    RA = t.root.Survey.cols.ra[0]
-    Dec = t.root.Survey.cols.dec[0]
-    pa = t.root.Survey.cols.pa[0]
-    offset = t.root.Survey.cols.offset[0]
-    if args.no_m101_amplifier_background:
-        if (not np.isfinite(offset)) or (offset == 0):
-            args.log.warning(f'Offset for {op.basename(h5file)} is invalid ({offset}); proceeding without offset correction.')
-            spectra = t.root.Fibers.cols.spectrum[:]
-            error = t.root.Fibers.cols.error[:]
-        else:
-            args.log.info(f'Offset for {op.basename(h5file)}: {offset}')
-            # Preserve the existing H5 units: Quick Reduction applied the final
-            # photometric offset to SCI/error, so undo it before cube normalization.
-            spectra = t.root.Fibers.cols.spectrum[:] / offset
-            error = t.root.Fibers.cols.error[:] / offset
-    else:
-        # The helper works in the original H5 Fibers units.  This is important:
-        # its absolute Raw->Fibers basis includes Survey.offset, after which
-        # the unchanged builder below performs its existing offset undo.
-        source_spectra = t.root.Fibers.cols.spectrum[:]
-        try:
-            corrected_spectra, qa_rows, profile_states = \
-                correct_m101_amplifier_edge_background(
-                    t, source_spectra, ra, dec, original_image_data,
-                    original_image_wcs, op.basename(h5file), args.log)
-            m101_amp_background_qa_rows.extend(qa_rows)
-            m101_amp_background_profile_states.extend(profile_states)
-        except Exception as error:
-            args.log.warning(
-                'M101 amplifier background %s: %s; retaining uncorrected '
-                'Fibers.spectrum for this H5.', op.basename(h5file), error)
-            corrected_spectra = source_spectra
-        if (not np.isfinite(offset)) or (offset == 0):
-            args.log.warning(f'Offset for {op.basename(h5file)} is invalid ({offset}); proceeding without offset correction.')
-            spectra = corrected_spectra
-            error = t.root.Fibers.cols.error[:]
-        else:
-            args.log.info(f'Offset for {op.basename(h5file)}: {offset}')
-            # Preserve the existing H5 units: Quick Reduction applied the final
-            # photometric offset to SCI/error, so undo it before cube normalization.
-            spectra = corrected_spectra / offset
-            error = t.root.Fibers.cols.error[:] / offset
-    for key in mask_dict.keys():
-        date1 = int(key.split('-')[0])
-        date2 = int(key.split('-')[1])
-        if (date >= date1) and (date < date2):
-            ifulist = mask_dict[key]
-            for ifuamp in ifulist:
-                ifu = int(ifuamp[:3])
-                amp = ifuamp[3:]
-                sel = np.where((ifu == ifuslots) * (amp == amps))[0]
-                spectra[sel] = np.nan
-
-    # Subtract the single authoritative M101 residual-sky correction before
-    # the existing mosaic normalization.  This uses H5 sky-subtracted SCI
-    # directly; Fibers.skyspectrum is intentionally not added back.  This
-    # replaces the former H5-wide backspectra subtraction below normalization.
-    spectra = subtract_m101_residual_sky(
-        spectra, ra, dec, xg, yg, tp, binimage=binimage, log=args.log,
-        h5file=op.basename(h5file))
+calibration_by_h5 = {calibration['h5']: calibration for calibration in calibrations}
+for h5file in h5files:
+    h5name = op.basename(h5file)
+    calibration = calibration_by_h5[h5name]
+    spectra, error, ra, dec, labels, survey_by_exp = _m101_apply_h5_calibration(
+        h5file, calibration, f_global, binimage, xg, yg, tp, args.log)
     cnt1 = cnt + len(ra)
-    E = Extract()
-    Aother = Astrometry(bounding_box[0], bounding_box[1], pa, 0., 0.)
-    header = tp.to_header()
-    E.get_ADR_RAdec(Aother)
-    raarray[cnt:cnt1, :] = ra[:, np.newaxis] - E.ADRra[np.newaxis, :] / 3600. / np.cos(np.deg2rad(A.dec0))
-    decarray[cnt:cnt1, :] = dec[:, np.newaxis] - E.ADRdec[np.newaxis, :] / 3600.
+
+    # Preserve the existing wavelength-dependent ADR cube positions, but use
+    # the Survey row belonging to each exposure rather than Survey row 0.
+    extractor = Extract(wave=def_wave)
+    for exposure in (1, 2, 3):
+        selected = labels == exposure
+        survey = survey_by_exp[exposure]
+        astrometry = Astrometry(float(survey['ra']), float(survey['dec']),
+                                float(survey['pa']), 0., 0.)
+        extractor.get_ADR_RAdec(astrometry)
+        indices = np.flatnonzero(selected)
+        raarray[cnt + indices, :] = (
+            ra[indices, None] - extractor.ADRra[None, :] / 3600. /
+            np.cos(np.deg2rad(float(survey['dec']))))
+        decarray[cnt + indices, :] = (
+            dec[indices, None] - extractor.ADRdec[None, :] / 3600.)
+
     Gk = Gaussian1DKernel(1.8)
     for k in np.arange(len(spectra)):
-        if (np.isfinite(spectra[k])).sum() > 800:
+        if np.isfinite(spectra[k]).sum() > 800:
             spectra[k] = interpolate_replace_nans(spectra[k], Gk,
                                                   **{'boundary': 'extend'})
-    if args.filter_file is not None:
-        wsel = response>0.0
-        mask = np.isfinite(spectra[:, wsel]) * (spectra[:, wsel] != 0.0)
-        Pos = np.zeros((cnt1-cnt, 2))
-        x, y = tp.wcs_world2pix(np.nanmean(raarray[cnt:cnt1, wsel], axis=1),
-                                np.nanmean(decarray[cnt:cnt1, wsel], axis=1), 1)
-        Pos[:, 0], Pos[:, 1] = (x, y)
-        xc = np.interp(Pos[:, 0], xg, np.arange(len(xg)), left=0., right=len(xg))
-        yc = np.interp(Pos[:, 1], yg, np.arange(len(yg)), left=0., right=len(yg))
-        xc = np.array(np.round(xc), dtype=int)
-        yc = np.array(np.round(yc), dtype=int)
-        gsel = (xc>0) * (xc<len(xg)) * (yc>0) * (yc<len(yg))
-        collapse_image = (np.nansum(spectra[:, wsel] * response[np.newaxis, wsel], axis=1) /
-                          np.nansum(mask * response[np.newaxis, wsel], axis=1))
-        collapse_eimage = np.sqrt((np.nansum(error[:, wsel]**2 * response[np.newaxis, wsel], axis=1) /
-                                   np.nansum(mask * response[np.newaxis, wsel], axis=1)))
-
-
-        
-        # make_image_interp interprets tuple/list pairs as [start, stop]
-        # ranges; passing a 2D ndarray here would be treated as two indices.
-        cn = [(0, len(collapse_image))]
-        image, errorimage, weight = make_image_interp(Pos, collapse_image, collapse_eimage,
-                                                      xg, yg, xgrid, ygrid, 1.8 / 2.35,
-                                                      cn)
-        
-        image[image==0.] = np.nan
-        G = Gaussian2DKernel(4.5)
-        cimage = convolve(image, G, preserve_nan=True, boundary='extend')
-        nimage = binimage * 1.
-        nimage[np.isnan(cimage)] = np.nan
-        nimage = convolve(nimage, G, preserve_nan=True, boundary='extend')
-        sel = np.isfinite(cimage) * (nimage > 0.05)
-        yim = cimage / nimage
-        d = np.sqrt(xgrid**2 + ygrid**2)
-        yim[~sel] = 0.0
-        nimage[np.isnan(nimage)] = 0.0
-        image[np.isnan(image)] = 0.0
-        bimage = binimage * 1.
-        bimage[image==0.] = 0.
-        xmax = np.linspace(-0.1, 0.02, 26)
-        bmax = xmax*0.
-        thresh = 0.05
-        for i, v in enumerate(xmax):
-            y = (cimage - v) / nimage
-            y[~sel] = 0.0
-            if i == 0:
-                norm_sample = y[sel][nimage[sel] > thresh]
-                args.log.info(
-                    'Normalization diagnostics for %s: finite_cimage=%d, '
-                    'nimage_gt_thresh=%d, norm_samples=%d, finite_norm_samples=%d',
-                    h5file, int(np.isfinite(cimage).sum()),
-                    int(np.sum(np.isfinite(nimage) & (nimage > thresh))),
-                    int(norm_sample.size), int(np.isfinite(norm_sample).sum()))
-            norm, std = biweight(y[sel][nimage[sel] > thresh], calc_std=True)
-            bmax[i] = std / norm
-        back = xmax[np.argmin(bmax)]
-        args.log.info('Background for %s: %0.2f' % (h5file, back))
-        y = (cimage - back) / nimage
-        y[~sel] = 0.0
-        norm, std = biweight(y[sel][nimage[sel] > thresh], calc_std=True)
-        norm_array[jk] = norm
-        if norm_array[jk] < 0.:
-            norm_array[jk] = np.nan
-        args.log.info('Normalization/STD for %s: %0.2f, %0.2f' % (h5file, norm, std/norm))
-        flagged = image[yc[gsel], xc[gsel]]/norm_array[jk] < -0.03
-        spectra[np.where(gsel)[0][flagged]] = np.nan
-        args.log.info('%i fibers flagged for too large of a difference' % flagged.sum())
-        plt.figure(figsize=(10, 8))
-        plt.scatter(nimage[sel], y[sel] / norm, s=5, alpha=0.05)
-        plt.plot([0.03, 0.6], [1., 1.], 'r-', lw=2)
-        plt.plot([0.03, 0.6], [1.-std/norm, 1.-std/norm], 'r--', lw=1)
-        plt.plot([0.03, 0.6], [1.+std/norm, 1.+std/norm], 'r--', lw=1)
-        mn = np.nanpercentile(y[sel], 5)/norm
-        mx = np.nanpercentile(y[sel], 95)/norm
-        ran = mx - mn
-        plt.axis([0.03, 0.6, 0.6, 1.4])
-        name = op.basename(h5file)[:-3] + '_norm.png'
-        plt.savefig(name, dpi=300)
-        name = op.basename(h5file)[:-3] + '_rect.fits'
-        h = tp.to_header()
-        N = len(xg)
-        h['CRPIX1'] = np.interp(0., xg, np.arange(len(xg)))+1.0
-        h['CRPIX2'] = np.interp(0., xg, np.arange(len(xg)))+1.0
-        fits.PrimaryHDU(np.array(image/norm_array[jk], dtype='float32'), header=h).writeto(name, overwrite=True)
-    
-    # Use a safe per-file normalization; avoid NaN/zero scaling that can zero-out data
-    norm_j = norm_array[jk]
-    if (not np.isfinite(norm_j)) or (norm_j == 0.0):
-        args.log.warning(f'Per-file norm for {op.basename(h5file)} is invalid ({norm_j}); using 1.0 instead to avoid zeroing spectra.')
-        norm_j = 1.0
-    specarray[cnt:cnt1, :] = spectra / norm_j
-    errarray[cnt:cnt1, :] = error / norm_j
-    # Diagnostics for this chunk
-    chunk = specarray[cnt:cnt1, :]
-    finite_cnt = int(np.isfinite(chunk).sum())
-    nonzero_cnt = int(np.count_nonzero(np.nan_to_num(chunk)))
-    args.log.info(f'Chunk stats [{cnt}:{cnt1}]: finite={finite_cnt}/{chunk.size}, nonzero={nonzero_cnt}')
-    if nonzero_cnt == 0:
-        args.log.warning('This chunk of specarray is all zeros after normalization; check upstream masking/flagging and norms.')
-    cnt = cnt + len(ra)
-    t.close()
-
-if not args.no_m101_amplifier_background:
-    amplifier_background_csv = op.basename(
-        '%s_amplifier_background.csv' % args.surname)
-    amplifier_background_png = op.basename(
-        '%s_amplifier_background_profiles.png' % args.surname)
-    if m101_amp_background_qa_rows:
-        _write_m101_amplifier_background_qa(
-            amplifier_background_csv, m101_amp_background_qa_rows)
-        _write_m101_amplifier_background_figure(
-            amplifier_background_png, m101_amp_background_profile_states)
-        args.log.info(
-            'Wrote M101 amplifier-background QA: %s and %s',
-            amplifier_background_csv, amplifier_background_png)
-    else:
-        args.log.warning(
-            'No M101 amplifier-background QA rows were produced; no correction '
-            'was applied.')
-
-# Apply global normalization safely
-_bi = biweight(norm_array)
-if (not np.isfinite(_bi)) or (_bi == 0.0):
-    args.log.warning(f'Global biweight(norm_array) invalid ({_bi}); skipping global scaling to avoid zeroing data.')
-else:
-    specarray[:] *= _bi
-    errarray[:] *= _bi
-# Report overall specarray stats before imaging
-_nonzero_total = int(np.count_nonzero(np.nan_to_num(specarray)))
-_finite_total = int(np.isfinite(specarray).sum())
-args.log.info(f'specarray global stats: finite={_finite_total}/{specarray.size}, nonzero={_nonzero_total}')
-if _nonzero_total == 0:
-    args.log.error('specarray is all zeros before imaging. Possible causes: filter response zero everywhere, norms zero/NaN, all spectra flagged.')
+    specarray[cnt:cnt1, :] = spectra
+    errarray[cnt:cnt1, :] = error
+    args.log.info('PASS 2 %s: assigned calibrated spectra directly to '
+                  'specarray/errarray; no norm_array applied.', h5name)
+    cnt = cnt1
 
 def render_wavelength(i):
     """Build one wavelength plane using the test Gaussian imaging path."""
