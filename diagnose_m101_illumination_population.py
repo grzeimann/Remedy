@@ -9,6 +9,7 @@ illumination correction is applied to spectra, H5 files, or production cubes.
 
 from argparse import ArgumentParser
 import csv
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -18,6 +19,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import tables
+from scipy.cluster.hierarchy import fcluster, linkage
+from scipy.spatial.distance import squareform
 
 import diagnose_m101_hierarchical as single
 
@@ -32,6 +35,7 @@ H5_NAMES = (
     "20200710_0000013.h5", "20200710_0000014.h5",
 )
 EXCLUDED_H5 = "20200523_0000023.h5"
+MIN_COMMON_IFUS_FOR_CORRELATION = 10
 REQUIRED_OUTPUTS = ("illumination_ifu_scalars.csv",
                     "illumination_plane_parameters.csv",
                     "illumination_global_offsets.csv")
@@ -60,39 +64,6 @@ def write_csv(path, rows, fields):
         writer.writeheader()
         writer.writerows({field: row.get(field, np.nan) for field in fields}
                          for row in rows)
-
-
-def read_track_states(h5_paths):
-    """Read Survey.name for every exposure; never infer track from date/order."""
-    states = {}
-    for h5_path in h5_paths:
-        with tables.open_file(h5_path, mode="r") as h5:
-            if "Survey" not in h5.root._v_children:
-                raise ValueError("%s has no Survey table for track classification" % h5_path)
-            seen = set()
-            for survey_row in h5.root.Survey:
-                exposure = int(survey_row["exp"])
-                survey_name = single.as_text(survey_row["name"])
-                has_e, has_w = "_E" in survey_name, "_W" in survey_name
-                if has_e == has_w:
-                    raise ValueError("%s exposure %d Survey.name must contain exactly one of _E/_W: %r" %
-                                     (h5_path.name, exposure, survey_name))
-                key = (h5_path.name, exposure)
-                if key in seen:
-                    raise ValueError("%s has duplicate Survey exposure %d" % (h5_path.name, exposure))
-                seen.add(key)
-                states[key] = {"survey_name": survey_name, "track": "E" if has_e else "W"}
-            if seen != {(h5_path.name, exposure) for exposure in (1, 2, 3)}:
-                raise ValueError("%s Survey must contain exactly exposures 1, 2, 3" % h5_path.name)
-    print("track summary: E=%d W=%d" %
-          (sum(value["track"] == "E" for value in states.values()),
-           sum(value["track"] == "W" for value in states.values())))
-    for h5_path in h5_paths:
-        for exposure in (1, 2, 3):
-            state = states[(h5_path.name, exposure)]
-            print("  %s exposure %d %s %s" %
-                  (h5_path.name, exposure, state["survey_name"], state["track"]))
-    return states
 
 
 def resolve_h5_paths(h5_dir):
@@ -131,7 +102,7 @@ def run_single_h5(path, args, output_dir):
     subprocess.run(command, check=True)
 
 
-def load_population_rows(output_dir, h5_paths, track_states):
+def load_population_rows(output_dir, h5_paths):
     rows = []
     for h5_index, h5_path in enumerate(h5_paths):
         directory = output_dir / h5_path.stem
@@ -147,8 +118,6 @@ def load_population_rows(output_dir, h5_paths, track_states):
             base = dict(scalar)
             base.update({"h5": h5_path.name, "date": date, "shot": shot,
                          "h5_index": h5_index, "exposure_order": h5_index * 3 + exposure - 1})
-            state = track_states[(h5_path.name, exposure)]
-            base.update({"survey_name": state["survey_name"], "track": state["track"]})
             for field in ("cx", "cy", "ra0", "dec0", "robust_RMS_before",
                           "robust_RMS_after", "n_IFU_used", "n_IFU_rejected"):
                 base[field] = plane.get(field, np.nan)
@@ -163,7 +132,6 @@ def load_population_rows(output_dir, h5_paths, track_states):
             s_common = as_float(base["s_common_normalized"])
             s_plane = 1.0 + cx * x + cy * y
             base.update({"x_arcmin": x, "y_arcmin": y, "s_plane": s_plane,
-                         "r_raw": s_common - 1.0,
                          "r_IFU": s_common - s_plane,
                          "r_ON": as_float(base["s_ON_normalized"]) - s_plane,
                          "r_OFF": as_float(base["s_OFF_normalized"]) - s_plane})
@@ -175,7 +143,7 @@ def load_population_rows(output_dir, h5_paths, track_states):
 
 
 def population_fields():
-    return ["h5", "date", "shot", "exposure", "survey_name", "track",
+    return ["h5", "date", "shot", "exposure", "inferred_response_state",
             "SPECID", "IFUSLOT", "IFUID",
             "s_ON_raw", "s_OFF_raw", "s_common_raw", "s_ON_normalized",
             "s_OFF_normalized", "s_common_normalized", "well_constrained_ON",
@@ -205,11 +173,117 @@ def common_rows(rows):
     return [row for row in rows if valid_common(row)]
 
 
+def exposure_order(rows):
+    return sorted({exposure_key(row) for row in rows},
+                  key=lambda key: next(row["exposure_order"] for row in rows
+                                       if exposure_key(row) == key))
+
+
+def exposure_maps(rows):
+    return {key: {ifu_key(row): as_float(row["r_IFU"]) for row in rows
+                  if exposure_key(row) == key and valid_common(row)}
+            for key in exposure_order(rows)}
+
+
 def robust_correlation(x, y):
     x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
     if x.size < 3 or np.ptp(x) == 0.0 or np.ptp(y) == 0.0:
         return np.nan
     return float(np.corrcoef(x, y)[0, 1])
+
+
+def cluster_response_states(rows, output_dir):
+    """Cluster exposures using only the existing plane-subtracted r_IFU.
+
+    Pairwise correlations with fewer than MIN_COMMON_IFUS_FOR_CORRELATION
+    shared physical IFUs are left missing.  Missing distances are imputed
+    with the median observed distance only for the linkage calculation; the
+    displayed matrix remains marked as missing.
+    """
+    keys = exposure_order(rows)
+    maps = exposure_maps(rows)
+    n = len(keys)
+    correlations = np.full((n, n), np.nan)
+    common_counts = np.zeros((n, n), dtype=int)
+    for i, left in enumerate(keys):
+        correlations[i, i] = 1.0
+        for j in range(i + 1, n):
+            right = keys[j]
+            common = sorted(set(maps[left]) & set(maps[right]))
+            common_counts[i, j] = common_counts[j, i] = len(common)
+            if len(common) >= MIN_COMMON_IFUS_FOR_CORRELATION:
+                x = np.asarray([maps[left][key] for key in common])
+                y = np.asarray([maps[right][key] for key in common])
+                correlations[i, j] = correlations[j, i] = robust_correlation(x, y)
+
+    distances = 1.0 - np.clip(correlations, -1.0, 1.0)
+    finite_off_diagonal = np.isfinite(distances) & ~np.eye(n, dtype=bool)
+    if n < 2 or not finite_off_diagonal.any():
+        raise RuntimeError("cannot cluster response states: no usable exposure pairs")
+    fill_distance = float(np.median(distances[finite_off_diagonal]))
+    distances[~np.isfinite(distances)] = fill_distance
+    np.fill_diagonal(distances, 0.0)
+    linkage_result = linkage(squareform(distances, checks=False), method="average")
+    raw_labels = fcluster(linkage_result, 2, criterion="maxclust")
+    if len(set(raw_labels)) != 2:
+        raise RuntimeError("two-cluster diagnostic returned %d clusters" % len(set(raw_labels)))
+
+    # Cluster labels have no intrinsic ordering.  Chronological order is used
+    # only to name the earlier cluster state1 and the later cluster state2.
+    cluster_order = sorted(set(raw_labels),
+                           key=lambda label: np.median([i for i, value in enumerate(raw_labels)
+                                                        if value == label]))
+    label_map = {cluster_order[0]: 1, cluster_order[1]: 2}
+    state_by_exposure = {key: label_map[label] for key, label in zip(keys, raw_labels)}
+    print("response-state clustering: %d usable pairs, %d pairs below N=%d (distance fill=%g)" %
+          (int(np.sum(finite_off_diagonal) // 2),
+           int(np.sum(~finite_off_diagonal & ~np.eye(n, dtype=bool)) // 2),
+           MIN_COMMON_IFUS_FOR_CORRELATION, fill_distance))
+    correlation_summary = []
+    for pair_type in ("state1-state1", "state2-state2", "state1-state2"):
+        values = []
+        for i in range(n):
+            for j in range(i + 1, n):
+                type_for_pair = ("state%d-state%d" %
+                                 (state_by_exposure[keys[i]], state_by_exposure[keys[j]]))
+                if type_for_pair in {"state2-state1", "state1-state2"}:
+                    type_for_pair = "state1-state2"
+                if type_for_pair == pair_type and np.isfinite(correlations[i, j]):
+                    values.append(correlations[i, j])
+        values = np.asarray(values)
+        summary = {"pair_type": pair_type, "N_pairs": values.size,
+                   "median": np.median(values) if values.size else np.nan,
+                   "p16": np.percentile(values, 16) if values.size else np.nan,
+                   "p84": np.percentile(values, 84) if values.size else np.nan}
+        correlation_summary.append(summary)
+        print("%s correlations: N=%d median=%g p16/p84=%g/%g" %
+              (pair_type, summary["N_pairs"], summary["median"], summary["p16"], summary["p84"]))
+    write_csv(output_dir / "illumination_response_state_correlation_summary.csv",
+              correlation_summary, ["pair_type", "N_pairs", "median", "p16", "p84"])
+    for state in (1, 2):
+        print("response state %d chronological members:" % state)
+        for key in keys:
+            if state_by_exposure[key] == state:
+                print("  %s exposure=%d" % key)
+
+    order = sorted(range(n), key=lambda i: (state_by_exposure[keys[i]], i))
+    reordered = correlations[np.ix_(order, order)]
+    labels = ["%s\\ne%d" % (keys[i][0][:8], keys[i][1]) for i in order]
+    fig, axis = plt.subplots(figsize=(12, 10))
+    image = axis.imshow(reordered, cmap="coolwarm", vmin=-1, vmax=1,
+                        interpolation="none")
+    axis.set_title("Response-state clustering from physical-IFU correlations")
+    axis.set_xlabel("exposures reordered by inferred state")
+    axis.set_ylabel("exposures reordered by inferred state")
+    axis.set_xticks(np.arange(n)); axis.set_xticklabels(labels, rotation=90, fontsize=5)
+    axis.set_yticks(np.arange(n)); axis.set_yticklabels(labels, fontsize=5)
+    boundary = sum(state_by_exposure[key] == 1 for key in keys)
+    axis.axhline(boundary - .5, color="k", lw=2)
+    axis.axvline(boundary - .5, color="k", lw=2)
+    fig.colorbar(image, ax=axis, label="Pearson correlation of r_IFU")
+    fig.tight_layout(); fig.savefig(output_dir / "illumination_response_state_clustering.png",
+                                    dpi=170); plt.close(fig)
+    return state_by_exposure, correlations, common_counts
 
 
 def make_residual_matrix(rows, output_path):
@@ -287,257 +361,6 @@ def make_template(rows, output_dir):
     fig.tight_layout(rect=(0, 0, 1, .95)); fig.savefig(output_dir / "physical_ifu_response_template.png", dpi=170); plt.close(fig)
     return {key: as_float(row["C_IFU"]) for key, row in zip(
         [(int(row["SPECID"]), int(row["IFUSLOT"]), int(row["IFUID"])) for row in template_rows], template_rows)}
-
-
-def track_correlation_diagnostics(rows, output_dir, value_field="r_IFU", suffix=""):
-    """Compare E/E, W/W, and E/W correlations in the requested residual basis."""
-    exposure_keys = sorted({exposure_key(row) for row in rows},
-                           key=lambda key: next(row["exposure_order"] for row in rows if exposure_key(row) == key))
-    track_by_exposure = {key: next(row["track"] for row in rows if exposure_key(row) == key)
-                         for key in exposure_keys}
-    ordered = sorted(exposure_keys, key=lambda key: (track_by_exposure[key] != "E",
-                                                      next(row["exposure_order"] for row in rows if exposure_key(row) == key)))
-    values_by_exposure = {}
-    for key in ordered:
-        values_by_exposure[key] = {ifu_key(row): as_float(row[value_field]) for row in rows
-                                   if exposure_key(row) == key and
-                                   as_bool(row["well_constrained_common"]) and
-                                   np.isfinite(as_float(row[value_field]))}
-    matrix = np.full((len(ordered), len(ordered)), np.nan)
-    distributions = []
-    for i, left in enumerate(ordered):
-        matrix[i, i] = 1.0
-        for j in range(i + 1, len(ordered)):
-            right = ordered[j]
-            common = sorted(set(values_by_exposure[left]) & set(values_by_exposure[right]))
-            x = np.asarray([values_by_exposure[left][key] for key in common])
-            y = np.asarray([values_by_exposure[right][key] for key in common])
-            correlation = robust_correlation(x, y)
-            matrix[i, j] = matrix[j, i] = correlation
-            pair_type = track_by_exposure[left] + "-" + track_by_exposure[right]
-            distributions.append((pair_type, correlation))
-    summary_rows = []
-    for pair_type in ("E-E", "W-W", "E-W"):
-        values = np.asarray([value for kind, value in distributions if kind == pair_type and np.isfinite(value)])
-        summary_rows.append({"quantity": value_field, "pair_type": pair_type, "N_pairs": values.size,
-                             "median": np.median(values) if values.size else np.nan,
-                             "p16": np.percentile(values, 16) if values.size else np.nan,
-                             "p84": np.percentile(values, 84) if values.size else np.nan})
-        print("%s %s correlations: N=%d median=%.6g p16/p84=%.6g/%.6g" %
-              (value_field, pair_type, summary_rows[-1]["N_pairs"], summary_rows[-1]["median"],
-               summary_rows[-1]["p16"], summary_rows[-1]["p84"]))
-    return ordered, matrix, summary_rows
-
-
-def plot_track_correlation_matrix(rows, output_dir):
-    ordered, matrix, summary = track_correlation_diagnostics(rows, output_dir, "r_IFU")
-    _, _, raw_summary = track_correlation_diagnostics(rows, output_dir, "r_raw")
-    write_csv(output_dir / "illumination_track_correlation_summary.csv",
-              summary + raw_summary, ["quantity", "pair_type", "N_pairs", "median", "p16", "p84"])
-    scale = max(float(np.nanpercentile(np.abs(matrix), 98)) if np.isfinite(matrix).any() else 1.0, .05)
-    fig, axis = plt.subplots(figsize=(12, 10))
-    image = axis.imshow(matrix, cmap="coolwarm", vmin=-scale, vmax=scale, interpolation="none")
-    axis.axhline(sum(next(row["track"] for row in rows if exposure_key(row) == key) == "E" for key in ordered) - .5,
-                 color="k", lw=2.0)
-    axis.axvline(sum(next(row["track"] for row in rows if exposure_key(row) == key) == "E" for key in ordered) - .5,
-                 color="k", lw=2.0)
-    axis.set_title("Exposure correlations reordered by Survey track (r_IFU)")
-    axis.set_xlabel("E exposures, then W exposures"); axis.set_ylabel("E exposures, then W exposures")
-    fig.colorbar(image, ax=axis, label="Pearson correlation")
-    fig.tight_layout(); fig.savefig(output_dir / "illumination_exposure_correlation_matrix_by_track.png", dpi=170); plt.close(fig)
-    return summary, raw_summary
-
-
-def make_track_templates(rows, output_dir):
-    grouped = {}
-    locations = {}
-    for track in ("E", "W"):
-        grouped[track] = {}
-        selected = [row for row in rows if row["track"] == track and valid_common(row)]
-        for row in selected:
-            grouped[track].setdefault(ifu_key(row), []).append(as_float(row["r_IFU"]))
-    identities = sorted(set(grouped["E"]) | set(grouped["W"]), key=lambda key: (key[1], key[0], key[2]))
-    template_rows = []
-    templates = {"E": {}, "W": {}}
-    for key in identities:
-        output = {"SPECID": key[0], "IFUSLOT": key[1], "IFUID": key[2]}
-        for track in ("E", "W"):
-            values = np.asarray(grouped[track].get(key, []), dtype=float)
-            templates[track][key] = single.robust_location(values) if values.size else np.nan
-            output.update({"C_%s" % track: templates[track][key],
-                           "scatter_%s" % track: single.robust_scale(values) if values.size else np.nan,
-                           "N_%s" % track: values.size,
-                           "p16_%s" % track: np.percentile(values, 16) if values.size else np.nan,
-                           "p84_%s" % track: np.percentile(values, 84) if values.size else np.nan})
-        output["C_W_minus_C_E"] = output["C_W"] - output["C_E"] \
-            if np.isfinite(output["C_W"]) and np.isfinite(output["C_E"]) else np.nan
-        positions = [row for row in rows if ifu_key(row) == key and valid_common(row)]
-        locations[key] = (single.robust_location([as_float(row["mean_RA"]) for row in positions]),
-                          single.robust_location([as_float(row["mean_Dec"]) for row in positions]))
-        template_rows.append(output)
-    fields = ["SPECID", "IFUSLOT", "IFUID", "C_E", "scatter_E", "N_E", "p16_E", "p84_E",
-              "C_W", "scatter_W", "N_W", "p16_W", "p84_W", "C_W_minus_C_E"]
-    write_csv(output_dir / "physical_ifu_response_template_by_track.csv", template_rows, fields)
-    return templates, locations, template_rows
-
-
-def plot_track_templates(rows, templates, locations, template_rows, output_dir):
-    ra = np.asarray([locations[(int(row["SPECID"]), int(row["IFUSLOT"]), int(row["IFUID"]))][0]
-                     for row in template_rows]); dec = np.asarray([locations[(int(row["SPECID"]), int(row["IFUSLOT"]), int(row["IFUID"]))][1]
-                                                                      for row in template_rows])
-    data = {name: np.asarray([as_float(row[name]) for row in template_rows])
-            for name in ("C_E", "C_W", "C_W_minus_C_E", "scatter_E", "scatter_W", "N_E", "N_W")}
-    cscale = max(float(np.nanpercentile(np.abs(np.concatenate((data["C_E"], data["C_W"]))), 95)), .01)
-    dscale = max(float(np.nanpercentile(np.abs(data["C_W_minus_C_E"]), 95)), .01)
-    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
-    for axis, name, scale, title in zip(axes, ("C_E", "C_W", "C_W_minus_C_E"), (cscale, cscale, dscale), ("C_E", "C_W", "C_W - C_E")):
-        finite = np.isfinite(data[name])
-        axis.scatter(ra[finite], dec[finite], c=data[name][finite], cmap="coolwarm", vmin=-scale, vmax=scale, s=42)
-        axis.set_title(title); axis.set_xlabel("RA"); axis.set_ylabel("Dec"); axis.grid(alpha=.2)
-    fig.suptitle("Track-specific physical-IFU response templates (identity is SPECID/IFUSLOT/IFUID)")
-    fig.tight_layout(rect=(0, 0, 1, .95)); fig.savefig(output_dir / "physical_ifu_response_templates_E_W.png", dpi=170); plt.close(fig)
-
-
-def plot_track_template_comparison(template_rows, output_dir):
-    selected = [row for row in template_rows if np.isfinite(as_float(row["C_E"])) and np.isfinite(as_float(row["C_W"]))]
-    x = np.asarray([as_float(row["C_E"]) for row in selected]); y = np.asarray([as_float(row["C_W"]) for row in selected])
-    fit = single.fit_line(x, y); residual = y - (fit["g"] * x + fit["z"])
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    axes[0].scatter(x, y, s=24, alpha=.75)
-    if x.size >= 3:
-        grid = np.linspace(min(x.min(), y.min()), max(x.max(), y.max()), 100)
-        axes[0].plot(grid, grid, "k:", label="identity"); axes[0].plot(grid, fit["g"] * grid + fit["z"], "b-", label="robust fit")
-    axes[0].set_xlabel("C_E"); axes[0].set_ylabel("C_W"); axes[0].legend(fontsize=8)
-    axes[0].text(.03, .97, "r=%.5g\nrobust scatter=%.5g\nN=%d" % (robust_correlation(x, y), single.robust_rms(residual), x.size), transform=axes[0].transAxes, va="top")
-    order = np.argsort([int(row["IFUSLOT"]) for row in selected])
-    axes[1].plot(np.arange(len(selected)), (y - x)[order], "o-", ms=3)
-    axes[1].axhline(0, color="k", lw=.7); axes[1].set_xlabel("IFU identity sorted by IFUSLOT"); axes[1].set_ylabel("C_W - C_E"); axes[1].grid(alpha=.2)
-    fig.suptitle("East versus West physical-IFU response")
-    fig.tight_layout(rect=(0, 0, 1, .95)); fig.savefig(output_dir / "physical_ifu_response_E_vs_W.png", dpi=170); plt.close(fig)
-    return {"N": x.size, "correlation": robust_correlation(x, y), "robust_scatter": single.robust_rms(residual),
-            "slope": fit["g"], "intercept": fit["z"]}
-
-
-def raw_track_template_summary(rows, output_dir):
-    grouped = {"E": {}, "W": {}}
-    for row in rows:
-        if not as_bool(row["well_constrained_common"]):
-            continue
-        value = as_float(row["s_common_normalized"])
-        if np.isfinite(value):
-            grouped[row["track"]].setdefault(ifu_key(row), []).append(value - 1.0)
-    east = {key: single.robust_location(values) for key, values in grouped["E"].items()}
-    west = {key: single.robust_location(values) for key, values in grouped["W"].items()}
-    common = sorted(set(east) & set(west))
-    x = np.asarray([east[key] for key in common]); y = np.asarray([west[key] for key in common])
-    result = {"N_common_IFU": len(common), "C_E_raw_C_W_raw_correlation": robust_correlation(x, y),
-              "C_E_raw_robust_scatter": single.robust_scale(x),
-              "C_W_raw_robust_scatter": single.robust_scale(y)}
-    write_csv(output_dir / "illumination_track_no_plane_summary.csv", [result],
-              ["N_common_IFU", "C_E_raw_C_W_raw_correlation",
-               "C_E_raw_robust_scatter", "C_W_raw_robust_scatter"])
-    print("raw C_E versus C_W correlation: N=%d r=%.6g" %
-          (result["N_common_IFU"], result["C_E_raw_C_W_raw_correlation"]))
-    return result
-
-
-def template_for_rows(rows, track=None, excluded_h5=None, value_field="r_IFU"):
-    grouped = {}
-    for row in rows:
-        if excluded_h5 is not None and row["h5"] == excluded_h5:
-            continue
-        if track is not None and row["track"] != track:
-            continue
-        if value_field == "r_IFU" and not valid_common(row):
-            continue
-        value = as_float(row[value_field])
-        if np.isfinite(value):
-            grouped.setdefault(ifu_key(row), []).append(value)
-    return {key: single.robust_location(values) for key, values in grouped.items()}
-
-
-def evaluate_prediction(template, test_rows):
-    selected = [row for row in test_rows if ifu_key(row) in template and np.isfinite(template[ifu_key(row)])]
-    x = np.asarray([template[ifu_key(row)] for row in selected]); y = np.asarray([as_float(row["r_IFU"]) for row in selected])
-    fit = single.robust_zero_slope(x, y)
-    before = single.robust_rms(y)
-    after = single.robust_rms(y - fit["slope"] * x) if np.isfinite(fit["slope"]) else np.nan
-    return {"beta": fit["slope"], "correlation": robust_correlation(x, y),
-            "rms_before": before, "rms_after": after,
-            "improvement": ((before - after) / before if np.isfinite(before) and before > 0 and np.isfinite(after) else np.nan),
-            "N": y.size}
-
-
-def track_leave_one_h5_out(rows, floor_by_exposure, output_dir):
-    results = []
-    for held_out in H5_NAMES:
-        test_h5 = [row for row in rows if row["h5"] == held_out]
-        for exposure in (1, 2, 3):
-            test_rows = [row for row in test_h5 if int(row["exposure"]) == exposure and valid_common(row)]
-            if not test_rows:
-                continue
-            track = test_rows[0]["track"]
-            templates = {"universal": template_for_rows(rows, excluded_h5=held_out),
-                         "matched": template_for_rows(rows, track=track, excluded_h5=held_out),
-                         "opposite": template_for_rows(rows, track="W" if track == "E" else "E", excluded_h5=held_out)}
-            common_keys = set(templates["universal"]) & set(templates["matched"]) & set(templates["opposite"])
-            same_test = [row for row in test_rows if ifu_key(row) in common_keys]
-            predictions = {name: evaluate_prediction(template, same_test)
-                           for name, template in templates.items()}
-            floor = floor_by_exposure.get((held_out, exposure), {})
-            output = {"h5": held_out, "date": held_out[:8], "shot": held_out[9:16],
-                      "exposure": exposure, "track": track,
-                      "N_common_IFU": predictions["matched"]["N"],
-                      "sigma_measurement_floor": floor.get("sigma_measurement", np.nan)}
-            for name in ("universal", "matched", "opposite"):
-                output.update({"beta_%s" % name: predictions[name]["beta"],
-                               "correlation_%s" % name: predictions[name]["correlation"],
-                               "RMS_before_%s" % name: predictions[name]["rms_before"],
-                               "RMS_after_%s" % name: predictions[name]["rms_after"],
-                               "improvement_%s" % name: predictions[name]["improvement"]})
-            results.append(output)
-    fields = ["h5", "date", "shot", "exposure", "track", "N_common_IFU", "sigma_measurement_floor"]
-    for name in ("universal", "matched", "opposite"):
-        fields.extend(["beta_%s" % name, "correlation_%s" % name,
-                       "RMS_before_%s" % name, "RMS_after_%s" % name,
-                       "improvement_%s" % name])
-    write_csv(output_dir / "illumination_leave_one_h5_out_by_track.csv", results, fields)
-    x = np.arange(len(results)); fig, axes = plt.subplots(2, 2, figsize=(15, 9))
-    axes[0, 0].plot(x, [as_float(row["RMS_before_matched"]) for row in results], "k-", lw=1, label="before")
-    for name, color in (("universal", "tab:blue"), ("matched", "tab:green"), ("opposite", "tab:red")):
-        axes[0, 0].plot(x, [as_float(row["RMS_after_%s" % name]) for row in results], "o-", ms=3, color=color, label="after %s" % name)
-    axes[0, 0].plot(x, [as_float(row["sigma_measurement_floor"]) for row in results], "--", color="0.4", label="ON/OFF floor")
-    axes[0, 0].set_title("Held-out RMS"); axes[0, 0].legend(fontsize=7)
-    for name, color in (("universal", "tab:blue"), ("matched", "tab:green"), ("opposite", "tab:red")):
-        values = [as_float(row["improvement_%s" % name]) for row in results]
-        axes[0, 1].hist([value for value in values if np.isfinite(value)], bins=20, alpha=.45, color=color, label=name)
-    axes[0, 1].set_title("improvement fraction"); axes[0, 1].legend(fontsize=7)
-    for name, color in (("universal", "tab:blue"), ("matched", "tab:green"), ("opposite", "tab:red")):
-        values = [as_float(row["correlation_%s" % name]) for row in results]
-        axes[1, 0].hist([value for value in values if np.isfinite(value)], bins=20, alpha=.45, color=color, label=name)
-    axes[1, 0].set_title("held-out correlation"); axes[1, 0].legend(fontsize=7)
-    axes[1, 1].plot(x, [as_float(row["beta_matched"]) for row in results], "o-", ms=3)
-    axes[1, 1].axhline(0, color="k", lw=.7); axes[1, 1].set_title("matched-track beta")
-    for axis in axes.flat: axis.grid(alpha=.2)
-    fig.tight_layout(); fig.savefig(output_dir / "illumination_track_template_validation.png", dpi=170); plt.close(fig)
-    return results
-
-
-def plot_track_beta(results, output_dir):
-    fig, axis = plt.subplots(figsize=(14, 5))
-    for track, color, marker in (("E", "tab:orange", "o"), ("W", "tab:blue", "s")):
-        selected = [row for row in results if row["track"] == track]
-        positions = [i for i, row in enumerate(results) if row["track"] == track]
-        axis.plot(positions, [as_float(row["beta_matched"]) for row in selected], marker=marker, ls="-", color=color, ms=4, label=track)
-        values = np.asarray([as_float(row["beta_matched"]) for row in selected]); values = values[np.isfinite(values)]
-        print("matched-track beta %s: N=%d median=%.6g p16/p84=%.6g/%.6g scatter=%.6g" %
-              (track, values.size, np.median(values) if values.size else np.nan,
-               np.percentile(values, 16) if values.size else np.nan,
-               np.percentile(values, 84) if values.size else np.nan,
-               single.robust_scale(values)))
-    axis.axhline(0, color="k", lw=.7); axis.set_xlabel("chronological held-out H5/exposure")
-    axis.set_ylabel("matched-track beta"); axis.set_title("Matched E/W template amplitude"); axis.legend(); axis.grid(alpha=.2)
-    fig.tight_layout(); fig.savefig(output_dir / "illumination_track_template_beta.png", dpi=170); plt.close(fig)
 
 
 def fit_template_by_exposure(rows, template, output_dir):
@@ -691,6 +514,380 @@ def leave_one_h5_out(rows, floor_by_exposure, output_dir):
     return results
 
 
+def template_from_rows(rows, state=None, excluded_h5=None):
+    grouped = {}
+    for row in rows:
+        if not valid_common(row) or (state is not None and int(row["inferred_response_state"]) != state):
+            continue
+        if excluded_h5 is not None and row["h5"] == excluded_h5:
+            continue
+        grouped.setdefault(ifu_key(row), []).append(as_float(row["r_IFU"]))
+    return {key: single.robust_location(values) for key, values in grouped.items()
+            if np.isfinite(single.robust_location(values))}
+
+
+def state_templates(rows, output_dir):
+    grouped = {(state, ifu_key(row)): [] for state in (1, 2) for row in rows
+               if valid_common(row) and int(row["inferred_response_state"]) == state}
+    locations = {}
+    for row in rows:
+        if valid_common(row):
+            locations.setdefault(ifu_key(row), []).append(
+                (as_float(row["mean_RA"]), as_float(row["mean_Dec"])))
+    for row in rows:
+        if valid_common(row):
+            grouped.setdefault((int(row["inferred_response_state"]), ifu_key(row)), []).append(
+                as_float(row["r_IFU"]))
+    identities = sorted({key for _, key in grouped}, key=lambda key: (key[1], key[0], key[2]))
+    template_rows = []
+    templates = {1: {}, 2: {}}
+    for key in identities:
+        output = {"SPECID": key[0], "IFUSLOT": key[1], "IFUID": key[2]}
+        for state in (1, 2):
+            values = np.asarray(grouped.get((state, key), []), dtype=float)
+            values = values[np.isfinite(values)]
+            c = single.robust_location(values)
+            templates[state][key] = c
+            output.update({"C_state%d" % state: c,
+                           "scatter_state%d" % state: single.robust_scale(values),
+                           "N_state%d" % state: values.size})
+        output["C_state2_minus_state1"] = (output["C_state2"] - output["C_state1"]
+                                            if np.isfinite(as_float(output["C_state1"])) and
+                                            np.isfinite(as_float(output["C_state2"])) else np.nan)
+        template_rows.append(output)
+    fields = ["SPECID", "IFUSLOT", "IFUID", "C_state1", "scatter_state1", "N_state1",
+              "C_state2", "scatter_state2", "N_state2", "C_state2_minus_state1"]
+    write_csv(output_dir / "physical_ifu_response_template_by_state.csv", template_rows, fields)
+
+    ra = np.asarray([single.robust_location([value[0] for value in locations[key]])
+                     for key in identities])
+    dec = np.asarray([single.robust_location([value[1] for value in locations[key]])
+                      for key in identities])
+    c1 = np.asarray([templates[1].get(key, np.nan) for key in identities])
+    c2 = np.asarray([templates[2].get(key, np.nan) for key in identities])
+    difference = c2 - c1
+    finite_c = np.concatenate((c1[np.isfinite(c1)], c2[np.isfinite(c2)]))
+    cscale = max(float(np.percentile(np.abs(finite_c), 95)) if finite_c.size else .01, .01)
+    finite_both = np.isfinite(c1) & np.isfinite(c2)
+    correlation = robust_correlation(c1[finite_both], c2[finite_both])
+    line = single.fit_line(c1[finite_both], c2[finite_both])
+    relation_scatter = single.robust_scale(c2[finite_both] -
+                                           (line["g"] * c1[finite_both] + line["z"])
+                                           if np.isfinite(line["g"]) else [])
+    print("state template comparison: N=%d, correlation=%g, C2=%g*C1+%g, robust scatter=%g" %
+          (int(np.sum(finite_both)), correlation, line["g"], line["z"], relation_scatter))
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    for axis, values, title in ((axes[0, 0], c1, "C_state1"),
+                                (axes[0, 1], c2, "C_state2"),
+                                (axes[1, 0], difference, "C_state2 - C_state1")):
+        axis.scatter(ra, dec, c=values, cmap="coolwarm", vmin=-cscale, vmax=cscale, s=35)
+        axis.set_title(title); axis.set_xlabel("RA"); axis.set_ylabel("Dec"); axis.grid(alpha=.2)
+    axis = axes[1, 1]
+    axis.scatter(c1[finite_both], c2[finite_both], s=22, alpha=.75)
+    limits = np.asarray([np.nanmin(np.r_[c1[finite_both], c2[finite_both]]),
+                         np.nanmax(np.r_[c1[finite_both], c2[finite_both]])]) if finite_both.any() else np.array([-.01, .01])
+    axis.plot(limits, limits, "k--", label="identity")
+    if np.isfinite(line["g"]):
+        axis.plot(limits, line["g"] * limits + line["z"], label="robust fit")
+    axis.set_title("state template comparison (r=%.3g)" % correlation)
+    axis.set_xlabel("C_state1"); axis.set_ylabel("C_state2"); axis.legend(fontsize=8); axis.grid(alpha=.2)
+    fig.suptitle("Unsmoothed physical-IFU response states")
+    fig.tight_layout(rect=(0, 0, 1, .95)); fig.savefig(output_dir / "physical_ifu_response_state_comparison.png",
+                                                       dpi=170); plt.close(fig)
+    return templates
+
+
+def evaluate_template_prediction(test_rows, template):
+    selected = [row for row in test_rows if ifu_key(row) in template and
+                np.isfinite(as_float(template[ifu_key(row)]))]
+    if len(selected) < 3:
+        return {"beta": np.nan, "correlation": np.nan, "robust_RMS_before": np.nan,
+                "robust_RMS_after": np.nan, "improvement_fraction": np.nan, "N": len(selected)}
+    x = np.asarray([template[ifu_key(row)] for row in selected])
+    y = np.asarray([as_float(row["r_IFU"]) for row in selected])
+    fit = single.robust_zero_slope(x, y)
+    before = single.robust_rms(y)
+    after = single.robust_rms(y - fit["slope"] * x) if np.isfinite(fit["slope"]) else np.nan
+    return {"beta": fit["slope"], "correlation": robust_correlation(x, y),
+            "robust_RMS_before": before, "robust_RMS_after": after,
+            "improvement_fraction": ((before - after) / before if np.isfinite(before) and before > 0 else np.nan),
+            "N": len(selected)}
+
+
+def plot_state_templates(rows, templates, output_dir):
+    identities = sorted(set(templates[1]) | set(templates[2]), key=lambda key: (key[1], key[0], key[2]))
+    locations = {}
+    for key in identities:
+        positions = [row for row in rows if ifu_key(row) == key and valid_common(row)]
+        locations[key] = (single.robust_location([as_float(row["mean_RA"]) for row in positions]),
+                          single.robust_location([as_float(row["mean_Dec"]) for row in positions]))
+    ra = np.asarray([locations[key][0] for key in identities]); dec = np.asarray([locations[key][1] for key in identities])
+    values = [np.asarray([templates[state].get(key, np.nan) for key in identities]) for state in (1, 2)]
+    values.append(values[1] - values[0])
+    finite = np.concatenate([v[np.isfinite(v)] for v in values[:2]])
+    scale = max(float(np.percentile(np.abs(finite), 95)) if finite.size else .01, .01)
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+    for axis, value, title in zip(axes, values, ("C_state1", "C_state2", "C_state2 - C_state1")):
+        axis.scatter(ra, dec, c=value, cmap="coolwarm", vmin=-scale, vmax=scale, s=35)
+        axis.set_title(title); axis.set_xlabel("RA"); axis.set_ylabel("Dec"); axis.grid(alpha=.2)
+    fig.suptitle("Response-state physical-IFU templates")
+    fig.tight_layout(rect=(0, 0, 1, .95)); fig.savefig(output_dir / "physical_ifu_response_templates_by_state.png",
+                                                       dpi=170); plt.close(fig)
+
+
+def leave_one_h5_out_by_state(rows, floor_by_exposure, output_dir):
+    results = []
+    for held_out in H5_NAMES:
+        held_rows = [row for row in rows if row["h5"] == held_out]
+        for exposure in (1, 2, 3):
+            test = [row for row in held_rows if int(row["exposure"]) == exposure and valid_common(row)]
+            if not test:
+                continue
+            state = int(test[0]["inferred_response_state"])
+            universal = template_from_rows(rows, excluded_h5=held_out)
+            matching = template_from_rows(rows, state=state, excluded_h5=held_out)
+            opposite = template_from_rows(rows, state=3 - state, excluded_h5=held_out)
+            available = set(universal) & set(matching) & set(opposite) & {ifu_key(row) for row in test}
+            test = [row for row in test if ifu_key(row) in available]
+            if len(test) < 3:
+                continue
+            no_template = {"beta": np.nan, "correlation": np.nan,
+                           "robust_RMS_before": single.robust_rms([as_float(row["r_IFU"]) for row in test]),
+                           "robust_RMS_after": np.nan, "improvement_fraction": np.nan,
+                           "N": len(test)}
+            no_template["robust_RMS_after"] = no_template["robust_RMS_before"]
+            no_template["improvement_fraction"] = 0.0
+            evaluations = {"universal": evaluate_template_prediction(test, universal),
+                           "matching_state": evaluate_template_prediction(test, matching),
+                           "opposite_state": evaluate_template_prediction(test, opposite)}
+            output = {"h5": held_out, "date": held_out[:8], "shot": held_out[9:16],
+                      "exposure": exposure, "inferred_response_state": state,
+                      "sigma_measurement_floor": floor_by_exposure.get((held_out, exposure), {}).get("sigma_measurement", np.nan)}
+            output.update({"N_common_IFU": len(test)})
+            for name, values in (("no_template", no_template),) + tuple(evaluations.items()):
+                for field in ("beta", "correlation", "robust_RMS_before", "robust_RMS_after", "improvement_fraction"):
+                    output["%s_%s" % (name, field)] = values[field]
+                output["%s_N" % name] = values["N"]
+            results.append(output)
+    fields = ["h5", "date", "shot", "exposure", "inferred_response_state", "N_common_IFU",
+              "sigma_measurement_floor"]
+    for name in ("no_template", "universal", "matching_state", "opposite_state"):
+        fields.extend(["%s_%s" % (name, field) for field in
+                       ("beta", "correlation", "robust_RMS_before", "robust_RMS_after", "improvement_fraction", "N")])
+    write_csv(output_dir / "illumination_leave_one_h5_out_by_state.csv", results, fields)
+    x = np.arange(len(results)); fig, axes = plt.subplots(2, 2, figsize=(14, 9), sharex=True)
+    for name, label, style in (("no_template", "before", "k--"),
+                               ("universal", "universal", "o-"),
+                               ("matching_state", "matching state", "o-"),
+                               ("opposite_state", "opposite state", "o-")):
+        field = "%s_robust_RMS_after" % name
+        values = [as_float(row[field]) for row in results]
+        if name == "no_template":
+            values = [as_float(row["no_template_robust_RMS_before"]) for row in results]
+        axes[0, 0].plot(x, values, style, ms=3, label=label)
+    axes[0, 0].plot(x, [as_float(row["sigma_measurement_floor"]) for row in results], "-", lw=1, label="ON/OFF floor")
+    axes[0, 0].set_title("held-out RMS"); axes[0, 0].legend(fontsize=7)
+    for name, label in (("universal", "universal"), ("matching_state", "matching state"), ("opposite_state", "opposite state")):
+        axes[0, 1].hist([as_float(row["%s_improvement_fraction" % name]) for row in results
+                         if np.isfinite(as_float(row["%s_improvement_fraction" % name]))], bins=15, alpha=.5, label=label)
+        axes[1, 0].hist([as_float(row["%s_correlation" % name]) for row in results
+                         if np.isfinite(as_float(row["%s_correlation" % name]))], bins=15, alpha=.5, label=label)
+    axes[0, 1].set_title("improvement fraction"); axes[1, 0].set_title("held-out correlation")
+    axes[0, 1].legend(fontsize=7); axes[1, 0].legend(fontsize=7)
+    axes[1, 1].plot(x, [as_float(row["matching_state_beta"]) for row in results], "o-", ms=3)
+    axes[1, 1].set_title("matching-state beta"); axes[1, 1].set_xlabel("chronological held-out exposure")
+    for axis in axes.flat: axis.grid(alpha=.2)
+    fig.tight_layout(); fig.savefig(output_dir / "illumination_response_state_validation.png", dpi=170); plt.close(fig)
+    return results
+
+
+def scalar_metadata_value(value):
+    array = np.asarray(value)
+    if array.size != 1:
+        return None
+    value = array.reshape(-1)[0]
+    if isinstance(value, (bytes, np.bytes_)):
+        return single.as_text(value)
+    if isinstance(value, (str, np.str_)):
+        return str(value)
+    if np.isscalar(value):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        return number if np.isfinite(number) else np.nan
+    return None
+
+
+def metadata_column_is_scalar(table, field):
+    column = table.colinstances[field]
+    shape = getattr(column, "shape", ())
+    # Column.shape includes the table-row dimension.  Any remaining
+    # dimensions describe an array-valued cell and are intentionally skipped.
+    return len(shape) <= 1 or int(np.prod(shape[1:])) == 1
+
+
+def read_exposure_metadata(h5_paths, state_by_exposure):
+    """Collect scalar Survey fields and compact numeric Info summaries only."""
+    output = []
+    for h5_path in h5_paths:
+        date, shot = h5_path.stem.split("_")
+        with tables.open_file(h5_path, mode="r") as h5:
+            survey = h5.root.Survey
+            survey_fields = [field for field in survey.colnames if field != "exp" and
+                             metadata_column_is_scalar(survey, field)]
+            survey_rows = {}
+            for survey_row in survey:
+                exposure = int(survey_row["exp"])
+                if exposure in survey_rows:
+                    raise ValueError("%s Survey has duplicate exposure %d" % (h5_path.name, exposure))
+                survey_rows[exposure] = {field: scalar_metadata_value(survey_row[field])
+                                         for field in survey_fields}
+            if set(survey_rows) != {1, 2, 3}:
+                raise ValueError("%s Survey must contain exactly exposures 1, 2, 3" % h5_path.name)
+
+            info_summaries = {}
+            if hasattr(h5.root, "Info"):
+                info = h5.root.Info
+                info_exp_field = "exp" if "exp" in info.colnames else None
+                info_identity_fields = {"specid", "ifuslot", "ifuid", "amp"}
+                for field in info.colnames:
+                    if field == info_exp_field or field in info_identity_fields or not metadata_column_is_scalar(info, field):
+                        continue
+                    column = info.colinstances[field]
+                    if np.dtype(column.dtype).kind not in "iufb":
+                        continue
+                    try:
+                        values = np.asarray(info.cols[field][:], dtype=float)
+                    except (TypeError, ValueError):
+                        continue
+                    if values.ndim != 1:
+                        continue
+                    if info_exp_field is not None:
+                        info_exposures = np.asarray(info.cols[info_exp_field][:], dtype=int)
+                        has_requested_exposures = np.isin(info_exposures, (1, 2, 3)).any()
+                    else:
+                        info_exposures = np.full(values.size, -1, dtype=int)
+                        has_requested_exposures = False
+                    for exposure in (1, 2, 3):
+                        selected = (values[info_exposures == exposure]
+                                    if has_requested_exposures else values)
+                        selected = selected[np.isfinite(selected)]
+                        if selected.size:
+                            info_summaries.setdefault(exposure, {}).update({
+                                "Info_%s_median" % field: np.median(selected),
+                                "Info_%s_min" % field: np.min(selected),
+                                "Info_%s_max" % field: np.max(selected)})
+            for exposure in (1, 2, 3):
+                row = {"h5": h5_path.name, "date": date, "shot": shot,
+                       "exposure": exposure,
+                       "inferred_response_state": state_by_exposure[(h5_path.name, exposure)]}
+                row.update({"Survey_%s" % field: value for field, value in survey_rows.get(exposure, {}).items()})
+                if "Survey_name" in row:
+                    row["survey_name"] = row["Survey_name"]
+                row.update(info_summaries.get(exposure, {}))
+                output.append(row)
+    return output
+
+
+def metadata_summary(metadata_rows, output_dir):
+    base_fields = {"h5", "date", "shot", "exposure", "inferred_response_state", "survey_name"}
+    fields = sorted({field for row in metadata_rows for field in row if field not in base_fields})
+    summary = []
+    for field in fields:
+        numeric_values = {state: np.asarray([as_float(row.get(field)) for row in metadata_rows
+                                             if int(row["inferred_response_state"]) == state], dtype=float)
+                          for state in (1, 2)}
+        finite = {state: values[np.isfinite(values)] for state, values in numeric_values.items()}
+        if all(values.size >= 3 for values in finite.values()):
+            medians = {state: float(np.median(finite[state])) for state in (1, 2)}
+            scatters = {state: single.robust_scale(finite[state]) for state in (1, 2)}
+            denominator = np.sqrt(.5 * (scatters[1] ** 2 + scatters[2] ** 2))
+            separation = abs(medians[1] - medians[2]) / denominator if denominator > 0 else (
+                np.inf if medians[1] != medians[2] else 0.0)
+            summary.append({"kind": "numeric", "field": field,
+                            "median_state1": medians[1], "median_state2": medians[2],
+                            "robust_scatter_state1": scatters[1], "robust_scatter_state2": scatters[2],
+                            "standardized_separation": separation,
+                            "N_state1": finite[1].size, "N_state2": finite[2].size,
+                            "value_counts_state1": "", "value_counts_state2": ""})
+        else:
+            values_by_state = {}
+            for state in (1, 2):
+                values = [str(row.get(field, "")).strip() for row in metadata_rows
+                          if int(row["inferred_response_state"]) == state and
+                          str(row.get(field, "")).strip() not in {"", "nan", "None"}]
+                counts = {}
+                for value in values: counts[value] = counts.get(value, 0) + 1
+                values_by_state[state] = counts
+            if not any(values_by_state.values()):
+                continue
+            summary.append({"kind": "categorical", "field": field,
+                            "median_state1": "", "median_state2": "",
+                            "robust_scatter_state1": "", "robust_scatter_state2": "",
+                            "standardized_separation": "",
+                            "N_state1": sum(values_by_state[1].values()),
+                            "N_state2": sum(values_by_state[2].values()),
+                            "value_counts_state1": json.dumps(values_by_state[1], sort_keys=True),
+                            "value_counts_state2": json.dumps(values_by_state[2], sort_keys=True)})
+    summary.sort(key=lambda row: (row["kind"] != "numeric",
+                                  -as_float(row["standardized_separation"])
+                                  if row["kind"] == "numeric" else row["field"]))
+    fields = ["kind", "field", "median_state1", "median_state2", "robust_scatter_state1",
+              "robust_scatter_state2", "standardized_separation", "N_state1", "N_state2",
+              "value_counts_state1", "value_counts_state2"]
+    write_csv(output_dir / "illumination_response_state_metadata_summary.csv", summary, fields)
+    print("metadata state-separation candidates:")
+    for row in summary[:15]:
+        print("  %s: separation=%s state1=%s state2=%s counts=(%s, %s)" %
+              (row["field"], row["standardized_separation"], row["median_state1"], row["median_state2"],
+               row["value_counts_state1"], row["value_counts_state2"]))
+    return summary
+
+
+def state_exposure_fits(rows, templates, state_by_exposure, output_dir):
+    results = []
+    for key in exposure_order(rows):
+        selected = [row for row in rows if exposure_key(row) == key and valid_common(row)]
+        if not selected:
+            continue
+        state = state_by_exposure[key]
+        fits = {"state1": evaluate_template_prediction(selected, templates[1]),
+                "state2": evaluate_template_prediction(selected, templates[2])}
+        matching = fits["state%d" % state]
+        results.append({"h5": key[0], "date": key[0][:8], "shot": key[0][9:16],
+                        "exposure": key[1], "inferred_response_state": state,
+                        "matching_beta": matching["beta"],
+                        "correlation_state1": fits["state1"]["correlation"],
+                        "correlation_state2": fits["state2"]["correlation"],
+                        "matching_RMS_before": matching["robust_RMS_before"],
+                        "matching_RMS_after": matching["robust_RMS_after"], "N": matching["N"]})
+    fields = ["h5", "date", "shot", "exposure", "inferred_response_state", "matching_beta",
+              "correlation_state1", "correlation_state2", "matching_RMS_before",
+              "matching_RMS_after", "N"]
+    write_csv(output_dir / "illumination_response_state_exposure_fits.csv", results, fields)
+    x = np.arange(len(results)); states = np.asarray([int(row["inferred_response_state"]) for row in results])
+    fig, axes = plt.subplots(4, 1, figsize=(15, 12), sharex=True)
+    axes[0].scatter(x, states, c=states, cmap="Set1", vmin=1, vmax=2, s=28)
+    axes[0].set_ylabel("state"); axes[0].set_yticks((1, 2))
+    axes[1].plot(x, [as_float(row["matching_beta"]) for row in results], "o-", ms=3)
+    axes[1].axhline(1, color="k", lw=.7); axes[1].set_ylabel("matching beta")
+    axes[2].plot(x, [as_float(row["correlation_state1"]) for row in results], "o-", ms=3, label="state1")
+    axes[2].plot(x, [as_float(row["correlation_state2"]) for row in results], "o-", ms=3, label="state2")
+    axes[2].set_ylabel("correlation"); axes[2].legend(fontsize=8)
+    axes[3].plot(x, [as_float(row["matching_RMS_before"]) for row in results], "o-", ms=3, label="before")
+    axes[3].plot(x, [as_float(row["matching_RMS_after"]) for row in results], "o-", ms=3, label="after")
+    axes[3].set_ylabel("robust RMS"); axes[3].set_xlabel("chronological exposure"); axes[3].legend(fontsize=8)
+    boundaries = [i for i in range(1, len(results)) if results[i]["h5"] != results[i - 1]["h5"]]
+    for axis in axes:
+        for boundary in boundaries: axis.axvline(boundary - .5, color="k", lw=.8)
+        axis.grid(alpha=.2)
+    fig.suptitle("Inferred response state timeline")
+    fig.tight_layout(rect=(0, 0, 1, .95)); fig.savefig(output_dir / "illumination_response_state_timeline.png",
+                                                       dpi=170); plt.close(fig)
+    return results
+
+
 def main():
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("--h5-dir", required=True)
@@ -705,10 +902,12 @@ def main():
     args.output_dir = Path(args.output_dir); args.output_dir.mkdir(parents=True, exist_ok=True)
     args.single_script = Path(args.single_script)
     h5_paths = resolve_h5_paths(args.h5_dir)
-    track_states = read_track_states(h5_paths)
     for path in h5_paths:
         run_single_h5(path, args, args.output_dir / path.stem)
-    rows = load_population_rows(args.output_dir, h5_paths, track_states)
+    rows = load_population_rows(args.output_dir, h5_paths)
+    state_by_exposure, _, _ = cluster_response_states(rows, args.output_dir)
+    for row in rows:
+        row["inferred_response_state"] = state_by_exposure[exposure_key(row)]
     write_csv(args.output_dir / "illumination_population.csv", rows, population_fields())
     make_residual_matrix(rows, args.output_dir / "illumination_population_matrix.png")
     template = make_template(rows, args.output_dir)
@@ -717,15 +916,17 @@ def main():
     plot_template_stability(rows, template, args.output_dir)
     floor = measurement_floor(rows, args.output_dir)
     leave_one_h5_out(rows, floor, args.output_dir)
-    track_summary, raw_summary = plot_track_correlation_matrix(rows, args.output_dir)
-    track_templates, locations, track_template_rows = make_track_templates(rows, args.output_dir)
-    plot_track_templates(rows, track_templates, locations, track_template_rows, args.output_dir)
-    comparison = plot_track_template_comparison(track_template_rows, args.output_dir)
-    raw_track_template_summary(rows, args.output_dir)
-    track_validation = track_leave_one_h5_out(rows, floor, args.output_dir)
-    plot_track_beta(track_validation, args.output_dir)
-    print("track-template comparison: N=%d C_E/C_W correlation=%.6g robust scatter=%.6g" %
-          (comparison["N"], comparison["correlation"], comparison["robust_scatter"]))
+    state_template_values = state_templates(rows, args.output_dir)
+    plot_state_templates(rows, state_template_values, args.output_dir)
+    leave_one_h5_out_by_state(rows, floor, args.output_dir)
+    metadata_rows = read_exposure_metadata(h5_paths, state_by_exposure)
+    metadata_base_fields = ["h5", "date", "shot", "exposure", "inferred_response_state",
+                            "survey_name"]
+    metadata_fields = metadata_base_fields + sorted(
+        {field for row in metadata_rows for field in row if field not in metadata_base_fields})
+    write_csv(args.output_dir / "illumination_response_state_metadata.csv", metadata_rows, metadata_fields)
+    metadata_summary(metadata_rows, args.output_dir)
+    state_exposure_fits(rows, state_template_values, state_by_exposure, args.output_dir)
     print("illumination population diagnostic complete: %s" % args.output_dir)
 
 
