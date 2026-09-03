@@ -21,6 +21,7 @@ import tables
 import numpy as np
 import os.path as op
 import sys
+import time
 import warnings
 from input_utils import setup_logging
 from astrometry import Astrometry
@@ -715,20 +716,40 @@ def _m101_production_survey_by_exp(h5):
     return survey_by_exp
 
 
-def _m101_temporary_matched_images(image, virus_fwhm, band):
-    """Match one fixed external image for one exposure, without caching it."""
+def _m101_temporary_matched_image(image, virus_fwhm):
+    """Return only the temporary object-image array used for photometry."""
     image_fwhm = float(image['psf']['fwhm_arcsec'])
     if virus_fwhm <= image_fwhm:
-        return image['data'], image['object_data']
+        return image['object_data']
     kernel_fwhm = np.sqrt(virus_fwhm ** 2 - image_fwhm ** 2)
     sigma_pix = (kernel_fwhm * validated_m101.FWHM_TO_SIGMA /
                  image['pixel_scale_arcsec'])
     kernel = Gaussian2DKernel(sigma_pix)
-    matched_raw = convolve(image['data'], kernel, boundary='extend',
-                           nan_treatment='interpolate', preserve_nan=True)
     matched_object = convolve(image['object_data'], kernel, boundary='extend',
                               nan_treatment='interpolate', preserve_nan=True)
-    return matched_raw, matched_object
+    return matched_object
+
+
+def _m101_adr_positions_by_band(ra, dec, survey_row, responses):
+    """Compute ON/OFF ADR-weighted positions from one shared ADR curve."""
+    effective = Astrometry(float(survey_row['ra']), float(survey_row['dec']),
+                           float(survey_row['pa']), 0.0, 0.0)
+    extractor = Extract(wave=validated_m101.DEF_WAVE)
+    extractor.get_ADR_RAdec(effective)
+    dra = extractor.ADRra / 3600.0 / np.cos(np.deg2rad(float(survey_row['dec'])))
+    ddec = extractor.ADRdec / 3600.0
+    ra_wave = ra[:, None] - dra[None, :]
+    dec_wave = dec[:, None] - ddec[None, :]
+    positions = {}
+    for band, response in responses.items():
+        weights = np.where(np.isfinite(response) & (response != 0.0), response, 0.0)
+        denominator = np.sum(weights)
+        if denominator == 0.0:
+            raise ValueError('ADR response has zero total weight for %s' % band)
+        positions[band] = (
+            np.sum(ra_wave * weights[None, :], axis=1) / denominator,
+            np.sum(dec_wave * weights[None, :], axis=1) / denominator)
+    return positions
 
 
 def _m101_load_state_template(path, log):
@@ -752,17 +773,25 @@ def _m101_load_state_template(path, log):
 
 def _m101_fit_production_response(rows, groups, good_groups, planes,
                                   state_template, production_state, h5file, log):
-    """Fit beta only and make the compact physical-IFU response mapping."""
+    """Fit one state-template amplitude beta independently per exposure."""
     template = state_template[production_state]
-    selected = [row for row in rows if row.get('well_constrained_common') and
-                np.isfinite(row.get('s_common_normalized', np.nan)) and
-                row['ifu_key'] in template and np.isfinite(template[row['ifu_key']])]
-    x = np.asarray([template[row['ifu_key']] for row in selected], dtype=float)
-    y = np.asarray([row['plane_residual'] for row in selected], dtype=float)
-    beta_fit = validated_m101.robust_zero_slope(x, y)
-    beta = beta_fit['slope']
-    if not np.isfinite(beta):
-        raise ValueError('%s state template beta is invalid' % h5file)
+    beta_by_exposure = {}
+    selected_by_exposure = {}
+    for exposure in sorted(planes):
+        selected = [row for row in rows if row['exposure'] == exposure and
+                    row.get('well_constrained_common') and
+                    np.isfinite(row.get('s_common_normalized', np.nan)) and
+                    row['ifu_key'] in template and
+                    np.isfinite(template[row['ifu_key']])]
+        x = np.asarray([template[row['ifu_key']] for row in selected], dtype=float)
+        y = np.asarray([row['plane_residual'] for row in selected], dtype=float)
+        beta_fit = validated_m101.robust_zero_slope(x, y)
+        beta = beta_fit['slope']
+        if not np.isfinite(beta):
+            raise ValueError('%s exposure %d state template beta is invalid' %
+                             (h5file, exposure))
+        beta_by_exposure[exposure] = beta
+        selected_by_exposure[exposure] = selected
     response = {}
     response_details = {}
     missing = set()
@@ -781,6 +810,7 @@ def _m101_fit_production_response(rows, groups, good_groups, planes,
         c = template.get(key, 0.0)
         if key not in template:
             missing.add(key)
+        beta = beta_by_exposure[group['exposure']]
         s_response = s_plane + beta * c
         if not np.isfinite(s_response) or s_response <= 0.0:
             raise ValueError('%s exposure %d IFU %s has nonpositive response %.8g' %
@@ -796,7 +826,8 @@ def _m101_fit_production_response(rows, groups, good_groups, planes,
     record_by_exposure = {}
     for exposure in sorted(planes):
         exposure_rows = [row for row in rows if row['exposure'] == exposure]
-        exposure_selected = [row for row in selected if row['exposure'] == exposure]
+        exposure_selected = selected_by_exposure[exposure]
+        beta = beta_by_exposure[exposure]
         before = np.asarray([row['s_common_normalized'] - 1.0 for row in exposure_rows
                              if np.isfinite(row['s_common_normalized'])])
         after_plane = np.asarray([row['plane_residual'] for row in exposure_rows
@@ -834,6 +865,8 @@ def _m101_fit_production_response(rows, groups, good_groups, planes,
 def _m101_calibrate_one_h5(h5file, images, filters, f, iterations,
                            state_template, production_state, log):
     """PASS 1: reproduce the validated single-H5 hierarchy and discard spectra."""
+    total_start = time.perf_counter()
+    setup_start = time.perf_counter()
     groups = []
     datasets = []
     with tables.open_file(h5file, mode='r') as h5:
@@ -856,38 +889,85 @@ def _m101_calibrate_one_h5(h5file, images, filters, f, iterations,
         for group in groups:
             j = np.arange(validated_m101.N_FIBER_AMP)
             row_q[group['indices']] = j if group['amp'] in ('LL', 'RU') else 111 - j
+        log.info('M101 timing %s H5 read/setup: %.3f s', op.basename(h5file),
+                 time.perf_counter() - setup_start)
         for exposure in (1, 2, 3):
             survey_row = survey_by_exp[exposure]
             offset = float(survey_row['offset'])
             if not np.isfinite(offset) or offset == 0.0:
                 raise ValueError('%s exposure %d Survey.offset is invalid: %s' %
                                  (h5file, exposure, offset))
-            working = spectra / offset
-            exposure_rows = labels == exposure
+            exp_indices = np.flatnonzero(labels == exposure)
+            ra_e, dec_e = ra[exp_indices], dec[exp_indices]
+            bad_e, q_e = bad[exp_indices], row_q[exp_indices]
+            working_e = spectra[exp_indices] / offset
+            sky_e = skyspectra[exp_indices]
+
+            spectral_start = time.perf_counter()
+            collapsed = {}
             for band in ('ON', 'OFF'):
                 response = filters[band]
-                V = validated_m101.synthetic_mean(working, response)
-                B_sky = validated_m101.synthetic_mean(skyspectra, response)
-                eff_ra, eff_dec = validated_m101.adr_positions(ra, dec, survey_row, response)
-                images[band]['_production_exposure'] = exposure
-                matched_raw, matched_object = _m101_temporary_matched_images(
-                    images[band], float(survey_row['fwhm']), band)
-                raw_I, _ = validated_m101.sample_image_exact(images[band], matched_raw,
-                                                               eff_ra, eff_dec)
-                I, image_valid = validated_m101.sample_image_exact(images[band], matched_object,
-                                                                    eff_ra, eff_dec)
+                collapsed[band] = {
+                    'V': validated_m101.synthetic_mean(working_e, response),
+                    'B_sky': validated_m101.synthetic_mean(sky_e, response),
+                }
+            log.info('M101 timing %s exposure %d synthetic spectral collapse: %.3f s',
+                     op.basename(h5file), exposure, time.perf_counter() - spectral_start)
+
+            adr_start = time.perf_counter()
+            effective_positions = _m101_adr_positions_by_band(
+                ra_e, dec_e, survey_row, filters)
+            log.info('M101 timing %s exposure %d ADR construction: %.3f s',
+                     op.basename(h5file), exposure, time.perf_counter() - adr_start)
+
+            for band in ('ON', 'OFF'):
+                response = filters[band]
+                psf_start = time.perf_counter()
+                matched_object = _m101_temporary_matched_image(
+                    images[band], float(survey_row['fwhm']))
+                log.info('M101 timing %s exposure %d PSF matching %s: %.3f s',
+                         op.basename(h5file), exposure, band,
+                         time.perf_counter() - psf_start)
+                aperture_start = time.perf_counter()
+                eff_ra, eff_dec = effective_positions[band]
+                I_e, image_valid_e = validated_m101.sample_image_exact(
+                    images[band], matched_object, eff_ra, eff_dec)
+                log.info('M101 timing %s exposure %d exact aperture %s: %.3f s',
+                         op.basename(h5file), exposure, band,
+                         time.perf_counter() - aperture_start)
+                del matched_object
+
+                V_e = collapsed[band]['V']
+                B_e = collapsed[band]['B_sky']
                 K = validated_m101.weighted_scalar(
                     validated_m101.raw_work_basis(survey_row), response)
-                valid = (exposure_rows & ~bad & np.isfinite(V) & image_valid & np.isfinite(I))
+                valid_e = (~bad_e & np.isfinite(V_e) & image_valid_e & np.isfinite(I_e))
+
+                # The validated downstream hierarchy still uses the original
+                # full-H5 group indices.  Insert only this exposure's costly
+                # calculations into full-length arrays initialized as invalid.
+                nrows = int(info.nrows)
+                V = np.full(nrows, np.nan, dtype=float)
+                B_sky = np.full(nrows, np.nan, dtype=float)
+                I = np.full(nrows, np.nan, dtype=float)
+                eff_ra_full = np.full(nrows, np.nan, dtype=float)
+                eff_dec_full = np.full(nrows, np.nan, dtype=float)
+                q_full = np.full(nrows, -1, dtype=int)
+                valid = np.zeros(nrows, dtype=bool)
+                V[exp_indices], B_sky[exp_indices], I[exp_indices] = V_e, B_e, I_e
+                eff_ra_full[exp_indices], eff_dec_full[exp_indices] = eff_ra, eff_dec
+                q_full[exp_indices] = q_e
+                valid[exp_indices] = valid_e
                 datasets.append({'exposure': exposure, 'band': band, 'V': V, 'I': I,
                                  'B_sky': B_sky, 'V_total': V + B_sky,
-                                 'ra': eff_ra, 'dec': eff_dec, 'K': K, 'q': row_q,
-                                 'valid': valid})
+                                 'ra': eff_ra_full, 'dec': eff_dec_full, 'K': K,
+                                 'q': q_full, 'valid': valid})
 
     initial_good = np.asarray([not np.any(bad[group['indices']]) for group in groups], dtype=bool)
     alpha = {(exposure, band): validated_m101.ALPHA_INITIAL
              for exposure in (1, 2, 3) for band in validated_m101.AMPS}
     good_groups = initial_good.copy()
+    fit_start = time.perf_counter()
     for _ in range(iterations):
         globals_, _, _, good_groups = validated_m101.broad_stage(
             datasets, groups, f, alpha, initial_good, good_groups)
@@ -895,8 +975,11 @@ def _m101_calibrate_one_h5(h5file, images, filters, f, iterations,
             datasets, groups, globals_, f, good_groups, alpha, (1, 2, 3))
     globals_, _, _, good_groups = validated_m101.broad_stage(
         datasets, groups, f, alpha, initial_good, good_groups)
+    log.info('M101 timing %s alpha/g/z iterations: %.3f s', op.basename(h5file),
+             time.perf_counter() - fit_start)
     for dataset in datasets:
         dataset['V_total_corrected'] = dataset['V0'] + dataset['B_sky']
+    scalar_start = time.perf_counter()
     delta_by_band = {}
     global_rows = []
     for exposure in (1, 2, 3):
@@ -907,7 +990,10 @@ def _m101_calibrate_one_h5(h5file, images, filters, f, iterations,
             global_rows.append(row)
     illumination_rows, leverage_qa = validated_m101.build_illumination_scalars(
         datasets, groups, globals_, alpha, f, good_groups, (1, 2, 3), delta_by_band)
+    log.info('M101 timing %s delta + IFU scalar construction: %.3f s',
+             op.basename(h5file), time.perf_counter() - scalar_start)
     validated_m101.normalize_illumination_scalars(illumination_rows, (1, 2, 3))
+    plane_start = time.perf_counter()
     planes = {exposure: validated_m101.fit_illumination_plane(illumination_rows, exposure)
               for exposure in (1, 2, 3)}
     for row in illumination_rows:
@@ -920,11 +1006,16 @@ def _m101_calibrate_one_h5(h5file, images, filters, f, iterations,
     response, response_details, exposure_records = _m101_fit_production_response(
         illumination_rows, groups, good_groups, planes, state_template,
         production_state, Path(h5file).name, log)
+    log.info('M101 timing %s plane + beta fits: %.3f s', op.basename(h5file),
+             time.perf_counter() - plane_start)
+    log.info('M101 timing %s total H5 calibration: %.3f s', op.basename(h5file),
+             time.perf_counter() - total_start)
     return {'h5': Path(h5file).name, 'alpha': alpha, 'globals': globals_,
             'delta': delta_by_band, 'global_rows': global_rows,
             'planes': planes, 'illumination_rows': illumination_rows,
             'leverage': leverage_qa, 'groups': groups, 'response': response,
             'response_details': response_details,
+            'beta_by_exposure': {e: exposure_records[e]['beta'] for e in exposure_records},
             'survey_by_exp': survey_by_exp,
             'exposure_records': exposure_records,
             'production_state': production_state, 'labels': labels}
