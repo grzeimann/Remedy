@@ -3034,6 +3034,8 @@ if args.make_lsf:
 
 name = op.basename('%s_cube.fits' % args.surname)
 scale = args.pixel_scale / 3600.
+# Reuse the existing cube spatial WCS as the base for the final 3-D headers.
+header = tp.to_header()
 header['WCSAXES'] = 3
 header['CD1_1']   = -scale              # minus sign -> RA increases to the left (north up, east left)
 header['CD1_2']   = 0.0
