@@ -9,6 +9,7 @@ import matplotlib
 matplotlib.use('agg')
 import argparse as ap
 import csv
+import pickle
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from numba import njit
@@ -692,14 +693,21 @@ DIRNAME = get_script_path()
 # same exact aperture, ADR, fixed-f(q), alpha, g/z_source_fit,
 # delta_illumination, source+sky IFU scalar, plane, and robust beta estimators.
 # Only compact calibration products survive PASS 1; spectra are reopened in
-# PASS 2.  No calibration correction is applied to the historical cube
-# estimator after specarray/errarray are populated.
+# PASS 2.  The final gray is measured from corrected PASS-2 spectra only after
+# all exposures have been processed.
 # -----------------------------------------------------------------------------
 
 M101_SECONDARY_H5 = {
     '20200622_0000015.h5', '20200625_0000017.h5',
     '20200710_0000013.h5', '20200710_0000014.h5',
 }
+
+M101_GLOBAL_G_DEFAULTS = {'ON': 0.323, 'OFF': 0.0606}
+M101_SOURCE_SURFACE_THRESHOLDS = (0.03, 0.05, 0.10)
+M101_G_SENSITIVITY_LOG_LIMIT = np.log(1.25)
+M101_ON_OFF_LOG_QA_LIMIT = np.log(1.5)
+M101_GRAY_WARNING_LIMITS = (0.2, 5.0)
+M101_CALIBRATION_MODEL = 'm101_fixed_global_g_delta_state_response_v1'
 
 
 def _m101_production_survey_by_exp(h5):
@@ -863,12 +871,14 @@ def _m101_fit_production_response(rows, groups, good_groups, planes,
 
 
 def _m101_calibrate_one_h5(h5file, images, filters, f, iterations,
-                           state_template, production_state, log):
+                           state_template, production_state, global_g, log):
     """PASS 1: reproduce the validated single-H5 hierarchy and discard spectra."""
     total_start = time.perf_counter()
     setup_start = time.perf_counter()
     groups = []
     datasets = []
+    external_object = {}
+    external_valid = {}
     with tables.open_file(h5file, mode='r') as h5:
         info, fibers = h5.root.Info, h5.root.Fibers
         groups, labels = validated_m101.build_groups(info)
@@ -962,6 +972,8 @@ def _m101_calibrate_one_h5(h5file, images, filters, f, iterations,
                                  'B_sky': B_sky, 'V_total': V + B_sky,
                                  'ra': eff_ra_full, 'dec': eff_dec_full, 'K': K,
                                  'q': q_full, 'valid': valid})
+                external_object[(exposure, band)] = I_e.copy()
+                external_valid[(exposure, band)] = image_valid_e.copy()
 
     initial_good = np.asarray([not np.any(bad[group['indices']]) for group in groups], dtype=bool)
     alpha = {(exposure, band): validated_m101.ALPHA_INITIAL
@@ -970,12 +982,14 @@ def _m101_calibrate_one_h5(h5file, images, filters, f, iterations,
     fit_start = time.perf_counter()
     for _ in range(iterations):
         globals_, _, _, good_groups = validated_m101.broad_stage(
-            datasets, groups, f, alpha, initial_good, good_groups)
+            datasets, groups, f, alpha, initial_good, good_groups,
+            fixed_g_by_band=global_g)
         alpha = validated_m101.fit_bounded_alphas(
             datasets, groups, globals_, f, good_groups, alpha, (1, 2, 3))
-    globals_, _, _, good_groups = validated_m101.broad_stage(
-        datasets, groups, f, alpha, initial_good, good_groups)
-    log.info('M101 timing %s alpha/g/z iterations: %.3f s', op.basename(h5file),
+    globals_, _, final_summaries, good_groups = validated_m101.broad_stage(
+        datasets, groups, f, alpha, initial_good, good_groups,
+        fixed_g_by_band=global_g)
+    log.info('M101 timing %s alpha/fixed-global-g/z iterations: %.3f s', op.basename(h5file),
              time.perf_counter() - fit_start)
     for dataset in datasets:
         dataset['V_total_corrected'] = dataset['V0'] + dataset['B_sky']
@@ -1010,6 +1024,22 @@ def _m101_calibrate_one_h5(h5file, images, filters, f, iterations,
              time.perf_counter() - plane_start)
     log.info('M101 timing %s total H5 calibration: %.3f s', op.basename(h5file),
              time.perf_counter() - total_start)
+    # A diagnostic-only free-g fit is retained for comparison with the old
+    # production population. It is never used for calibration or gray.
+    free_g_qa = {}
+    for exposure in (1, 2, 3):
+        for band in ('ON', 'OFF'):
+            area = np.pi * (validated_m101.FIBER_RADIUS_ARCSEC /
+                            images[band]['pixel_scale_arcsec']) ** 2
+            selected = [summary for (identity, summary_band), summary in final_summaries.items()
+                        if summary_band == band and identity[0] == exposure and
+                        np.isfinite(summary.get('I', np.nan)) and
+                        summary['I'] / area > M101_SOURCE_SURFACE_THRESHOLDS[1] and
+                        np.isfinite(summary.get('Y', np.nan))]
+            free_g_qa[(exposure, band)] = validated_m101.fit_line(
+                np.asarray([row['I'] for row in selected]),
+                np.asarray([row['Y'] for row in selected]))
+
     return {'h5': Path(h5file).name, 'alpha': alpha, 'globals': globals_,
             'delta': delta_by_band, 'global_rows': global_rows,
             'planes': planes, 'illumination_rows': illumination_rows,
@@ -1018,66 +1048,283 @@ def _m101_calibrate_one_h5(h5file, images, filters, f, iterations,
             'beta_by_exposure': {e: exposure_records[e]['beta'] for e in exposure_records},
             'survey_by_exp': survey_by_exp,
             'exposure_records': exposure_records,
-            'production_state': production_state, 'labels': labels}
+            'production_state': production_state, 'labels': labels,
+            'good_groups': good_groups,
+            'external_object': external_object, 'external_valid': external_valid,
+            'free_g_qa': free_g_qa, 'global_g': dict(global_g)}
+
+
+def _m101_fit_final_source_scale(spectra, labels, calibration, filters,
+                                 images, exposure, band, threshold):
+    """Fit the final through-zero source scale from fully corrected spectra."""
+    indices = np.flatnonzero(labels == exposure)
+    y = validated_m101.synthetic_mean(spectra[indices], filters[band])
+    x = np.asarray(calibration['external_object'][(exposure, band)], dtype=float)
+    exact_valid = np.asarray(calibration['external_valid'][(exposure, band)], dtype=bool)
+    aperture_area = np.pi * (validated_m101.FIBER_RADIUS_ARCSEC /
+                             images[band]['pixel_scale_arcsec']) ** 2
+    surface = x / aperture_area
+    amplifier_qa = np.zeros(labels.shape, dtype=bool)
+    for group, good in zip(calibration['groups'], calibration['good_groups']):
+        if good:
+            amplifier_qa[group['indices']] = True
+    selected = (amplifier_qa[indices] & exact_valid & np.isfinite(x) &
+                (surface > threshold) &
+                np.isfinite(y))
+    eligible = (amplifier_qa[indices] & exact_valid & np.isfinite(x) & np.isfinite(y))
+    fit = validated_m101.robust_zero_slope(x[selected], y[selected])
+    positive = np.isfinite(fit['slope']) and fit['slope'] > 0.0
+    uncertainty = fit['uncertainty'] if np.isfinite(fit['uncertainty']) else np.nan
+    fractional_uncertainty = (uncertainty / fit['slope']
+                              if positive and np.isfinite(uncertainty) else np.nan)
+    return {
+        'G_exposure': float(fit['slope']) if positive else np.nan,
+        'G_fit_uncertainty': float(uncertainty),
+        'G_fractional_fit_uncertainty': float(fractional_uncertainty),
+        'n_source': int(fit['n']),
+        'source_fraction': float(np.sum(selected) / np.sum(eligible))
+        if np.sum(eligible) else np.nan,
+        'robust_RMS': float(fit['rms']) if np.isfinite(fit['rms']) else np.nan,
+        'sum_I_object_squared': float(np.sum(x[selected] * x[selected]))
+        if selected.any() else np.nan,
+        'I_object_p10': float(np.percentile(x[selected], 10)) if selected.any() else np.nan,
+        'I_object_p90': float(np.percentile(x[selected], 90)) if selected.any() else np.nan,
+        'source_surface_threshold': float(threshold),
+        'valid': bool(positive),
+    }
+
+
+def _m101_measure_final_source_scales(calibration, spectra, filters, images,
+                                      threshold, log):
+    """Attach final G fits and threshold-sensitivity QA to one calibration."""
+    thresholds = tuple(dict.fromkeys(M101_SOURCE_SURFACE_THRESHOLDS + (float(threshold),)))
+    by_threshold = {}
+    for candidate in thresholds:
+        by_threshold[candidate] = {
+            (exposure, band): _m101_fit_final_source_scale(
+                spectra, calibration['labels'], calibration, filters, images,
+                exposure, band, candidate)
+            for exposure in (1, 2, 3) for band in ('ON', 'OFF')}
+
+    final = by_threshold[float(threshold)]
+    calibration['final_G'] = final
+    calibration['final_G_by_threshold'] = by_threshold
+    calibration['final_G_sensitivity'] = {}
+    for exposure in (1, 2, 3):
+        for band in ('ON', 'OFF'):
+            relative_values = []
+            for candidate in thresholds:
+                fit = by_threshold[candidate][(exposure, band)]
+                if fit['valid']:
+                    relative_values.append(np.log(fit['G_exposure']))
+            calibration['final_G_sensitivity'][(exposure, band)] = (
+                float(max(relative_values) - min(relative_values))
+                if relative_values else np.nan)
+    for exposure in (1, 2, 3):
+        for band in ('ON', 'OFF'):
+            fit = final[(exposure, band)]
+            sensitivity = calibration['final_G_sensitivity'][(exposure, band)]
+            sensitivity_values = [by_threshold[candidate][(exposure, band)]['G_exposure']
+                                  for candidate in thresholds]
+            fit['well_constrained'] = bool(
+                fit['valid'] and np.isfinite(sensitivity) and
+                sensitivity <= M101_G_SENSITIVITY_LOG_LIMIT)
+            log.info('M101 G source-threshold sensitivity %s exposure %d %s: '
+                     'G@%s=%s; log range=%.4g', calibration['h5'], exposure, band,
+                     '/'.join('%.2g' % candidate for candidate in thresholds),
+                     '/'.join('%.6g' % value if np.isfinite(value) else 'nan'
+                              for value in sensitivity_values), sensitivity)
+            if np.isfinite(sensitivity) and sensitivity > M101_G_SENSITIVITY_LOG_LIMIT:
+                log.warning('M101 SOURCE-SELECTION SENSITIVITY %s exposure %d %s: '
+                            'log relative-G range=%.4g across thresholds %s; '
+                            'flagging poorly constrained', calibration['h5'], exposure,
+                                band, sensitivity, M101_SOURCE_SURFACE_THRESHOLDS)
+            if not fit['valid']:
+                log.warning('M101 G INVALID %s exposure %d %s: nonpositive or '
+                            'insufficient through-zero source scale; band excluded '
+                            'from gray', calibration['h5'], exposure, band)
+            if fit['n_source'] < 10:
+                log.warning('M101 G WARNING %s exposure %d %s: only %d source fibers '
+                            'at surface threshold %.3g; fit retained without alteration',
+                            calibration['h5'], exposure, band, fit['n_source'], threshold)
+            log.info('M101 final G %s exposure %d %s: G=%.8g N_source=%d '
+                     'RMS=%.8g sum(I^2)=%.8g surface threshold=%.3g',
+                     calibration['h5'], exposure, band, fit['G_exposure'],
+                     fit['n_source'], fit['robust_RMS'], fit['sum_I_object_squared'],
+                     threshold)
 
 
 def _m101_derive_gray_factors(calibrations, log):
-    """Replace historical norm_array with ensemble log-g normalization."""
+    """Derive gray only from final corrected through-zero G measurements."""
     logs = {band: [] for band in ('ON', 'OFF')}
     for calibration in calibrations:
         for band in logs:
             for exposure in (1, 2, 3):
-                g = calibration['globals'][(exposure, band)]['g']
-                if np.isfinite(g) and g > 0.0:
-                    logs[band].append(np.log(g))
+                fit = calibration['final_G'][(exposure, band)]
+                if fit['well_constrained']:
+                    logs[band].append(np.log(fit['G_exposure']))
     reference = {band: validated_m101.robust_location(values)
                  for band, values in logs.items()}
     if not all(np.isfinite(value) for value in reference.values()):
-        raise ValueError('cannot derive ensemble gray normalization: invalid g population')
+        raise ValueError('cannot derive ensemble gray normalization: invalid G population')
+
     raw = []
     for calibration in calibrations:
         per_exposure = {}
         for exposure in (1, 2, 3):
-            deviations = {}
+            relative = {}
             for band in ('ON', 'OFF'):
-                g = calibration['globals'][(exposure, band)]['g']
-                deviations[band] = (np.log(g) - reference[band]
-                                    if np.isfinite(g) and g > 0.0 else np.nan)
-            valid = [value for value in deviations.values() if np.isfinite(value)]
+                fit = calibration['final_G'][(exposure, band)]
+                relative[band] = (np.exp(np.log(fit['G_exposure']) - reference[band])
+                                  if fit['well_constrained'] else np.nan)
+            valid = [value for value in relative.values() if np.isfinite(value) and value > 0.0]
             if not valid:
-                raise ValueError('%s exposure %d has no valid positive g for gray factor' %
+                raise ValueError('%s exposure %d has no valid positive G for gray factor' %
                                  (calibration['h5'], exposure))
             if len(valid) == 1:
-                log.warning('%s exposure %d gray factor uses only one valid band',
-                            calibration['h5'], exposure)
-            d = float(np.mean(valid))
+                log.warning('M101 GRAY WARNING %s exposure %d: only one valid G band; '
+                            'using it for gray_combined', calibration['h5'], exposure)
+            log_relative = {band: (np.log(relative[band]) if np.isfinite(relative[band]) else np.nan)
+                            for band in ('ON', 'OFF')}
+            disagreement = (log_relative['ON'] - log_relative['OFF']
+                            if all(np.isfinite(log_relative[band]) for band in ('ON', 'OFF'))
+                            else np.nan)
+            if np.isfinite(disagreement) and abs(disagreement) > M101_ON_OFF_LOG_QA_LIMIT:
+                log.warning('M101 GRAY WARNING %s exposure %d: ON/OFF relative-G '
+                            'disagreement log(ON/OFF)=%.6g exceeds %.6g',
+                            calibration['h5'], exposure, disagreement,
+                            M101_ON_OFF_LOG_QA_LIMIT)
+            d = float(np.mean([value for value in log_relative.values() if np.isfinite(value)]))
+            gray_raw = float(np.exp(-d))
+            raw.append(gray_raw)
             per_exposure[exposure] = {
-                'gray_ON_relative': np.exp(-deviations['ON']) if np.isfinite(deviations['ON']) else np.nan,
-                'gray_OFF_relative': np.exp(-deviations['OFF']) if np.isfinite(deviations['OFF']) else np.nan,
-                'gray_combined_raw': np.exp(-d),
-                'log_gray_ON_minus_OFF': (deviations['ON'] - deviations['OFF']
-                                          if all(np.isfinite(deviations[b]) for b in ('ON', 'OFF')) else np.nan),
-                'n_valid_bands_for_gray': len(valid)}
-            if (np.isfinite(per_exposure[exposure]['gray_ON_relative']) and
-                    np.isfinite(per_exposure[exposure]['gray_OFF_relative']) and
-                    per_exposure[exposure]['gray_OFF_relative'] != 0.0):
-                per_exposure[exposure]['gray_ON_minus_OFF_fractional'] = (
-                    per_exposure[exposure]['gray_ON_relative'] /
-                    per_exposure[exposure]['gray_OFF_relative'] - 1.0)
-            else:
-                per_exposure[exposure]['gray_ON_minus_OFF_fractional'] = np.nan
-            raw.append(per_exposure[exposure]['gray_combined_raw'])
+                'G_exposure_ON': calibration['final_G'][(exposure, 'ON')]['G_exposure'],
+                'G_exposure_OFF': calibration['final_G'][(exposure, 'OFF')]['G_exposure'],
+                'G_fit_uncertainty_ON': calibration['final_G'][(exposure, 'ON')]['G_fit_uncertainty'],
+                'G_fit_uncertainty_OFF': calibration['final_G'][(exposure, 'OFF')]['G_fit_uncertainty'],
+                'G_fractional_fit_uncertainty_ON': calibration['final_G'][(exposure, 'ON')]['G_fractional_fit_uncertainty'],
+                'G_fractional_fit_uncertainty_OFF': calibration['final_G'][(exposure, 'OFF')]['G_fractional_fit_uncertainty'],
+                'relative_G_ON': relative['ON'], 'relative_G_OFF': relative['OFF'],
+                'gray_ON': np.exp(-log_relative['ON']) if np.isfinite(log_relative['ON']) else np.nan,
+                'gray_OFF': np.exp(-log_relative['OFF']) if np.isfinite(log_relative['OFF']) else np.nan,
+                'gray_combined_raw': gray_raw,
+                'gray_combined': np.nan,
+                'log_relative_G_ON_minus_OFF': disagreement,
+                'n_valid_bands_for_gray': len(valid),
+                'N_source_ON': calibration['final_G'][(exposure, 'ON')]['n_source'],
+                'N_source_OFF': calibration['final_G'][(exposure, 'OFF')]['n_source'],
+                'source_fraction_ON': calibration['final_G'][(exposure, 'ON')]['source_fraction'],
+                'source_fraction_OFF': calibration['final_G'][(exposure, 'OFF')]['source_fraction'],
+                'robust_RMS_ON': calibration['final_G'][(exposure, 'ON')]['robust_RMS'],
+                'robust_RMS_OFF': calibration['final_G'][(exposure, 'OFF')]['robust_RMS'],
+                'sum_I_object_squared_ON': calibration['final_G'][(exposure, 'ON')]['sum_I_object_squared'],
+                'sum_I_object_squared_OFF': calibration['final_G'][(exposure, 'OFF')]['sum_I_object_squared'],
+                'I_object_p10_ON': calibration['final_G'][(exposure, 'ON')]['I_object_p10'],
+                'I_object_p90_ON': calibration['final_G'][(exposure, 'ON')]['I_object_p90'],
+                'I_object_p10_OFF': calibration['final_G'][(exposure, 'OFF')]['I_object_p10'],
+                'I_object_p90_OFF': calibration['final_G'][(exposure, 'OFF')]['I_object_p90'],
+                'source_selection_sensitivity_log_ON': calibration['final_G_sensitivity'][(exposure, 'ON')],
+                'source_selection_sensitivity_log_OFF': calibration['final_G_sensitivity'][(exposure, 'OFF')],
+                'well_constrained_G_ON': calibration['final_G'][(exposure, 'ON')]['well_constrained'],
+                'well_constrained_G_OFF': calibration['final_G'][(exposure, 'OFF')]['well_constrained'],
+                'valid_G_ON': calibration['final_G'][(exposure, 'ON')]['valid'],
+                'valid_G_OFF': calibration['final_G'][(exposure, 'OFF')]['valid'],
+            }
+            for band in ('ON', 'OFF'):
+                for threshold_name, threshold in (('0p03', 0.03),
+                                                   ('0p05', 0.05),
+                                                   ('0p10', 0.10)):
+                    per_exposure[exposure]['G_threshold_%s_%s' % (band, threshold_name)] = (
+                        calibration['final_G_by_threshold'][threshold][(exposure, band)]['G_exposure'])
         calibration['gray_by_exposure'] = per_exposure
+
     center = validated_m101.robust_location(np.log(np.asarray(raw, dtype=float)))
     if not np.isfinite(center):
         raise ValueError('cannot center ensemble gray normalization')
     for calibration in calibrations:
         for exposure in (1, 2, 3):
-            calibration['gray_by_exposure'][exposure]['gray_combined'] = (
-                calibration['gray_by_exposure'][exposure]['gray_combined_raw'] / np.exp(center))
-    log.info('M101 gray normalization: log center=%+.8g; positive g values ON=%d OFF=%d',
-             center, len(logs['ON']), len(logs['OFF']))
+            gray = calibration['gray_by_exposure'][exposure]
+            gray['gray_combined'] = gray['gray_combined_raw'] / np.exp(center)
+            if (gray['gray_combined'] < M101_GRAY_WARNING_LIMITS[0] or
+                    gray['gray_combined'] > M101_GRAY_WARNING_LIMITS[1]):
+                log.warning('M101 GRAY WARNING %s exposure %d: gray_combined=%.8g '
+                            'outside QA range %.3g..%.3g; no clipping applied',
+                            calibration['h5'], exposure, gray['gray_combined'],
+                            *M101_GRAY_WARNING_LIMITS)
+    log.info('M101 gray normalization uses final through-zero G only: '
+             'log L_ref ON=%+.8g OFF=%+.8g; log gray center=%+.8g; '
+             'well-constrained G values ON=%d OFF=%d', reference['ON'], reference['OFF'], center,
+             len(logs['ON']), len(logs['OFF']))
     return reference
+
+
+def _m101_save_pass1_cache(calibrations, h5files, images, filters, f_template,
+                           state_template_path, global_g, iterations, output_name,
+                           log):
+    """Save the transparent compact PASS-1 product for downstream reuse."""
+    cache = {
+        'version': 1,
+        'calibration_model': M101_CALIBRATION_MODEL,
+        'h5_files': [str(Path(path).resolve()) for path in h5files],
+        'images': {band: str(images[band]['path'].resolve()) for band in ('ON', 'OFF')},
+        'image_signatures': {band: (images[band]['path'].stat().st_size,
+                                   images[band]['path'].stat().st_mtime_ns)
+                            for band in ('ON', 'OFF')},
+        'filters': {band: np.asarray(filters[band], dtype=float) for band in ('ON', 'OFF')},
+        'f_q': np.asarray(f_template, dtype=float),
+        'ifu_state_template': str(Path(state_template_path).resolve()),
+        'ifu_state_template_signature': (Path(state_template_path).stat().st_size,
+                                         Path(state_template_path).stat().st_mtime_ns),
+        'global_g': {band: float(global_g[band]) for band in ('ON', 'OFF')},
+        'iterations': int(iterations),
+        'calibrations': calibrations,
+    }
+    cache_path = Path(output_name).with_name('m101_production_calibration_pass1.pkl')
+    with cache_path.open('wb') as stream:
+        pickle.dump(cache, stream, protocol=pickle.HIGHEST_PROTOCOL)
+    log.info('M101 PASS 1 compact calibration cache saved: %s', cache_path)
+    return cache_path
+
+
+def _m101_load_pass1_cache(path, h5files, images, filters, f_template,
+                           state_template_path, global_g, iterations, log):
+    """Load PASS 1 only when all calibration-defining inputs match exactly."""
+    with Path(path).open('rb') as stream:
+        cache = pickle.load(stream)
+    expected_h5 = [str(Path(name).resolve()) for name in h5files]
+    if (cache.get('version') != 1 or
+            cache.get('calibration_model') != M101_CALIBRATION_MODEL or
+            cache.get('h5_files') != expected_h5):
+        raise ValueError('M101 PASS 1 cache H5 list/version does not match current inputs')
+    expected_images = {band: str(images[band]['path'].resolve()) for band in ('ON', 'OFF')}
+    if cache.get('images') != expected_images:
+        raise ValueError('M101 PASS 1 cache external image paths do not match current inputs')
+    expected_image_signatures = {
+        band: (images[band]['path'].stat().st_size, images[band]['path'].stat().st_mtime_ns)
+        for band in ('ON', 'OFF')}
+    if cache.get('image_signatures') != expected_image_signatures:
+        raise ValueError('M101 PASS 1 cache external image files do not match current inputs')
+    if cache.get('ifu_state_template') != str(Path(state_template_path).resolve()):
+        raise ValueError('M101 PASS 1 cache IFU state template does not match current input')
+    state_path = Path(state_template_path)
+    if cache.get('ifu_state_template_signature') != (state_path.stat().st_size,
+                                                       state_path.stat().st_mtime_ns):
+        raise ValueError('M101 PASS 1 cache IFU state template file does not match current input')
+    if int(cache.get('iterations', -1)) != int(iterations):
+        raise ValueError('M101 PASS 1 cache iteration count does not match current input')
+    if any(not np.array_equal(np.asarray(cache.get('filters', {}).get(b)), filters[b])
+           for b in ('ON', 'OFF')):
+        raise ValueError('M101 PASS 1 cache filter arrays do not match current inputs')
+    if not np.array_equal(np.asarray(cache.get('f_q')), f_template):
+        raise ValueError('M101 PASS 1 cache f(q) template does not match current input')
+    if any(not np.isclose(float(cache.get('global_g', {}).get(b, np.nan)), global_g[b])
+           for b in ('ON', 'OFF')):
+        raise ValueError('M101 PASS 1 cache fixed global-g values do not match current inputs')
+    calibrations = cache.get('calibrations')
+    if not isinstance(calibrations, list) or [c.get('h5') for c in calibrations] != [Path(n).name for n in h5files]:
+        raise ValueError('M101 PASS 1 cache calibration records do not match current H5 inputs')
+    log.info('M101 PASS 1 compact calibration cache reused after metadata validation: %s', path)
+    return calibrations
 
 
 def _m101_write_calibration_qa(calibrations, images, output_name, log):
@@ -1089,18 +1336,34 @@ def _m101_write_calibration_qa(calibrations, images, output_name, log):
             survey = calibration['survey_by_exp'][exposure]
             record = calibration['exposure_records'][exposure]
             plane = calibration['planes'][exposure]
-            gray = calibration['gray_by_exposure'][exposure]
+            gray = calibration.get('gray_by_exposure', {}).get(exposure, {})
             row = {'H5': h5, 'exposure': exposure,
                    'production_state': calibration['production_state'],
                    'Survey.offset': float(survey['offset']),
                    'Survey.fwhm': float(survey['fwhm']),
                    'plane_cx': plane['cx'], 'plane_cy': plane['cy'],
                    'beta': record['beta'],
-                   'gray_ON_relative': gray['gray_ON_relative'],
-                   'gray_OFF_relative': gray['gray_OFF_relative'],
-                   'gray_combined': gray['gray_combined'],
-                   'log_gray_ON_minus_OFF': gray['log_gray_ON_minus_OFF'],
-                   'gray_ON_minus_OFF_fractional': gray['gray_ON_minus_OFF_fractional'],
+                   'source_surface_threshold': calibration.get('final_G', {}).get(
+                       (exposure, 'ON'), {}).get('source_surface_threshold', np.nan),
+                   'gray_ON': gray.get('gray_ON', np.nan),
+                   'gray_OFF': gray.get('gray_OFF', np.nan),
+                   'gray_combined': gray.get('gray_combined', np.nan),
+                   'gray_combined_raw': gray.get('gray_combined_raw', np.nan),
+                   'log_relative_G_ON_minus_OFF': gray.get('log_relative_G_ON_minus_OFF', np.nan),
+                   'N_source_ON': gray.get('N_source_ON', np.nan),
+                   'N_source_OFF': gray.get('N_source_OFF', np.nan),
+                   'robust_RMS_ON': gray.get('robust_RMS_ON', np.nan),
+                   'robust_RMS_OFF': gray.get('robust_RMS_OFF', np.nan),
+                   'sum_I_object_squared_ON': gray.get('sum_I_object_squared_ON', np.nan),
+                   'sum_I_object_squared_OFF': gray.get('sum_I_object_squared_OFF', np.nan),
+                   'I_object_p10_ON': gray.get('I_object_p10_ON', np.nan),
+                   'I_object_p90_ON': gray.get('I_object_p90_ON', np.nan),
+                   'I_object_p10_OFF': gray.get('I_object_p10_OFF', np.nan),
+                   'I_object_p90_OFF': gray.get('I_object_p90_OFF', np.nan),
+                   'source_selection_sensitivity_log_ON': gray.get('source_selection_sensitivity_log_ON', np.nan),
+                   'source_selection_sensitivity_log_OFF': gray.get('source_selection_sensitivity_log_OFF', np.nan),
+                   'well_constrained_G_ON': gray.get('well_constrained_G_ON', False),
+                   'well_constrained_G_OFF': gray.get('well_constrained_G_OFF', False),
                    'n_good_physical_amps': record['n_good_physical_amps'],
                    'n_well_constrained_IFUs': record['n_well_constrained_IFUs'],
                    'n_template_IFUs': record['n_template_IFUs'],
@@ -1117,9 +1380,24 @@ def _m101_write_calibration_qa(calibrations, images, output_name, log):
             for band in ('ON', 'OFF'):
                 fit = calibration['globals'][(exposure, band)]
                 delta = calibration['delta'][(exposure, band)]
-                row['g_%s' % band] = fit['g']
+                row['g_global_%s' % band] = fit['g']
                 row['z_source_fit_%s' % band] = fit['z']
                 row['delta_illumination_%s' % band] = delta
+                row['free_g_QA_%s' % band] = calibration['free_g_qa'][(exposure, band)]['g']
+                if gray:
+                    row['G_exposure_%s' % band] = gray.get('G_exposure_%s' % band, np.nan)
+                    row['relative_G_%s' % band] = gray.get('relative_G_%s' % band, np.nan)
+                final_fit = calibration.get('final_G', {}).get((exposure, band), {})
+                row['G_fit_uncertainty_%s' % band] = final_fit.get('G_fit_uncertainty', np.nan)
+                row['G_fractional_fit_uncertainty_%s' % band] = final_fit.get(
+                    'G_fractional_fit_uncertainty', np.nan)
+                row['source_fraction_%s' % band] = final_fit.get('source_fraction', np.nan)
+                row['valid_G_%s' % band] = final_fit.get('valid', False)
+                row['well_constrained_G_%s' % band] = final_fit.get('well_constrained', False)
+                for threshold_name, threshold in (('0p03', 0.03), ('0p05', 0.05), ('0p10', 0.10)):
+                    row['G_threshold_%s_%s' % (band, threshold_name)] = (
+                        calibration.get('final_G_by_threshold', {}).get(threshold, {})
+                        .get((exposure, band), {}).get('G_exposure', np.nan))
             for amp in validated_m101.AMPS:
                 row['alpha_%s' % amp] = calibration['alpha'][(exposure, amp)]
             calibration_rows.append(row)
@@ -1147,11 +1425,26 @@ def _m101_write_calibration_qa(calibrations, images, output_name, log):
                                  'template_present': details['template_present']})
     calibration_fields = ['H5', 'exposure', 'production_state', 'Survey.offset', 'Survey.fwhm']
     calibration_fields += ['alpha_%s' % amp for amp in validated_m101.AMPS]
-    calibration_fields += ['g_ON', 'z_source_fit_ON', 'delta_illumination_ON',
-                           'g_OFF', 'z_source_fit_OFF', 'delta_illumination_OFF',
-                           'plane_cx', 'plane_cy', 'beta', 'gray_ON_relative',
-                           'gray_OFF_relative', 'gray_combined', 'log_gray_ON_minus_OFF',
-                           'gray_ON_minus_OFF_fractional',
+    calibration_fields += ['g_global_ON', 'free_g_QA_ON', 'z_source_fit_ON', 'delta_illumination_ON',
+                           'G_exposure_ON', 'relative_G_ON', 'gray_ON',
+                           'G_fit_uncertainty_ON', 'G_fractional_fit_uncertainty_ON',
+                           'source_fraction_ON', 'G_threshold_0p03_ON', 'G_threshold_0p05_ON',
+                           'G_threshold_0p10_ON', 'valid_G_ON',
+                           'g_global_OFF', 'free_g_QA_OFF', 'z_source_fit_OFF', 'delta_illumination_OFF',
+                           'G_exposure_OFF', 'relative_G_OFF', 'gray_OFF',
+                           'G_fit_uncertainty_OFF', 'G_fractional_fit_uncertainty_OFF',
+                           'source_fraction_OFF', 'G_threshold_0p03_OFF', 'G_threshold_0p05_OFF',
+                           'G_threshold_0p10_OFF', 'valid_G_OFF',
+                           'plane_cx', 'plane_cy', 'beta', 'source_surface_threshold',
+                           'gray_combined_raw', 'gray_combined',
+                           'log_relative_G_ON_minus_OFF',
+                           'N_source_ON', 'N_source_OFF', 'robust_RMS_ON', 'robust_RMS_OFF',
+                           'sum_I_object_squared_ON', 'sum_I_object_squared_OFF',
+                           'I_object_p10_ON', 'I_object_p90_ON',
+                           'I_object_p10_OFF', 'I_object_p90_OFF',
+                           'source_selection_sensitivity_log_ON',
+                           'source_selection_sensitivity_log_OFF',
+                           'well_constrained_G_ON', 'well_constrained_G_OFF',
                            'n_good_physical_amps', 'n_well_constrained_IFUs', 'n_template_IFUs',
                            'RMS_scalar_before_plane', 'RMS_scalar_after_plane',
                            'RMS_scalar_after_template', 'response_min', 'response_p16',
@@ -1172,6 +1465,271 @@ def _m101_write_calibration_qa(calibrations, images, output_name, log):
     return calibration_rows, ifu_rows
 
 
+def _m101_final_source_scale_rows(calibrations, images):
+    rows = []
+    for calibration in sorted(calibrations, key=lambda item: item['h5']):
+        for exposure in (1, 2, 3):
+            gray = calibration['gray_by_exposure'][exposure]
+            for band in ('ON', 'OFF'):
+                fit = calibration['final_G'][(exposure, band)]
+                thresholds = calibration['final_G_by_threshold']
+                rows.append({
+                    'H5': calibration['h5'], 'exposure': exposure,
+                    'production_state': calibration['production_state'], 'band': band,
+                    'g_global': calibration['global_g'][band],
+                    'G_exposure': fit['G_exposure'],
+                    'G_fit_uncertainty': fit['G_fit_uncertainty'],
+                    'G_fractional_fit_uncertainty': fit['G_fractional_fit_uncertainty'],
+                    'G_threshold_0p03': thresholds[0.03][(exposure, band)]['G_exposure'],
+                    'G_threshold_0p05': thresholds[0.05][(exposure, band)]['G_exposure'],
+                    'G_threshold_0p10': thresholds[0.10][(exposure, band)]['G_exposure'],
+                    'source_selection_sensitivity_log': calibration['final_G_sensitivity'][(exposure, band)],
+                    'n_source': fit['n_source'], 'source_fraction': fit['source_fraction'],
+                    'sum_I_object_squared': fit['sum_I_object_squared'],
+                    'I_object_p10': fit['I_object_p10'], 'I_object_p90': fit['I_object_p90'],
+                    'robust_RMS': fit['robust_RMS'],
+                    'source_surface_threshold': fit['source_surface_threshold'],
+                    'relative_G': gray['relative_G_%s' % band],
+                    'gray_band': gray['gray_%s' % band],
+                    'valid_G': fit['valid'],
+                    'well_constrained_G': fit['well_constrained'],
+                    'gray_combined': gray['gray_combined'],
+                    'log_relative_G_ON_minus_OFF': gray['log_relative_G_ON_minus_OFF'],
+                    'external_FWHM': images[band]['psf']['fwhm_arcsec'],
+                    'external_background': images[band]['background'],
+                })
+    return rows
+
+
+def _m101_write_final_source_scale_qa(calibrations, images, output_name):
+    """Write the clean one-row-per-H5/exposure/band final-G provenance table."""
+    rows = _m101_final_source_scale_rows(calibrations, images)
+    fields = ['H5', 'exposure', 'production_state', 'band', 'g_global',
+              'G_exposure', 'G_fit_uncertainty', 'G_fractional_fit_uncertainty',
+              'G_threshold_0p03', 'G_threshold_0p05', 'G_threshold_0p10',
+              'source_selection_sensitivity_log', 'n_source', 'source_fraction',
+              'sum_I_object_squared', 'I_object_p10', 'I_object_p90', 'robust_RMS',
+              'source_surface_threshold', 'relative_G', 'gray_band',
+              'valid_G', 'well_constrained_G', 'gray_combined',
+              'log_relative_G_ON_minus_OFF', 'external_FWHM', 'external_background']
+    path = Path(output_name).with_name('m101_final_source_scale.csv')
+    with path.open('w', newline='') as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader(); writer.writerows(rows)
+    return rows
+
+
+def _m101_write_global_morphology_qa(calibrations, output_name):
+    rows = []
+    for band in ('ON', 'OFF'):
+        values = np.asarray([calibration['free_g_qa'][(exposure, band)]['g']
+                             for calibration in calibrations for exposure in (1, 2, 3)], dtype=float)
+        values = values[np.isfinite(values) & (values > 0.0)]
+        rows.append({'band': band,
+                     'adopted_g_global': calibrations[0]['global_g'][band],
+                     'free_g_QA_robust_location': validated_m101.robust_location(values),
+                     'free_g_QA_p16': float(np.percentile(values, 16)) if values.size else np.nan,
+                     'free_g_QA_p84': float(np.percentile(values, 84)) if values.size else np.nan,
+                     'N_positive_free_g': int(values.size)})
+    fields = ['band', 'adopted_g_global', 'free_g_QA_robust_location',
+              'free_g_QA_p16', 'free_g_QA_p84', 'N_positive_free_g']
+    path = Path(output_name).with_name('m101_global_morphology_conversion.csv')
+    with path.open('w', newline='') as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader(); writer.writerows(rows)
+    return rows
+
+
+def _m101_write_threshold_sensitivity_qa(calibrations, output_name):
+    rows = []
+    for calibration in sorted(calibrations, key=lambda item: item['h5']):
+        for exposure in (1, 2, 3):
+            for band in ('ON', 'OFF'):
+                for threshold in M101_SOURCE_SURFACE_THRESHOLDS:
+                    fit = calibration['final_G_by_threshold'][threshold][(exposure, band)]
+                    rows.append({'H5': calibration['h5'], 'exposure': exposure,
+                                 'production_state': calibration['production_state'],
+                                 'band': band, 'threshold': threshold,
+                                 'G_exposure': fit['G_exposure'],
+                                 'G_fit_uncertainty': fit['G_fit_uncertainty'],
+                                 'G_fractional_fit_uncertainty': fit['G_fractional_fit_uncertainty'],
+                                 'n_source': fit['n_source'],
+                                 'sum_I_object_squared': fit['sum_I_object_squared'],
+                                 'robust_RMS': fit['robust_RMS']})
+    fields = ['H5', 'exposure', 'production_state', 'band', 'threshold',
+              'G_exposure', 'G_fit_uncertainty', 'G_fractional_fit_uncertainty',
+              'n_source', 'sum_I_object_squared', 'robust_RMS']
+    path = Path(output_name).with_name('m101_final_G_threshold_sensitivity.csv')
+    with path.open('w', newline='') as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader(); writer.writerows(rows)
+    return rows
+
+
+def _m101_chronological_gray_rows(calibrations):
+    return [
+        {'H5': calibration['h5'], 'exposure': exposure,
+         **calibration['gray_by_exposure'][exposure]}
+        for calibration in sorted(calibrations, key=lambda item: item['h5'])
+        for exposure in (1, 2, 3)]
+
+
+def _m101_draw_h5_boundaries(axis, rows):
+    for index in range(1, len(rows)):
+        if rows[index]['H5'] != rows[index - 1]['H5']:
+            axis.axvline(index - 0.5, color='k', lw=.6, alpha=.6)
+
+
+def _m101_plot_final_gray_normalization(calibrations, output_name):
+    rows = _m101_chronological_gray_rows(calibrations)
+    x = np.arange(len(rows))
+    fig, axes = plt.subplots(4, 1, figsize=(15, 11), sharex=True)
+    axes[0].plot(x, [row['relative_G_ON'] for row in rows], 'o-', ms=2, label='relative G ON')
+    axes[0].plot(x, [row['relative_G_OFF'] for row in rows], 'o-', ms=2, label='relative G OFF')
+    axes[0].axhline(1., color='k', lw=.7); axes[0].set_ylabel('relative G'); axes[0].legend(fontsize=8)
+    axes[1].plot(x, [row['gray_ON'] for row in rows], 'o-', ms=2, label='gray ON')
+    axes[1].plot(x, [row['gray_OFF'] for row in rows], 'o-', ms=2, label='gray OFF')
+    axes[1].plot(x, [row['gray_combined'] for row in rows], 'o-', ms=2, label='gray combined')
+    axes[1].axhline(1., color='k', lw=.7); axes[1].set_ylabel('gray'); axes[1].legend(fontsize=8)
+    axes[2].plot(x, [row['log_relative_G_ON_minus_OFF'] for row in rows], 'o-', ms=2)
+    axes[2].axhline(0., color='k', lw=.7)
+    axes[2].axhline(M101_ON_OFF_LOG_QA_LIMIT, color='r', ls='--', lw=.7)
+    axes[2].axhline(-M101_ON_OFF_LOG_QA_LIMIT, color='r', ls='--', lw=.7)
+    axes[2].set_ylabel('log rel-G ON/OFF')
+    axes[3].plot(x, [row['source_selection_sensitivity_log_ON'] for row in rows],
+                 'o-', ms=2, label='ON')
+    axes[3].plot(x, [row['source_selection_sensitivity_log_OFF'] for row in rows],
+                 'o-', ms=2, label='OFF')
+    axes[3].axhline(M101_G_SENSITIVITY_LOG_LIMIT, color='r', ls='--', lw=.7,
+                    label='warning limit')
+    axes[3].set_ylabel('threshold log range'); axes[3].set_xlabel('chronological H5/exposure')
+    axes[3].legend(fontsize=8)
+    for index, row in enumerate(rows):
+        if min(row['N_source_ON'], row['N_source_OFF']) < 10:
+            axes[3].annotate('n<10', (index, 0), xytext=(0, 4), textcoords='offset points',
+                             fontsize=6, rotation=90)
+    for axis in axes:
+        _m101_draw_h5_boundaries(axis, rows); axis.grid(alpha=.2)
+    fig.suptitle('M101 final exposure gray normalization QA')
+    fig.tight_layout(rect=(0, 0, 1, .96))
+    path = Path(output_name).with_name('m101_final_gray_normalization.png')
+    fig.savefig(path, dpi=170); plt.close(fig)
+    return path
+
+
+def _m101_plot_relative_g_on_vs_off(calibrations, output_name):
+    rows = _m101_chronological_gray_rows(calibrations)
+    selected = [row for row in rows if row['well_constrained_G_ON'] and
+                row['well_constrained_G_OFF'] and
+                np.isfinite(row['relative_G_ON']) and np.isfinite(row['relative_G_OFF'])]
+    fig, axis = plt.subplots(figsize=(7, 7))
+    if selected:
+        x = np.asarray([row['relative_G_ON'] for row in selected], dtype=float)
+        y = np.asarray([row['relative_G_OFF'] for row in selected], dtype=float)
+        ratio = np.log(x / y)
+        finite = np.isfinite(x) & np.isfinite(y) & (x > 0) & (y > 0)
+        x, y, ratio = x[finite], y[finite], ratio[finite]
+        axis.scatter(x, y, s=18, alpha=.8)
+        limits = np.asarray([min(x.min(), y.min()), max(x.max(), y.max())])
+        axis.plot(limits, limits, 'k--', label='identity')
+        relation = validated_m101.fit_line(x, y)
+        grid = np.linspace(limits[0], limits[1], 100)
+        if np.isfinite(relation['g']) and np.isfinite(relation['z']):
+            axis.plot(grid, relation['g'] * grid + relation['z'], 'r-', lw=1,
+                      label='descriptive robust line')
+        correlation = float(np.corrcoef(x, y)[0, 1]) if x.size > 1 else np.nan
+        scatter = validated_m101.robust_rms(ratio)
+        axis.text(.04, .96, 'N=%d\nPearson r=%.4g\nrobust RMS log ratio=%.4g' %
+                  (x.size, correlation, scatter), transform=axis.transAxes, va='top')
+        largest = np.argsort(np.abs(ratio))[-min(5, ratio.size):]
+        for index in largest:
+            row = selected[np.flatnonzero(finite)[index]]
+            axis.annotate('%s e%d' % (row['H5'][:15], row['exposure']),
+                          (x[index], y[index]), fontsize=6)
+        axis.set_xlim(limits); axis.set_ylim(limits)
+    else:
+        axis.text(.5, .5, 'No exposures with both well-constrained bands',
+                  ha='center', va='center', transform=axis.transAxes)
+    axis.set_xlabel('relative G ON'); axis.set_ylabel('relative G OFF')
+    axis.set_title('M101 ensemble-normalized ON versus OFF relative G')
+    axis.grid(alpha=.2); axis.legend(fontsize=8)
+    fig.tight_layout()
+    path = Path(output_name).with_name('m101_final_relative_G_ON_vs_OFF.png')
+    fig.savefig(path, dpi=170); plt.close(fig)
+    return path
+
+
+def _m101_log_final_qa_summary(calibrations, log):
+    rows = _m101_chronological_gray_rows(calibrations)
+    for band in ('ON', 'OFF'):
+        free = np.asarray([calibration['free_g_qa'][(exposure, band)]['g']
+                           for calibration in calibrations for exposure in (1, 2, 3)], dtype=float)
+        free = free[np.isfinite(free) & (free > 0.0)]
+        log.info('M101 QA adopted g_global %s=%.8g; free-g QA robust/p16/p84=%.8g/%.8g/%.8g N=%d',
+                 band, calibrations[0]['global_g'][band],
+                 validated_m101.robust_location(free),
+                 np.percentile(free, 16) if free.size else np.nan,
+                 np.percentile(free, 84) if free.size else np.nan, free.size)
+    for band in ('ON', 'OFF'):
+        values = np.asarray([calibration['final_G'][(exposure, band)]['G_fractional_fit_uncertainty']
+                             for calibration in calibrations for exposure in (1, 2, 3)], dtype=float)
+        values = values[np.isfinite(values)]
+        log.info('M101 QA %s G fractional fit uncertainty: median/p16/p84=%.6g/%.6g/%.6g '
+                 '(descriptive fit precision only; not total photometric uncertainty)', band,
+                 np.median(values) if values.size else np.nan,
+                 np.percentile(values, 16) if values.size else np.nan,
+                 np.percentile(values, 84) if values.size else np.nan)
+        n_source = [row['N_source_%s' % band] for row in rows]
+        sensitivity = [row['source_selection_sensitivity_log_%s' % band] for row in rows]
+        log.info('M101 QA %s median n_source=%.6g; median threshold sensitivity=%.6g',
+                 band, np.median(n_source), np.nanmedian(sensitivity))
+    both = [row for row in rows if np.isfinite(row['relative_G_ON']) and
+            np.isfinite(row['relative_G_OFF'])]
+    if both:
+        rel_on = np.asarray([row['relative_G_ON'] for row in both])
+        rel_off = np.asarray([row['relative_G_OFF'] for row in both])
+        ratio = np.log(rel_on / rel_off)
+        log.info('M101 QA relative-G ON/OFF: Pearson r=%.6g robust RMS log ratio=%.6g',
+                 np.corrcoef(rel_on, rel_off)[0, 1] if len(both) > 1 else np.nan,
+                 validated_m101.robust_rms(ratio))
+    gray = np.asarray([row['gray_combined'] for row in rows], dtype=float)
+    log.info('M101 QA gray_combined min/median/max=%.6g/%.6g/%.6g',
+             np.nanmin(gray), np.nanmedian(gray), np.nanmax(gray))
+    counts = {2: 0, 1: 0}
+    for row in rows:
+        counts[row['n_valid_bands_for_gray']] = counts.get(row['n_valid_bands_for_gray'], 0) + 1
+    log.info('M101 QA gray band usage: both=%d ON-only=%d OFF-only=%d',
+             counts.get(2, 0), sum(1 for row in rows if np.isfinite(row['gray_ON']) and not np.isfinite(row['gray_OFF'])),
+             sum(1 for row in rows if np.isfinite(row['gray_OFF']) and not np.isfinite(row['gray_ON'])))
+    invalid = [(calibration['h5'], exposure, band)
+               for calibration in calibrations for exposure in (1, 2, 3) for band in ('ON', 'OFF')
+               if not calibration['final_G'][(exposure, band)]['valid']]
+    low_n = [(row['H5'], row['exposure']) for row in rows
+             if row['N_source_ON'] < 10 or row['N_source_OFF'] < 10]
+    sensitivity_warning = [(row['H5'], row['exposure']) for row in rows
+                           if row['source_selection_sensitivity_log_ON'] > M101_G_SENSITIVITY_LOG_LIMIT or
+                           row['source_selection_sensitivity_log_OFF'] > M101_G_SENSITIVITY_LOG_LIMIT]
+    disagreement_warning = [(row['H5'], row['exposure']) for row in rows
+                            if np.isfinite(row['log_relative_G_ON_minus_OFF']) and
+                            abs(row['log_relative_G_ON_minus_OFF']) > M101_ON_OFF_LOG_QA_LIMIT]
+    gray_warning = [(row['H5'], row['exposure']) for row in rows
+                    if not M101_GRAY_WARNING_LIMITS[0] <= row['gray_combined'] <= M101_GRAY_WARNING_LIMITS[1]]
+    log.info('M101 QA warning counts: nonpositive/invalid G=%d, n_source<10=%d, '
+             'threshold sensitivity=%d, ON/OFF disagreement=%d, gray=%d',
+             len(invalid), len(low_n), len(sensitivity_warning),
+             len(disagreement_warning), len(gray_warning))
+    if invalid:
+        log.warning('M101 QA invalid/nonpositive G exposures: %s', invalid)
+    if low_n:
+        log.warning('M101 QA exposures with n_source<10: %s', low_n)
+    if sensitivity_warning:
+        log.warning('M101 QA threshold-sensitivity warnings: %s', sensitivity_warning)
+    if disagreement_warning:
+        log.warning('M101 QA ON/OFF disagreement warnings: %s', disagreement_warning)
+    if gray_warning:
+        log.warning('M101 QA gray warnings: %s', gray_warning)
+
+
 def _m101_plot_calibration_summary(rows, output_name, log):
     rows = sorted(rows, key=lambda row: (row['H5'], row['exposure']))
     x = np.arange(len(rows))
@@ -1179,8 +1737,8 @@ def _m101_plot_calibration_summary(rows, output_name, log):
     axes[0].plot(x, [row['beta'] for row in rows], 'o-', ms=2, label='beta')
     axes[0].plot(x, [row['gray_combined'] for row in rows], 'o-', ms=2, label='gray combined')
     axes[0].set_ylabel('factor'); axes[0].legend(fontsize=8)
-    axes[1].plot(x, [row['log_gray_ON_minus_OFF'] for row in rows], 'o-', ms=2)
-    axes[1].axhline(0, color='k', lw=.7); axes[1].set_ylabel('log gray ON-OFF')
+    axes[1].plot(x, [row['log_relative_G_ON_minus_OFF'] for row in rows], 'o-', ms=2)
+    axes[1].axhline(0, color='k', lw=.7); axes[1].set_ylabel('log relative G ON-OFF')
     axes[2].plot(x, [row['RMS_scalar_before_plane'] for row in rows], 'o-', ms=2, label='before plane')
     axes[2].plot(x, [row['RMS_scalar_after_plane'] for row in rows], 'o-', ms=2, label='after plane')
     axes[2].plot(x, [row['RMS_scalar_after_template'] for row in rows], 'o-', ms=2, label='after beta*C')
@@ -1232,7 +1790,7 @@ def _m101_plot_response_maps(calibrations, output_name, log):
 
 def _m101_apply_h5_calibration(h5file, calibration, f_template, binimage,
                                xg, yg, tp, log):
-    """PASS 2: apply detector, local response, residual sky, and gray scale."""
+    """PASS 2: return locally corrected, residual-sky-subtracted spectra."""
     with tables.open_file(h5file, mode='r') as h5:
         info, fibers = h5.root.Info, h5.root.Fibers
         groups, labels = validated_m101.build_groups(info)
@@ -1283,11 +1841,6 @@ def _m101_apply_h5_calibration(h5file, calibration, f_template, binimage,
         spectra = subtract_m101_residual_sky(
             spectra, ra, dec, xg, yg, tp, binimage=binimage, log=log,
             h5file=op.basename(h5file))
-        for exposure in (1, 2, 3):
-            gray = calibration['gray_by_exposure'][exposure]['gray_combined']
-            selected = labels == exposure
-            spectra[selected] *= gray
-            errors[selected] *= gray
     return spectra, errors, ra, dec, labels, survey_by_exp
 
 parser = ap.ArgumentParser(add_help=True)
@@ -1339,6 +1892,14 @@ parser.add_argument("--m101-calibration-only", action="store_true",
                     help='''Run one-time image setup and PASS 1 calibration, then exit''')
 parser.add_argument("--m101-iterations", type=int, default=3,
                     help='''Validated M101 alpha iterations (default: 3)''')
+parser.add_argument("--m101-global-g-on", type=float, default=M101_GLOBAL_G_DEFAULTS['ON'],
+                    help='''Fixed global external-to-VIRUS morphology conversion for ON (default: 0.323)''')
+parser.add_argument("--m101-global-g-off", type=float, default=M101_GLOBAL_G_DEFAULTS['OFF'],
+                    help='''Fixed global external-to-VIRUS morphology conversion for OFF (default: 0.0606)''')
+parser.add_argument("--m101-source-surface-threshold", type=float, default=0.05,
+                    help='''External-image source surface threshold for final G (default: 0.05)''')
+parser.add_argument("--m101-pass1-cache", default=None,
+                    help='''Reuse a metadata-validated compact M101 PASS-1 cache''')
 
 parser.add_argument("--wave-workers",
                     help='''Number of threads used to build wavelength planes (default: 1)''',
@@ -2613,6 +3174,12 @@ def _run_lsf_measurement(h5files, surname, def_wave, raarray, decarray,
 args = parser.parse_args(args=None)
 if args.wave_workers < 1:
     parser.error('--wave-workers must be at least 1')
+if not np.isfinite(args.m101_global_g_on) or args.m101_global_g_on <= 0.0:
+    parser.error('--m101-global-g-on must be finite and positive')
+if not np.isfinite(args.m101_global_g_off) or args.m101_global_g_off <= 0.0:
+    parser.error('--m101-global-g-off must be finite and positive')
+if not np.isfinite(args.m101_source_surface_threshold) or args.m101_source_surface_threshold <= 0.0:
+    parser.error('--m101-source-surface-threshold must be finite and positive')
 args.log = setup_logging('make_image_from_h5')
 
 def_wave = np.linspace(3470., 5540., 1036)
@@ -2710,6 +3277,11 @@ if args.m101_on_image is None or args.m101_on_filter is None:
 if args.m101_iterations < 1:
     parser.error('--m101-iterations must be positive')
 f_global = validated_m101.load_fq(args.m101_fq_template)
+global_g = {'ON': float(args.m101_global_g_on), 'OFF': float(args.m101_global_g_off)}
+args.log.info('M101 ADOPTED FIXED GLOBAL MORPHOLOGY CONVERSIONS: '
+              'g_global_ON=%.8g, g_global_OFF=%.8g. These are nuisance '
+              'external-image-to-VIRUS conversions only; they are not '
+              'exposure throughput measurements.', global_g['ON'], global_g['OFF'])
 filters_global = {
     'ON': validated_m101.read_filter(args.m101_on_filter),
     'OFF': validated_m101.read_filter(args.m101_off_filter),
@@ -2756,20 +3328,40 @@ P_small = np.column_stack((ximage.ravel(), yimage.ravel()))
 binimage = griddata(P_small, binimage.ravel(), (xgrid, ygrid), method='cubic')
 
 state_templates_global = _m101_load_state_template(args.m101_ifu_state_template, args.log)
-calibrations = []
-for h5file in h5files:
-    if op.basename(h5file) == '20200523_0000023.h5':
-        raise ValueError('excluded H5 was passed to the production builder: %s' % h5file)
-    production_state = 2 if op.basename(h5file) in M101_SECONDARY_H5 else 1
-    args.log.info('M101 PASS 1 calibration %s: production state=%d',
-                  op.basename(h5file), production_state)
-    calibrations.append(_m101_calibrate_one_h5(
-        h5file, images_global, filters_global, f_global, args.m101_iterations,
-        state_templates_global, production_state, args.log))
-_m101_derive_gray_factors(calibrations, args.log)
-_m101_write_calibration_qa(
-    calibrations, images_global, 'm101_production_calibration.csv', args.log)
+if args.m101_pass1_cache:
+    calibrations = _m101_load_pass1_cache(
+        args.m101_pass1_cache, h5files, images_global, filters_global, f_global,
+        args.m101_ifu_state_template, global_g, args.m101_iterations, args.log)
+else:
+    calibrations = []
+    for h5file in h5files:
+        if op.basename(h5file) == '20200523_0000023.h5':
+            raise ValueError('excluded H5 was passed to the production builder: %s' % h5file)
+        production_state = 2 if op.basename(h5file) in M101_SECONDARY_H5 else 1
+        args.log.info('M101 PASS 1 calibration %s: production state=%d',
+                      op.basename(h5file), production_state)
+        calibrations.append(_m101_calibrate_one_h5(
+            h5file, images_global, filters_global, f_global, args.m101_iterations,
+            state_templates_global, production_state, global_g, args.log))
+free_g_population = {band: [calibration['free_g_qa'][(exposure, band)]['g']
+                            for calibration in calibrations for exposure in (1, 2, 3)
+                            if np.isfinite(calibration['free_g_qa'][(exposure, band)]['g']) and
+                            calibration['free_g_qa'][(exposure, band)]['g'] > 0.0]
+                     for band in ('ON', 'OFF')}
+args.log.info('M101 free-g QA only (not adopted): source-constrained robust locations '
+              'ON=%.8g (N=%d), OFF=%.8g (N=%d); adopted fixed values remain '
+              'ON=%.8g/OFF=%.8g',
+              validated_m101.robust_location(free_g_population['ON']),
+              len(free_g_population['ON']), validated_m101.robust_location(free_g_population['OFF']),
+              len(free_g_population['OFF']), global_g['ON'], global_g['OFF'])
+if not args.m101_pass1_cache:
+    _m101_save_pass1_cache(
+        calibrations, h5files, images_global, filters_global, f_global,
+        args.m101_ifu_state_template, global_g, args.m101_iterations,
+        'm101_production_calibration.csv', args.log)
 if args.m101_calibration_only:
+    _m101_write_calibration_qa(
+        calibrations, images_global, 'm101_production_calibration.csv', args.log)
     args.log.info('M101 calibration-only requested; stopping before PASS 2 cube ingestion.')
     sys.exit(0)
 # Allocate cube products only after calibration-only has passed.  PASS 1 has
@@ -2788,6 +3380,7 @@ errarray = np.zeros((cnt, len(def_wave)), dtype='float32')
 # are intentionally absent.
 cnt = 0
 calibration_by_h5 = {calibration['h5']: calibration for calibration in calibrations}
+pass2_slices = []
 for h5file in h5files:
     h5name = op.basename(h5file)
     calibration = calibration_by_h5[h5name]
@@ -2811,16 +3404,47 @@ for h5file in h5files:
         decarray[cnt + indices, :] = (
             dec[indices, None] - extractor.ADRdec[None, :] / 3600.)
 
+    # Store the actual S_clean values before measuring G.  The existing
+    # wavelength-gap interpolation remains a downstream cube-ingestion step.
+    specarray[cnt:cnt1, :] = spectra
+    errarray[cnt:cnt1, :] = error
+    _m101_measure_final_source_scales(
+        calibration, spectra, filters_global, images_global,
+        args.m101_source_surface_threshold, args.log)
     Gk = Gaussian1DKernel(1.8)
     for k in np.arange(len(spectra)):
         if np.isfinite(spectra[k]).sum() > 800:
             spectra[k] = interpolate_replace_nans(spectra[k], Gk,
                                                   **{'boundary': 'extend'})
     specarray[cnt:cnt1, :] = spectra
-    errarray[cnt:cnt1, :] = error
-    args.log.info('PASS 2 %s: assigned calibrated spectra directly to '
-                  'specarray/errarray; no norm_array applied.', h5name)
+    pass2_slices.append((calibration, cnt, cnt1))
+    args.log.info('PASS 2 %s: assigned locally corrected, residual-sky-subtracted '
+                  'spectra without gray; final G measured for all three exposures.', h5name)
     cnt = cnt1
+
+_m101_derive_gray_factors(calibrations, args.log)
+for calibration, start, end in pass2_slices:
+    for exposure in (1, 2, 3):
+        gray = calibration['gray_by_exposure'][exposure]['gray_combined']
+        selected = calibration['labels'] == exposure
+        rows = start + np.flatnonzero(selected)
+        specarray[rows, :] *= gray
+        errarray[rows, :] *= gray
+args.log.info('M101 final gray factors applied after all %d exposure scales were solved; '
+              'cube reconstruction proceeds with unchanged products.', len(pass2_slices) * 3)
+_m101_write_calibration_qa(
+    calibrations, images_global, 'm101_production_calibration.csv', args.log)
+_m101_write_final_source_scale_qa(
+    calibrations, images_global, 'm101_production_calibration.csv')
+_m101_write_global_morphology_qa(
+    calibrations, 'm101_production_calibration.csv')
+_m101_write_threshold_sensitivity_qa(
+    calibrations, 'm101_production_calibration.csv')
+_m101_plot_final_gray_normalization(
+    calibrations, 'm101_production_calibration.csv')
+_m101_plot_relative_g_on_vs_off(
+    calibrations, 'm101_production_calibration.csv')
+_m101_log_final_qa_summary(calibrations, args.log)
 
 def render_wavelength(i):
     """Build one wavelength plane using the test Gaussian imaging path."""

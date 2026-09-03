@@ -1195,11 +1195,24 @@ def plot_illumination_model_closure(datasets, groups, globals_, delta_by_band,
     fig.savefig(output_path, dpi=170); plt.close(fig)
 
 
-def fit_line(x, y):
+def fit_line(x, y, fixed_g=None):
+    """Fit ``y = g*x + z`` robustly, optionally holding ``g`` fixed."""
     valid = np.isfinite(x) & np.isfinite(y)
     x, y = np.asarray(x)[valid], np.asarray(y)[valid]
     if x.size < 3:
         return {"g": np.nan, "z": np.nan}
+    if fixed_g is not None:
+        fixed_g = float(fixed_g)
+        if not np.isfinite(fixed_g):
+            return {"g": np.nan, "z": np.nan}
+        residual = y - fixed_g * x
+        z0 = robust_location(residual)
+        if not np.isfinite(z0):
+            return {"g": fixed_g, "z": np.nan}
+        scale = max(robust_scale(residual), 1e-12)
+        fit = least_squares(lambda p: residual - p[0], [z0],
+                            loss="soft_l1", f_scale=scale, x_scale="jac")
+        return {"g": fixed_g, "z": float(fit.x[0])}
     p0 = [np.dot(x, y) / np.dot(x, x) if np.dot(x, x) else 0.0,
           float(np.median(y))]
     scale = max(robust_scale(y), 1e-12)
@@ -1241,7 +1254,8 @@ def clip_amplifiers(groups, qa_rows, initial_good):
     return good
 
 
-def broad_stage(datasets, groups, f, alpha, initial_good, previous_good):
+def broad_stage(datasets, groups, f, alpha, initial_good, previous_good,
+                fixed_g_by_band=None):
     """Perform one fixed-additive, g/z, and amplifier-clipping stage.
 
     The illumination term is intentionally not a fitted quantity in this
@@ -1268,8 +1282,10 @@ def broad_stage(datasets, groups, f, alpha, initial_good, previous_good):
                             "group_index": index})
             rows.append(summary)
             summaries[(group["identity"], band)] = summary
+        fixed_g = (fixed_g_by_band.get(band) if fixed_g_by_band is not None
+                   else None)
         fit = fit_line(np.asarray([row["I"] for row in rows]),
-                       np.asarray([row["Y"] for row in rows]))
+                       np.asarray([row["Y"] for row in rows]), fixed_g=fixed_g)
         globals_[(exposure, band)] = fit
         F = np.ones(dataset["V"].shape, dtype=float)
         dataset["F"] = F
