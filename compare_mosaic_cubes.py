@@ -11,12 +11,14 @@ Example:
         --output-dir cube_comparison
 
 The default collapsed products are a representative continuum plane/window,
-[O II] 3727, H-beta, and [O III] 4959 and 5007.  Custom products use:
+[O II] 3727, H-delta, H-gamma, H-beta, and [O III] 4959 and 5007.  Custom
+products use:
 
     --line NAME:CENTER:HALF_WIDTH[:sum|mean]
 """
 
 from argparse import ArgumentParser
+import csv
 from pathlib import Path
 
 import numpy as np
@@ -26,10 +28,105 @@ from astropy.io import fits
 DEFAULT_LINES = (
     ("continuum", 4600.0, 20.0, "median"),
     ("OII_3727", 3727.0, 6.0, "sum"),
+    ("Hdelta_4102", 4101.74, 6.0, "sum"),
+    ("Hgamma_4340", 4340.47, 6.0, "sum"),
     ("Hbeta_4861", 4861.33, 6.0, "sum"),
     ("OIII_4959", 4958.92, 6.0, "sum"),
     ("OIII_5007", 5006.84, 6.0, "sum"),
 )
+
+CRITICAL_LINES = DEFAULT_LINES[1:]
+
+
+def support_state_counts(old, new):
+    """Count finite and nonzero usable states without conflating them."""
+    old = np.asarray(old)
+    new = np.asarray(new)
+    old_finite = np.isfinite(old)
+    new_finite = np.isfinite(new)
+    old_usable = old_finite & (old != 0.0)
+    new_usable = new_finite & (new != 0.0)
+    return {
+        "n_pixels": int(old.size),
+        "old_finite": int(old_finite.sum()),
+        "new_finite": int(new_finite.sum()),
+        "both_finite": int((old_finite & new_finite).sum()),
+        "old_only_finite": int((old_finite & ~new_finite).sum()),
+        "new_only_finite": int((~old_finite & new_finite).sum()),
+        "neither_finite": int((~old_finite & ~new_finite).sum()),
+        "old_usable": int(old_usable.sum()),
+        "new_usable": int(new_usable.sum()),
+        "both_usable": int((old_usable & new_usable).sum()),
+        "old_only_usable": int((old_usable & ~new_usable).sum()),
+        "new_only_usable": int((~old_usable & new_usable).sum()),
+        "neither_usable": int((~old_usable & ~new_usable).sum()),
+        "old_zero": int(np.count_nonzero(old == 0.0)),
+        "new_zero": int(np.count_nonzero(new == 0.0)),
+    }
+
+
+def fraction(count, total):
+    return float(count) / total if total else np.nan
+
+
+def critical_line_row(line_name, reference, plane_index, wave, old, new,
+                      diff, factor, factor_count):
+    """Build one per-plane referee support/difference diagnostic row."""
+    counts = support_state_counts(old, new)
+    row = {
+        "line_name": line_name,
+        "reference_wavelength": float(reference),
+        "wavelength": float(wave),
+        "plane_index": int(plane_index),
+        **counts,
+        "changed_voxels": int(diff["changed"]),
+        "changed_fraction": fraction(diff["changed"], counts["n_pixels"]),
+        "max_abs_difference": float(diff["max_abs"]),
+        "rms_abs_difference": float(diff["rms_abs"]),
+        "bright_pixel_new_over_old": float(factor),
+        "bright_pixel_ratio_n": int(factor_count),
+    }
+    for name in ("old_finite", "new_finite", "both_finite",
+                 "old_only_finite", "new_only_finite", "neither_finite",
+                 "old_usable", "new_usable", "both_usable",
+                 "old_only_usable", "new_only_usable", "neither_usable"):
+        row[name + "_fraction"] = fraction(row[name], counts["n_pixels"])
+    return row
+
+
+def summarize_critical_line(line_name, reference, rows):
+    """Summarize support changes over one critical-line wavelength window."""
+    total_pixels = sum(row["n_pixels"] for row in rows)
+    summary = {
+        "line_name": line_name,
+        "reference_wavelength": float(reference),
+        "number_of_wavelength_planes": len(rows),
+        "n_pixels": total_pixels,
+    }
+    for name in ("old_finite", "new_finite", "old_usable", "new_usable",
+                 "both_usable", "old_only_usable", "new_only_usable",
+                 "changed_voxels"):
+        total = sum(row[name] for row in rows)
+        summary[name + ("_fraction" if name != "changed_voxels" else "")] = (
+            fraction(total, total_pixels) if name != "changed_voxels" else int(total))
+    summary["changed_fraction"] = fraction(
+        sum(row["changed_voxels"] for row in rows), total_pixels)
+    factors = np.asarray([row["bright_pixel_new_over_old"] for row in rows],
+                         dtype=float)
+    factors = factors[np.isfinite(factors)]
+    summary["median_bright_pixel_new_over_old"] = (
+        float(np.median(factors)) if factors.size else np.nan)
+    for state in ("old_only_usable", "new_only_usable"):
+        values = np.asarray([fraction(row[state], row["n_pixels"])
+                             for row in rows], dtype=float)
+        if values.size:
+            index = int(np.nanargmax(values))
+            summary["max_" + state + "_fraction"] = float(values[index])
+            summary["max_" + state + "_wavelength"] = rows[index]["wavelength"]
+        else:
+            summary["max_" + state + "_fraction"] = np.nan
+            summary["max_" + state + "_wavelength"] = np.nan
+    return summary
 
 
 def parse_line(value):
@@ -193,6 +290,36 @@ def write_factor_plot(path, rows):
     plt.close(fig)
 
 
+def write_critical_line_plot(path, rows, line_name, reference):
+    """Plot finite/usable support changes across one critical-line window."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    rows = sorted(rows, key=lambda row: row["wavelength"])
+    wave = np.asarray([row["wavelength"] for row in rows], dtype=float)
+    fig, axes = plt.subplots(2, 1, figsize=(7, 5), sharex=True,
+                             constrained_layout=True)
+    axes[0].plot(wave, [row["old_usable_fraction"] for row in rows],
+                 "o-", ms=3, label="old usable")
+    axes[0].plot(wave, [row["new_usable_fraction"] for row in rows],
+                 "o-", ms=3, label="new usable")
+    axes[1].plot(wave, [row["old_only_usable_fraction"] for row in rows],
+                 "o-", ms=3, label="old-only usable")
+    axes[1].plot(wave, [row["new_only_usable_fraction"] for row in rows],
+                 "o-", ms=3, label="new-only usable")
+    axes[0].set_ylabel("fraction")
+    axes[1].set_ylabel("fraction")
+    axes[1].set_xlabel("wavelength (Angstrom)")
+    axes[0].set_title("%s support diagnostic (%.2f A)" %
+                      (line_name, reference))
+    for axis in axes:
+        axis.grid(alpha=0.25)
+        axis.legend(fontsize=8)
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+
+
 def main():
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("old_cube", type=Path)
@@ -255,6 +382,13 @@ def main():
         old_total = empty_stats()
         new_total = empty_stats()
         changed_rows = []
+        critical_rows = {name: [] for name, _, _, _ in CRITICAL_LINES}
+        critical_by_plane = {}
+        for line_name, reference, half_width, _ in CRITICAL_LINES:
+            for plane_index in np.flatnonzero(
+                    np.abs(old_wave - reference) <= half_width):
+                critical_by_plane.setdefault(int(plane_index), []).append(
+                    (line_name, reference))
         for i, wave in enumerate(old_wave):
             old_plane = np.asarray(old[i])
             new_plane = np.asarray(new[i])
@@ -266,6 +400,11 @@ def main():
             if diff["changed"]:
                 changed_rows.append((i, wave, diff["changed"],
                                      diff["max_abs"], diff["rms_abs"]))
+            for line_name, reference in critical_by_plane.get(i, ()):
+                critical_rows[line_name].append(
+                    critical_line_row(line_name, reference, i, wave,
+                                      old_plane, new_plane, diff, factor,
+                                      factor_count))
 
         say(format_stats("Old full cube", finish_stats(old_total)))
         say(format_stats("New full cube", finish_stats(new_total)))
@@ -293,6 +432,28 @@ def main():
                 (np.median(factor_values[factor_sel, 1]),
                  np.min(factor_values[factor_sel, 1]),
                  np.max(factor_values[factor_sel, 1])))
+
+        critical_summaries = []
+        say("Critical-line support diagnostics (descriptive only):")
+        for line_name, reference, _, _ in CRITICAL_LINES:
+            summary = summarize_critical_line(
+                line_name, reference, critical_rows[line_name])
+            critical_summaries.append(summary)
+            say("  %s: planes=%d old/new finite=%.6g/%.6g, old/new usable="
+                "%.6g/%.6g, shared/old-only/new-only usable="
+                "%.6g/%.6g/%.6g, changed=%.6g; max old-only=%.6g at %.2f A, "
+                "max new-only=%.6g at %.2f A" %
+                (line_name, summary["number_of_wavelength_planes"],
+                 summary["old_finite_fraction"], summary["new_finite_fraction"],
+                 summary["old_usable_fraction"], summary["new_usable_fraction"],
+                 summary["both_usable_fraction"],
+                 summary["old_only_usable_fraction"],
+                 summary["new_only_usable_fraction"],
+                 summary["changed_fraction"],
+                 summary["max_old_only_usable_fraction"],
+                 summary["max_old_only_usable_wavelength"],
+                 summary["max_new_only_usable_fraction"],
+                 summary["max_new_only_usable_wavelength"]))
 
         output_header = map_header(old_header)
         slice_waves = args.slices
@@ -328,6 +489,17 @@ def main():
                 "max_abs=%g rms_abs=%g" %
                 (name, center, half_width, indices.size, mode,
                  diff["changed"], diff["max_abs"], diff["rms_abs"]))
+            support = support_state_counts(old_map, new_map)
+            say("    usable support: shared=%d (%.6g), old-only=%d (%.6g), "
+                "new-only=%d (%.6g), neither=%d (%.6g)" %
+                (support["both_usable"],
+                 fraction(support["both_usable"], support["n_pixels"]),
+                 support["old_only_usable"],
+                 fraction(support["old_only_usable"], support["n_pixels"]),
+                 support["new_only_usable"],
+                 fraction(support["new_only_usable"], support["n_pixels"]),
+                 support["neither_usable"],
+                 fraction(support["neither_usable"], support["n_pixels"])))
             say("    " + format_stats("old", short_stats(old_map)))
             say("    " + format_stats("new", short_stats(new_map)))
             if args.output_dir:
@@ -335,6 +507,17 @@ def main():
                 write_map(args.output_dir / (name + "_new.fits"), new_map, output_header)
                 write_map(args.output_dir / (name + "_difference.fits"),
                           new_map - old_map, output_header)
+
+        say("Critical-line support maxima (descriptive; compare Hbeta with "
+            "OIII_5007 without assigning a cause):")
+        for summary in critical_summaries:
+            say("  %s: max old-only usable=%.6g at %.2f A; max new-only "
+                "usable=%.6g at %.2f A" %
+                (summary["line_name"],
+                 summary["max_old_only_usable_fraction"],
+                 summary["max_old_only_usable_wavelength"],
+                 summary["max_new_only_usable_fraction"],
+                 summary["max_new_only_usable_wavelength"]))
 
     if args.output_dir:
         (args.output_dir / "comparison_report.txt").write_text("\n".join(report) + "\n")
@@ -346,6 +529,47 @@ def main():
             stream.write("wavelength_angstrom,factor_new_over_old,n_pixels\n")
             for row in factor_rows:
                 stream.write("%.6f,%g,%d\n" % row)
+        critical_fields = [
+            "line_name", "reference_wavelength", "wavelength", "plane_index",
+            "n_pixels", "old_finite", "new_finite", "both_finite",
+            "old_only_finite", "new_only_finite", "neither_finite",
+            "old_finite_fraction", "new_finite_fraction",
+            "both_finite_fraction", "old_only_finite_fraction",
+            "new_only_finite_fraction", "neither_finite_fraction",
+            "old_usable", "new_usable", "both_usable", "old_only_usable",
+            "new_only_usable", "neither_usable", "old_usable_fraction",
+            "new_usable_fraction", "both_usable_fraction",
+            "old_only_usable_fraction", "new_only_usable_fraction",
+            "neither_usable_fraction", "old_zero", "new_zero",
+            "changed_voxels", "changed_fraction", "max_abs_difference",
+            "rms_abs_difference", "bright_pixel_new_over_old",
+            "bright_pixel_ratio_n",
+        ]
+        with (args.output_dir / "critical_line_wavelength_diagnostics.csv").open(
+                "w", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=critical_fields)
+            writer.writeheader()
+            for line_name, _, _, _ in CRITICAL_LINES:
+                writer.writerows(critical_rows[line_name])
+        summary_fields = [
+            "line_name", "reference_wavelength", "number_of_wavelength_planes",
+            "n_pixels", "old_finite_fraction", "new_finite_fraction",
+            "old_usable_fraction", "new_usable_fraction",
+            "both_usable_fraction", "old_only_usable_fraction",
+            "new_only_usable_fraction", "changed_voxels", "changed_fraction",
+            "median_bright_pixel_new_over_old",
+            "max_old_only_usable_fraction", "max_old_only_usable_wavelength",
+            "max_new_only_usable_fraction", "max_new_only_usable_wavelength",
+        ]
+        with (args.output_dir / "critical_line_summary.csv").open(
+                "w", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=summary_fields)
+            writer.writeheader()
+            writer.writerows(critical_summaries)
+        for line_name, reference, _, _ in CRITICAL_LINES:
+            write_critical_line_plot(
+                args.output_dir / (line_name + "_support_diagnostic.png"),
+                critical_rows[line_name], line_name, reference)
         factor_plot = args.factor_plot or (args.output_dir / "flux_factor_vs_wavelength.png")
         write_factor_plot(factor_plot, factor_rows)
         print("Wrote comparison products to %s" % args.output_dir)

@@ -8,12 +8,10 @@ from a completed Bayesian solution H5.
 """
 
 import argparse
-import csv
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import glob
 import json
-import os
 from pathlib import Path
 import time
 
@@ -517,7 +515,7 @@ def main():
     if any(Path(path).name == "20200523_0000023.h5" for path in h5files):
         raise ValueError("20200523_0000023.h5 is explicitly excluded from the M101 sample")
     bayesian_read_started = time.perf_counter()
-    calibration, fit_metadata, fit_provenance = _read_fit_calibration(args.fit_h5)
+    calibration, _fit_metadata, fit_provenance = _read_fit_calibration(args.fit_h5)
     fit_provenance["read_seconds"] = time.perf_counter() - bayesian_read_started
     matching_started = time.perf_counter()
     matches, input_amplifiers = _preflight_matches(h5files, calibration)

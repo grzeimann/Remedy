@@ -30,6 +30,7 @@ import json
 from pathlib import Path
 import pickle
 import subprocess
+import tempfile
 import time
 import warnings
 
@@ -38,6 +39,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import tables
+from astropy.io import fits
+from astropy.wcs import WCS
+from astropy.wcs.utils import proj_plane_pixel_scales
+from numba import njit
 from scipy import linalg, sparse
 from scipy.optimize import least_squares
 from scipy.special import logsumexp
@@ -45,6 +50,7 @@ from scipy.sparse import linalg as sparse_linalg
 from scipy.stats import norm, multivariate_normal, spearmanr
 
 import diagnose_m101_hierarchical as hm
+from build_m101_external_compact_mask import load_compact_mask, mask_radec
 
 
 BANDS = ("ON", "OFF")
@@ -63,10 +69,14 @@ ALPHA_SIGMA_DEFAULT = 0.20
 GAMMA_SIGMA_DEFAULT = 0.25
 IFU_SIGMA_DEFAULT = 0.10
 ETA_SIGMA_DEFAULT = 0.10
+DATA_ERROR_SCALE_ON_DEFAULT = np.sqrt(2.58)
+DATA_ERROR_SCALE_OFF_DEFAULT = np.sqrt(4.26)
+MODEL_FRACTION_ON_DEFAULT = 0.0590
+MODEL_FRACTION_OFF_DEFAULT = 0.0307
 EDGE_MASS_LIMIT = 1e-3
 HUTCHINSON_PROBES_DEFAULT = 64
 ERROR_BOOTSTRAP_DEFAULT = 300
-EVIDENCE_SCHEMA = "m101_amplifier_evidence_v3_split_alpha"
+EVIDENCE_SCHEMA = "m101_amplifier_evidence_v5_external_compact_mask"
 
 
 @dataclass(frozen=True)
@@ -274,6 +284,45 @@ def _git_commit():
         return "unavailable"
 
 
+def _compact_valid_distribution(values):
+    values = np.asarray(values, dtype=float)
+    if values.size == 0:
+        return {"min": 0, "p05": np.nan, "median": np.nan, "p95": np.nan, "max": 0,
+                "count_zero": 0, "count_equal_zero": 0}
+    p05, median, p95 = np.percentile(values, (5, 50, 95))
+    return {"min": int(np.min(values)), "p05": float(p05), "median": float(median),
+            "p95": float(p95), "max": int(np.max(values)),
+            "count_zero": int(np.sum(values == 0)),
+            "count_equal_zero": int(np.sum(values == 0))}
+
+
+def _apply_compact_mask_to_arrays(arrays, mask_data, mask_wcs):
+    """Apply the one upstream physical-fiber union mask to table arrays."""
+    effective_ra = np.asarray(arrays["effective_RA"], dtype=float)
+    effective_dec = np.asarray(arrays["effective_Dec"], dtype=float)
+    original_valid = np.asarray(arrays["external_valid"], dtype=bool)
+    if effective_ra.shape != original_valid.shape or effective_dec.shape != original_valid.shape:
+        raise ValueError("effective coordinate and external_valid arrays must have matching (N_rows, 2) shapes")
+    compact_hit, inside_footprint = mask_radec(mask_data, mask_wcs, effective_ra, effective_dec)
+    outside = original_valid & ~inside_footprint
+    if np.any(outside):
+        examples = []
+        for row, band in np.argwhere(outside)[:5]:
+            examples.append({"row": int(row), "band": BANDS[int(band)],
+                             "RA": float(effective_ra[row, band]),
+                             "Dec": float(effective_dec[row, band])})
+        raise ValueError(
+            "compact mask footprint mismatch: outside_but_external_valid total=%d ON=%d OFF=%d; examples=%s"
+            % (int(np.sum(outside)), int(np.sum(outside[:, 0])), int(np.sum(outside[:, 1])), examples))
+    compact_masked_fiber = compact_hit[:, 0] | compact_hit[:, 1]
+    after = original_valid.copy()
+    after[compact_masked_fiber, :] = False
+    newly_invalid = original_valid & ~after
+    arrays["external_valid"] = after
+    arrays["_compact_masked_fiber"] = compact_masked_fiber
+    return compact_hit, inside_footprint, outside, compact_masked_fiber, newly_invalid
+
+
 class MeasurementStore:
     """Load the compact measurement columns once and group amplifier blocks."""
 
@@ -282,10 +331,16 @@ class MeasurementStore:
                 "effective_Dec", "data_work", "sky", "external_prediction",
                 "error_work", "external_valid", "date_mask_bad")
 
-    def __init__(self, path):
+    def __init__(self, path, compact_mask_path=None):
         self.path = Path(path).expanduser().resolve()
         if not self.path.exists():
             raise ValueError("measurement product does not exist: %s" % self.path)
+        self.compact_mask_path = (Path(compact_mask_path).expanduser().resolve()
+                                  if compact_mask_path is not None else None)
+        self.compact_mask_qa = {"enabled": False}
+        self.compact_mask_lookup_seconds = 0.0
+        self.compact_mask_wcs = None
+        self.compact_mask_shape = None
         self.blocks = []
         self.h5_names = {}
         self.exposure_rows = {}
@@ -346,7 +401,43 @@ class MeasurementStore:
         self.nrows = len(arrays["h5_id"])
         if self.nrows == 0:
             raise ValueError("measurement table is empty")
+        if self.compact_mask_path is not None:
+            self._apply_compact_mask(arrays)
         self._group_arrays(arrays)
+
+    def _apply_compact_mask(self, arrays):
+        mask_data, mask_wcs = load_compact_mask(self.compact_mask_path)
+        self.compact_mask_wcs = mask_wcs
+        self.compact_mask_shape = tuple(mask_data.shape)
+        original_valid = np.asarray(arrays["external_valid"], dtype=bool)
+        lookup_started = time.perf_counter()
+        compact_hit, inside_footprint, outside, compact_masked_fiber, newly_invalid = \
+            _apply_compact_mask_to_arrays(arrays, mask_data, mask_wcs)
+        self.compact_mask_lookup_seconds = time.perf_counter() - lookup_started
+        self.compact_masked_fiber_counts = None
+        self.compact_mask_qa = {
+            "enabled": True,
+            "path": str(self.compact_mask_path),
+            "file_identity": _h5_identity(self.compact_mask_path),
+            "measurement_rows_total": int(original_valid.shape[0]),
+            "external_valid_band_values_before": int(np.sum(original_valid)),
+            "external_valid_ON_before": int(np.sum(original_valid[:, 0])),
+            "external_valid_OFF_before": int(np.sum(original_valid[:, 1])),
+            "direct_mask_hits_ON": int(np.sum(compact_hit[:, 0])),
+            "direct_mask_hits_OFF": int(np.sum(compact_hit[:, 1])),
+            "physical_fiber_rows_masked_by_union": int(np.sum(compact_masked_fiber)),
+            "newly_invalid_band_values": int(np.sum(newly_invalid)),
+            "newly_invalid_ON": int(np.sum(newly_invalid[:, 0])),
+            "newly_invalid_OFF": int(np.sum(newly_invalid[:, 1])),
+            "external_valid_band_values_after": int(np.sum(arrays["external_valid"])),
+            "external_valid_ON_after": int(np.sum(arrays["external_valid"][:, 0])),
+            "external_valid_OFF_after": int(np.sum(arrays["external_valid"][:, 1])),
+            "fraction_physical_fiber_rows_masked": float(np.mean(compact_masked_fiber)),
+            "lookup_application_seconds": float(self.compact_mask_lookup_seconds),
+            "outside_original_external_valid_count": int(np.sum(outside)),
+            "outside_original_external_valid_ON": int(np.sum(outside[:, 0])),
+            "outside_original_external_valid_OFF": int(np.sum(outside[:, 1])),
+        }
 
     def _group_arrays(self, a):
         h5_id = np.asarray(a["h5_id"], dtype=int)
@@ -365,6 +456,7 @@ class MeasurementStore:
         starts = np.r_[0, boundaries]
         stops = np.r_[boundaries, len(order)]
         amplifier_group_count = 0
+        self.compact_masked_fiber_counts = []
         for start, stop in zip(starts, stops):
             indices = order[start:stop]
             if len(indices) != N_AMP_FIBERS:
@@ -397,8 +489,8 @@ class MeasurementStore:
                 key=key, h5_name=self.h5_names[h5_value],
                 ra=float(np.nanmean(a["RA"][indices])),
                 dec=float(np.nanmean(a["Dec"][indices])),
-                effective_ra=np.asarray(a["effective_RA"][indices][0], dtype=float),
-                effective_dec=np.asarray(a["effective_Dec"][indices][0], dtype=float),
+                effective_ra=np.asarray(a["effective_RA"][indices], dtype=float),
+                effective_dec=np.asarray(a["effective_Dec"][indices], dtype=float),
                 D=np.asarray(a["data_work"][indices], dtype=float),
                 B=np.asarray(a["sky"][indices], dtype=float),
                 X=np.asarray(a["external_prediction"][indices], dtype=float),
@@ -411,8 +503,20 @@ class MeasurementStore:
                 sky_scale=np.nan,
             )
             self.blocks.append(block)
+            if "_compact_masked_fiber" in a:
+                self.compact_masked_fiber_counts.append(int(np.sum(a["_compact_masked_fiber"][indices])))
+            else:
+                self.compact_masked_fiber_counts.append(0)
             amplifier_group_count += 1
         self.amplifier_group_count = amplifier_group_count
+        if self.compact_mask_qa.get("enabled", False):
+            n_valid_on = [int(np.sum(block.likelihood_valid[:, 0])) for block in self.blocks]
+            n_valid_off = [int(np.sum(block.likelihood_valid[:, 1])) for block in self.blocks]
+            self.compact_mask_qa.update({
+                "amplifier_observations_affected": int(np.sum(np.asarray(self.compact_masked_fiber_counts) > 0)),
+                "remaining_n_valid_ON": _compact_valid_distribution(n_valid_on),
+                "remaining_n_valid_OFF": _compact_valid_distribution(n_valid_off),
+            })
         self._calculate_exposure_scales()
 
     def _calculate_exposure_scales(self):
@@ -506,24 +610,52 @@ def _band_contrast_transform(block, delta_z_band=0.0, delta_p_band=0.0):
             block.P * band_scale[None, :], band_scale, band_offset)
 
 
+def _likelihood_sigma(block, band_scale, data_error_scale, model_fraction,
+                      error_floor=None, error_floor_factor=None):
+    """Return the fixed, band-aware effective sigma used by local likelihoods."""
+    band_scale = np.asarray(band_scale, dtype=float)
+    data_error_scale = np.asarray(data_error_scale, dtype=float)
+    model_fraction = np.asarray(model_fraction, dtype=float)
+    if band_scale.shape != (N_BANDS,) or not np.all(np.isfinite(band_scale)) or np.any(band_scale <= 0):
+        raise ValueError("band_scale must contain finite positive ON/OFF values")
+    if data_error_scale.shape != (N_BANDS,) or not np.all(np.isfinite(data_error_scale)) or np.any(data_error_scale <= 0):
+        raise ValueError("data_error_scale must contain finite positive ON/OFF values")
+    if model_fraction.shape != (N_BANDS,) or not np.all(np.isfinite(model_fraction)) or np.any(model_fraction < 0):
+        raise ValueError("model_fraction must contain finite non-negative ON/OFF values")
+    sigma_data = np.asarray(block.error, dtype=float).copy()
+    if error_floor is not None:
+        sigma_data = np.maximum(sigma_data, float(error_floor))
+    if error_floor_factor is not None and np.any(block.likelihood_valid):
+        valid_sigma = sigma_data[block.likelihood_valid]
+        valid_sigma = valid_sigma[np.isfinite(valid_sigma)]
+        if valid_sigma.size:
+            sigma_data = np.maximum(sigma_data, float(error_floor_factor) * float(np.median(valid_sigma)))
+    source_reference = np.asarray(block.X, dtype=float) * band_scale[None, :]
+    return np.sqrt((sigma_data * data_error_scale[None, :]) ** 2
+                   + (source_reference * model_fraction[None, :]) ** 2)
+
+
 def _split_band_fits(block, z_grid, alpha_mean, alpha_sigma, p_sigma_prior,
                      error_floor=None, error_floor_factor=None,
                      delta_z_band=0.0, delta_p_band=0.0,
-                     z0_sigma=Z0_SIGMA_DEFAULT):
+                     z0_sigma=Z0_SIGMA_DEFAULT,
+                     data_error_scale_on=DATA_ERROR_SCALE_ON_DEFAULT,
+                     data_error_scale_off=DATA_ERROR_SCALE_OFF_DEFAULT,
+                     model_fraction_on=MODEL_FRACTION_ON_DEFAULT,
+                     model_fraction_off=MODEL_FRACTION_OFF_DEFAULT):
     """Fit the existing local model separately in each band for QA."""
-    T_effective, P_effective, _, _ = _band_contrast_transform(
+    T_effective, P_effective, band_scale, _ = _band_contrast_transform(
         block, delta_z_band, delta_p_band)
+    sigma_effective = _likelihood_sigma(
+        block, band_scale, np.asarray([data_error_scale_on, data_error_scale_off]),
+        np.asarray([model_fraction_on, model_fraction_off]), error_floor, error_floor_factor)
     beta_prior_mean = np.asarray([0.0, alpha_mean])
     beta_prior_sigma = np.asarray([p_sigma_prior, alpha_sigma])
     z_means, z_sigmas, p_means, p_sigmas = [], [], [], []
     alpha_means, alpha_sigmas, edges, log_evidence = [], [], [], 0.0
     for band_index in range(N_BANDS):
         selected = block.likelihood_valid[:, band_index]
-        sigma = block.error[:, band_index][selected]
-        if error_floor is not None:
-            sigma = np.maximum(sigma, float(error_floor))
-        if error_floor_factor is not None and sigma.size:
-            sigma = np.maximum(sigma, float(error_floor_factor) * float(np.median(sigma)))
+        sigma = sigma_effective[:, band_index][selected]
         split = _marginal_grid(T_effective[:, band_index][selected],
                                P_effective[:, band_index][selected],
                                block.H[:, band_index][selected], sigma,
@@ -567,7 +699,11 @@ def _local_evidence(block, z_grid, pi_good=PI_GOOD_DEFAULT,
                     z0_sigma=Z0_SIGMA_DEFAULT,
                     error_floor=None, error_floor_factor=None,
                     delta_z_band=0.0, delta_p_band=0.0,
-                    split_summary=None):
+                    split_summary=None,
+                    data_error_scale_on=DATA_ERROR_SCALE_ON_DEFAULT,
+                    data_error_scale_off=DATA_ERROR_SCALE_OFF_DEFAULT,
+                    model_fraction_on=MODEL_FRACTION_ON_DEFAULT,
+                    model_fraction_off=MODEL_FRACTION_OFF_DEFAULT):
     primitive = block.primitive_valid
     likelihood = block.likelihood_valid
     valid_by_band = np.sum(likelihood, axis=0).astype(int)
@@ -575,16 +711,19 @@ def _local_evidence(block, z_grid, pi_good=PI_GOOD_DEFAULT,
     median_x = np.asarray([np.nanmedian(block.X[:, i][primitive[:, i]]) if np.any(primitive[:, i]) else np.nan
                            for i in range(N_BANDS)])
     p_sigma_prior = max(float(p_sigma_fraction) * float(block.sky_scale), 1e-12)
-    sigma = block.error[likelihood]
-    if error_floor is not None:
-        sigma = np.maximum(sigma, float(error_floor))
-    floor_used = float(error_floor) if error_floor is not None else 0.0
-    if error_floor_factor is not None and sigma.size:
-        factor_floor = float(error_floor_factor) * float(np.median(sigma))
-        sigma = np.maximum(sigma, factor_floor)
-        floor_used = factor_floor
-    T_effective, P_effective, _, _ = _band_contrast_transform(
+    T_effective, P_effective, band_scale, _ = _band_contrast_transform(
         block, delta_z_band, delta_p_band)
+    sigma_effective = _likelihood_sigma(
+        block, band_scale, np.asarray([data_error_scale_on, data_error_scale_off]),
+        np.asarray([model_fraction_on, model_fraction_off]), error_floor, error_floor_factor)
+    sigma = sigma_effective[likelihood]
+    sigma_data = block.error[likelihood]
+    if error_floor is not None:
+        sigma_data = np.maximum(sigma_data, float(error_floor))
+    floor_used = float(error_floor) if error_floor is not None else 0.0
+    if error_floor_factor is not None and sigma_data.size:
+        factor_floor = float(error_floor_factor) * float(np.median(sigma_data))
+        floor_used = factor_floor
     T = T_effective[likelihood]
     P = P_effective[likelihood]
     H = block.H[likelihood]
@@ -647,7 +786,9 @@ def _local_evidence(block, z_grid, pi_good=PI_GOOD_DEFAULT,
     if split_summary is None:
         preliminary_split = _split_band_fits(
             block, z_grid, alpha_mean, alpha_sigma, p_sigma_prior,
-            error_floor, error_floor_factor, z0_sigma=z0_sigma)
+            error_floor, error_floor_factor, z0_sigma=z0_sigma,
+            data_error_scale_on=data_error_scale_on, data_error_scale_off=data_error_scale_off,
+            model_fraction_on=model_fraction_on, model_fraction_off=model_fraction_off)
     else:
         preliminary_split = split_summary
     split_delta_alpha = float(preliminary_split["alpha_mean"][0] - preliminary_split["alpha_mean"][1])
@@ -660,7 +801,8 @@ def _local_evidence(block, z_grid, pi_good=PI_GOOD_DEFAULT,
     final_split = _split_band_fits(
         block, z_grid, alpha_mean, alpha_sigma, p_sigma_prior,
         error_floor, error_floor_factor, delta_z_band, delta_p_band,
-        z0_sigma)
+        z0_sigma, data_error_scale_on, data_error_scale_off,
+        model_fraction_on, model_fraction_off)
     split_minus_joint = float(final_split["log_evidence"] - log_z_good)
     site_tau = 1.0 / variance_z - 1.0 / (z0_sigma * z0_sigma) if variance_z > 0 else 0.0
     site_nu = mean_z / variance_z if variance_z > 0 else 0.0
@@ -1033,9 +1175,15 @@ def _error_model_scan(dataset, candidate_factors):
 
 
 def _error_model_diagnostic(store, evidences, obs_rows, band_contrast,
-                            n_bootstrap=ERROR_BOOTSTRAP_DEFAULT):
+                            n_bootstrap=ERROR_BOOTSTRAP_DEFAULT,
+                            data_error_scale_on=DATA_ERROR_SCALE_ON_DEFAULT,
+                            data_error_scale_off=DATA_ERROR_SCALE_OFF_DEFAULT,
+                            model_fraction_on=MODEL_FRACTION_ON_DEFAULT,
+                            model_fraction_off=MODEL_FRACTION_OFF_DEFAULT,
+                            error_floor=None, error_floor_factor=None):
     """QA-only residual/error analysis using the already computed final posterior."""
     clusters = {"ON": [], "OFF": [], "combined": []}
+    effective_clusters = {"ON": [], "OFF": [], "combined": []}
     rows = []
     for evidence, block, posterior_row in zip(evidences, store.blocks, obs_rows):
         _, P_effective, band_scale, band_offset = _band_contrast_transform(
@@ -1044,23 +1192,32 @@ def _error_model_diagnostic(store, evidences, obs_rows, band_contrast,
                       + posterior_row["p_mean"] + posterior_row["alpha_mean"] * block.H
                       + band_offset[None, :])
         residual = block.T - prediction
-        source = np.exp(posterior_row["posterior_z_mean"]) * band_scale[None, :] * block.X
-        sigma = np.asarray(block.error, dtype=float).copy()
-        if evidence.error_floor_used > 0:
-            sigma = np.maximum(sigma, evidence.error_floor_used)
+        source_reference = band_scale[None, :] * block.X
+        source = np.exp(posterior_row["posterior_z_mean"]) * source_reference
+        sigma_data = np.asarray(block.error, dtype=float)
+        sigma_eff = _likelihood_sigma(
+            block, band_scale, np.asarray([data_error_scale_on, data_error_scale_off]),
+            np.asarray([model_fraction_on, model_fraction_off]), error_floor, error_floor_factor)
         per_band = []
         source_amp, source_to_noise = [], []
         for band in range(N_BANDS):
             valid = block.likelihood_valid[:, band] & np.isfinite(residual[:, band]) & np.isfinite(source[:, band])
-            valid &= np.isfinite(sigma[:, band]) & (sigma[:, band] > 0)
-            u = residual[:, band][valid] / sigma[:, band][valid]
-            x = np.abs(source[:, band][valid]) / sigma[:, band][valid]
-            clusters[BANDS[band]].append((x, u))
+            valid &= np.isfinite(sigma_data[:, band]) & (sigma_data[:, band] > 0)
+            valid &= np.isfinite(sigma_eff[:, band]) & (sigma_eff[:, band] > 0)
+            u_nominal = residual[:, band][valid] / sigma_data[:, band][valid]
+            u_effective = residual[:, band][valid] / sigma_eff[:, band][valid]
+            x = np.abs(source[:, band][valid]) / sigma_data[:, band][valid]
+            x_effective = np.abs(source_reference[:, band][valid]) / sigma_data[:, band][valid]
+            clusters[BANDS[band]].append((x, u_nominal))
+            effective_clusters[BANDS[band]].append((x_effective, u_effective))
             source_amp.append(float(np.sum(source[:, band][valid])) if np.any(valid) else np.nan)
             source_to_noise.append(float(abs(np.sum(source[:, band][valid])) /
-                                       np.sqrt(np.sum(sigma[:, band][valid] ** 2))) if np.any(valid) else np.nan)
-            if u.size:
-                order = np.argsort(block.q[valid]); ordered = u[order]
+                                       np.sqrt(np.sum(sigma_data[:, band][valid] ** 2))) if np.any(valid) else np.nan)
+            effective_source_to_noise = (float(abs(np.sum(source[:, band][valid])) /
+                                                np.sqrt(np.sum(sigma_eff[:, band][valid] ** 2)))
+                                         if np.any(valid) else np.nan)
+            if u_nominal.size:
+                order = np.argsort(block.q[valid]); ordered = u_nominal[order]
                 lag1 = (float(np.corrcoef(ordered[:-1], ordered[1:])[0, 1])
                         if ordered.size >= 3 and np.std(ordered[:-1]) > 0 and np.std(ordered[1:]) > 0
                         else np.nan)
@@ -1070,19 +1227,31 @@ def _error_model_diagnostic(store, evidences, obs_rows, band_contrast,
                     coherence = float(np.var(smooth) / variance)
                 else:
                     coherence = np.nan
-                band_result = {"u": u, "x": x, "n": int(u.size),
-                               "reduced_chi2": float(np.mean(u ** 2)),
-                               "robust_scale": float(hm.robust_scale(u)),
-                               "median_abs": float(np.median(np.abs(u))),
+                band_result = {"u": u_nominal, "u_effective": u_effective, "x": x, "x_effective": x_effective, "n": int(u_nominal.size),
+                               "reduced_chi2": float(np.mean(u_nominal ** 2)),
+                               "robust_scale": float(hm.robust_scale(u_nominal)),
+                               "median_abs": float(np.median(np.abs(u_nominal))),
+                               "effective_reduced_chi2": float(np.mean(u_effective ** 2)),
+                               "effective_robust_scale": float(hm.robust_scale(u_effective)),
+                               "effective_median_abs": float(np.median(np.abs(u_effective))),
+                               "median_sigma_data": float(np.median(sigma_data[:, band][valid])),
+                               "median_sigma_eff": float(np.median(sigma_eff[:, band][valid])),
+                               "effective_source_to_noise": effective_source_to_noise,
                                "lag1": lag1, "coherence": coherence}
             else:
-                band_result = {"u": u, "x": x, "n": 0, "reduced_chi2": np.nan,
+                band_result = {"u": u_nominal, "u_effective": u_effective, "x": x, "x_effective": x_effective, "n": 0, "reduced_chi2": np.nan,
                                "robust_scale": np.nan, "median_abs": np.nan,
+                               "effective_reduced_chi2": np.nan, "effective_robust_scale": np.nan,
+                               "effective_median_abs": np.nan, "effective_source_to_noise": effective_source_to_noise,
+                               "median_sigma_data": np.nan, "median_sigma_eff": np.nan,
                                "lag1": np.nan, "coherence": np.nan}
             per_band.append(band_result)
         combined_x = np.concatenate([per_band[0]["x"], per_band[1]["x"]])
+        combined_x_effective = np.concatenate([per_band[0]["x_effective"], per_band[1]["x_effective"]])
         combined_u = np.concatenate([per_band[0]["u"], per_band[1]["u"]])
+        combined_u_effective = np.concatenate([per_band[0]["u_effective"], per_band[1]["u_effective"]])
         clusters["combined"].append((combined_x, combined_u))
+        effective_clusters["combined"].append((combined_x_effective, combined_u_effective))
         row = {"H5": posterior_row["H5"], "h5_id": posterior_row["h5_id"], "exposure": posterior_row["exposure"],
                "SPECID": posterior_row["SPECID"], "IFUSLOT": posterior_row["IFUSLOT"], "IFUID": posterior_row["IFUID"],
                "AMP": posterior_row["AMP"], "p_good": evidence.p_good, "I_m": evidence.I_m,
@@ -1097,6 +1266,21 @@ def _error_model_diagnostic(store, evidences, obs_rows, band_contrast,
                "robust_normalized_scale_ON": per_band[0]["robust_scale"],
                "robust_normalized_scale_OFF": per_band[1]["robust_scale"],
                "median_abs_u_ON": per_band[0]["median_abs"], "median_abs_u_OFF": per_band[1]["median_abs"],
+               "effective_reduced_chi2_ON": per_band[0]["effective_reduced_chi2"],
+               "effective_reduced_chi2_OFF": per_band[1]["effective_reduced_chi2"],
+               "effective_reduced_chi2_joint": float(np.mean(combined_u_effective ** 2)) if combined_u_effective.size else np.nan,
+               "effective_robust_normalized_scale_ON": per_band[0]["effective_robust_scale"],
+               "effective_robust_normalized_scale_OFF": per_band[1]["effective_robust_scale"],
+               "effective_median_abs_u_ON": per_band[0]["effective_median_abs"],
+               "effective_median_abs_u_OFF": per_band[1]["effective_median_abs"],
+               "median_sigma_data_ON": per_band[0]["median_sigma_data"],
+               "median_sigma_data_OFF": per_band[1]["median_sigma_data"],
+               "median_sigma_eff_ON": per_band[0]["median_sigma_eff"],
+               "median_sigma_eff_OFF": per_band[1]["median_sigma_eff"],
+               "effective_source_to_noise_ON": per_band[0]["effective_source_to_noise"],
+               "effective_source_to_noise_OFF": per_band[1]["effective_source_to_noise"],
+               "effective_source_to_noise_joint": float(np.hypot(per_band[0]["effective_source_to_noise"],
+                                                                  per_band[1]["effective_source_to_noise"])),
                "lag1_residual_correlation_ON": per_band[0]["lag1"],
                "lag1_residual_correlation_OFF": per_band[1]["lag1"],
                "residual_coherence_ON": per_band[0]["coherence"],
@@ -1118,6 +1302,12 @@ def _error_model_diagnostic(store, evidences, obs_rows, band_contrast,
                           "bootstrap_free": bootstrap_free, "bootstrap_fixed": bootstrap_fixed,
                           "scan": _error_model_scan({"x": x, "u": u, "edges": edges},
                                                      (0.0, .005, .010, .015, .020, .025, .030, .040, .050, .075, .100))}
+    effective_datasets = {}
+    for name, values in effective_clusters.items():
+        x = np.concatenate([value[0] for value in values if value[0].size]) if any(value[0].size for value in values) else np.asarray([])
+        u = np.concatenate([value[1] for value in values if value[1].size]) if any(value[1].size for value in values) else np.asarray([])
+        stats, edges = _error_binned_stats(x, u)
+        effective_datasets[name] = {"x": x, "u": u, "stats": stats, "edges": edges}
     def bootstrap_section(dataset, fixed):
         boot = dataset["bootstrap_fixed" if fixed else "bootstrap_free"]
         answer = {"f_model": _error_fit_bootstrap_summary(boot["f_model"])}
@@ -1131,7 +1321,8 @@ def _error_model_diagnostic(store, evidences, obs_rows, band_contrast,
         summary["fixed_intercept"][name] = {**dataset["fixed"], "bootstrap": bootstrap_section(dataset, True)}
         summary["candidate_scan"][name] = dataset["scan"]
     row_values = {key: np.asarray([row[key] for row in rows], dtype=float)
-                  for key in ("p_good", "nominal_reduced_chi2_joint", "source_to_noise_joint",
+                  for key in ("p_good", "nominal_reduced_chi2_joint", "effective_reduced_chi2_joint",
+                              "source_to_noise_joint", "effective_source_to_noise_joint",
                               "split_minus_joint_log_evidence")}
     def finite_mean(values):
         values = np.asarray(values, dtype=float)
@@ -1147,7 +1338,14 @@ def _error_model_diagnostic(store, evidences, obs_rows, band_contrast,
         "p_good_vs_robust_normalized_scale": _spearman(row_values["p_good"], row_values["robust_normalized_scale_joint"]),
         "p_good_vs_external_support": _spearman(row_values["p_good"], row_values["external_support"]),
         "p_good_vs_source_to_noise": _spearman(row_values["p_good"], row_values["source_to_noise_joint"]),
+        "p_good_vs_effective_source_to_noise": _spearman(row_values["p_good"], row_values["effective_source_to_noise_joint"]),
+        "p_good_vs_effective_reduced_chi2": _spearman(row_values["p_good"], row_values["effective_reduced_chi2_joint"]),
         "p_good_vs_split_evidence": _spearman(row_values["p_good"], row_values["split_minus_joint_log_evidence"])}
+    summary["p_good_qa"] = {
+        "median_p_good": float(np.nanmedian(row_values["p_good"])),
+        "p_good_lt_0p5_count": int(np.sum(row_values["p_good"] < 0.5)),
+        "p_good_lt_0p1_count": int(np.sum(row_values["p_good"] < 0.1)),
+        "correlations": summary["p_good_correlations"]}
     coherence = np.concatenate([np.asarray([row["residual_coherence_ON"] for row in rows]),
                                 np.asarray([row["residual_coherence_OFF"] for row in rows])])
     support = row_values["source_to_noise_joint"]
@@ -1157,212 +1355,36 @@ def _error_model_diagnostic(store, evidences, obs_rows, band_contrast,
         "spearman_with_source_to_noise": _spearman(coherence, np.tile(support, 2)),
         "median_low_p_good": float(np.nanmedian(coherence[np.tile(row_values["p_good"] < .5, 2)])),
         "median_other": float(np.nanmedian(coherence[np.tile(row_values["p_good"] >= .5, 2)]))}
+    summary["effective_normalized_residuals"] = {
+        name: {"binned": dataset["stats"]}
+        for name, dataset in effective_datasets.items()}
+    summary["effective_source_support_QA"] = {
+        "definition": "source_reference=band_scale*X; binned effective residual scale versus |source_reference|/sigma_data",
+        "by_band": {name: dataset["stats"] for name, dataset in effective_datasets.items()}}
+    summary["normalized_residual_scale_vs_source_support"] = {
+        "nominal": {
+            "ON": _distribution_summary([row["robust_normalized_scale_ON"] for row in rows]),
+            "OFF": _distribution_summary([row["robust_normalized_scale_OFF"] for row in rows]),
+            "joint_spearman_with_external_support": _spearman(
+                row_values["external_support"], row_values["robust_normalized_scale_joint"])},
+        "effective": {
+            "ON": _distribution_summary([row["effective_robust_normalized_scale_ON"] for row in rows]),
+            "OFF": _distribution_summary([row["effective_robust_normalized_scale_OFF"] for row in rows]),
+            "joint_spearman_with_external_support": _spearman(
+                row_values["external_support"], np.asarray([
+                    finite_mean((row["effective_robust_normalized_scale_ON"],
+                                 row["effective_robust_normalized_scale_OFF"])) for row in rows]))}}
     summary["n_amplifier_observations"] = len(rows)
     summary["n_bootstrap"] = int(n_bootstrap)
     summary["bootstrap_seed"] = 20260904
-    summary["definition"] = "u=r/sigma_data, x=abs(exp(z_post)*band_scale*X)/sigma_data; cluster bootstrap resamples whole amplifier observations"
-    return summary, rows, datasets
-
-
-def _weighted_remove_nuisance(vector, design, sigma):
-    """Remove a small weighted linear nuisance space without forming a dense matrix."""
-    vector = np.asarray(vector, dtype=float)
-    design = np.asarray(design, dtype=float)
-    sigma = np.asarray(sigma, dtype=float)
-    weight = 1.0 / sigma ** 2
-    normal = design.T @ (weight[:, None] * design)
-    rhs = design.T @ (weight * vector)
-    try:
-        coefficients = np.linalg.solve(normal, rhs)
-    except np.linalg.LinAlgError:
-        coefficients = np.linalg.lstsq(normal, rhs, rcond=None)[0]
-    return vector - design @ coefficients
-
-
-def _weighted_multiplicative_projection(residual, direction, H, sigma):
-    """Project residual and direction orthogonally to [constant, H] in W."""
-    design = np.column_stack((np.ones(len(residual)), H))
-    residual_perp = _weighted_remove_nuisance(residual, design, sigma)
-    direction_perp = _weighted_remove_nuisance(direction, design, sigma)
-    weight = 1.0 / sigma ** 2
-    denominator = float(np.sum(weight * direction_perp ** 2))
-    if not np.isfinite(denominator) or denominator <= 1e-12:
-        return residual_perp, direction_perp, np.nan, np.nan, np.nan
-    numerator = float(np.sum(weight * direction_perp * residual_perp))
-    delta = numerator / denominator
-    return residual_perp, direction_perp, delta, 1.0 / np.sqrt(denominator), denominator
-
-
-def _residual_coherence(q, normalized_residual):
-    values = np.asarray(normalized_residual, dtype=float)
-    q = np.asarray(q, dtype=float)
-    if values.size < 3:
-        return np.nan, np.nan
-    ordered = values[np.argsort(q)]
-    lag1 = (float(np.corrcoef(ordered[:-1], ordered[1:])[0, 1])
-            if np.std(ordered[:-1]) > 0 and np.std(ordered[1:]) > 0 else np.nan)
-    variance = float(np.var(ordered))
-    if ordered.size < 5 or variance <= 0:
-        return lag1, np.nan
-    smooth = np.convolve(ordered, np.asarray([.25, .5, .25]), mode="valid")
-    return lag1, float(np.var(smooth) / variance)
-
-
-def _multiplicative_residual_decomposition(store, evidences, obs_rows,
-                                           band_contrast, original_datasets):
-    """QA-only decomposition of fiber residuals into amplifier-scale and shape modes."""
-    rows = []
-    projected_clusters = {band: {"source": [], "z": []} for band in BANDS}
-    coherence = {"before": {band: [] for band in BANDS},
-                 "after_source": {band: [] for band in BANDS},
-                 "after_z": {band: [] for band in BANDS}}
-    for evidence, block, posterior_row in zip(evidences, store.blocks, obs_rows):
-        _, P_effective, band_scale, band_offset = _band_contrast_transform(
-            block, band_contrast["delta_z_band"], band_contrast["delta_p_band"])
-        prediction = (np.exp(posterior_row["posterior_z_mean"]) * P_effective
-                      + posterior_row["p_mean"] + posterior_row["alpha_mean"] * block.H
-                      + band_offset[None, :])
-        residual = block.T - prediction
-        source = np.exp(posterior_row["posterior_z_mean"]) * band_scale[None, :] * block.X
-        tangent = np.exp(posterior_row["posterior_z_mean"]) * P_effective
-        sigma_all = np.asarray(block.error, dtype=float).copy()
-        if evidence.error_floor_used > 0:
-            sigma_all = np.maximum(sigma_all, evidence.error_floor_used)
-        values = {"delta_m_source": [], "sigma_delta_m_source_nominal": [],
-                  "delta_z_linear": [], "sigma_delta_z_nominal": [],
-                  "projection_leverage_source": [], "projection_leverage_z": [],
-                  "source_support": []}
-        before_scales, source_scales, z_scales = [], [], []
-        before_coherence, source_coherence, z_coherence = [], [], []
-        for band in range(N_BANDS):
-            valid = block.likelihood_valid[:, band] & np.isfinite(residual[:, band])
-            valid &= np.isfinite(source[:, band]) & np.isfinite(tangent[:, band])
-            valid &= np.isfinite(sigma_all[:, band]) & (sigma_all[:, band] > 0)
-            r = residual[:, band][valid]; s = source[:, band][valid]
-            g = tangent[:, band][valid]; sigma = sigma_all[:, band][valid]
-            q = block.q[valid]
-            r_perp, s_perp, delta_source, sigma_source, leverage_source = _weighted_multiplicative_projection(
-                r, s, block.H[:, band][valid], sigma)
-            _, g_perp, delta_z, sigma_z, leverage_z = _weighted_multiplicative_projection(
-                r, g, block.H[:, band][valid], sigma)
-            after_source = r_perp - delta_source * s_perp if np.isfinite(delta_source) else r_perp
-            after_z = r_perp - delta_z * g_perp if np.isfinite(delta_z) else r_perp
-            u = r / sigma
-            u_source = after_source / sigma
-            u_z = after_z / sigma
-            x = np.abs(s) / sigma
-            band_name = BANDS[band]
-            projected_clusters[band_name]["source"].append((x, u_source))
-            projected_clusters[band_name]["z"].append((x, u_z))
-            for target, statistic in ((before_coherence, _residual_coherence(q, u)),
-                                      (source_coherence, _residual_coherence(q, u_source)),
-                                      (z_coherence, _residual_coherence(q, u_z))):
-                target.append(statistic)
-            before_scales.append((float(hm.robust_scale(u)), float(np.sqrt(np.mean(u ** 2))) if u.size else np.nan))
-            source_scales.append((float(hm.robust_scale(u_source)), float(np.sqrt(np.mean(u_source ** 2))) if u_source.size else np.nan))
-            z_scales.append((float(hm.robust_scale(u_z)), float(np.sqrt(np.mean(u_z ** 2))) if u_z.size else np.nan))
-            values["delta_m_source"].append(delta_source); values["sigma_delta_m_source_nominal"].append(sigma_source)
-            values["delta_z_linear"].append(delta_z); values["sigma_delta_z_nominal"].append(sigma_z)
-            values["projection_leverage_source"].append(leverage_source); values["projection_leverage_z"].append(leverage_z)
-            values["source_support"].append(float(np.sqrt(np.sum(x ** 2))) if x.size else np.nan)
-        row = {"H5": posterior_row["H5"], "h5_id": posterior_row["h5_id"], "exposure": posterior_row["exposure"],
-               "SPECID": posterior_row["SPECID"], "IFUSLOT": posterior_row["IFUSLOT"], "IFUID": posterior_row["IFUID"],
-               "AMP": posterior_row["AMP"], "p_good": evidence.p_good, "I_m": evidence.I_m,
-               "split_minus_joint_log_evidence": evidence.split_minus_joint_log_evidence,
-               "source_support_ON": values["source_support"][0], "source_support_OFF": values["source_support"][1],
-               "delta_m_source_ON": values["delta_m_source"][0], "delta_m_source_OFF": values["delta_m_source"][1],
-               "sigma_delta_m_source_nominal_ON": values["sigma_delta_m_source_nominal"][0],
-               "sigma_delta_m_source_nominal_OFF": values["sigma_delta_m_source_nominal"][1],
-               "delta_z_linear_ON": values["delta_z_linear"][0], "delta_z_linear_OFF": values["delta_z_linear"][1],
-               "sigma_delta_z_nominal_ON": values["sigma_delta_z_nominal"][0],
-               "sigma_delta_z_nominal_OFF": values["sigma_delta_z_nominal"][1],
-               "normalized_residual_scale_ON": before_scales[0][0], "normalized_residual_scale_OFF": before_scales[1][0],
-               "normalized_scale_after_source_ON": source_scales[0][0], "normalized_scale_after_source_OFF": source_scales[1][0],
-               "normalized_scale_after_z_ON": z_scales[0][0], "normalized_scale_after_z_OFF": z_scales[1][0],
-               "normalized_RMS_ON": before_scales[0][1], "normalized_RMS_OFF": before_scales[1][1],
-               "RMS_after_source_ON": source_scales[0][1], "RMS_after_source_OFF": source_scales[1][1],
-               "RMS_after_z_ON": z_scales[0][1], "RMS_after_z_OFF": z_scales[1][1],
-               "coherence_before_ON": before_coherence[0][1], "coherence_before_OFF": before_coherence[1][1],
-               "coherence_after_source_ON": source_coherence[0][1], "coherence_after_source_OFF": source_coherence[1][1],
-               "coherence_after_z_ON": z_coherence[0][1], "coherence_after_z_OFF": z_coherence[1][1],
-               "lag1_before_ON": before_coherence[0][0], "lag1_before_OFF": before_coherence[1][0],
-               "lag1_after_source_ON": source_coherence[0][0], "lag1_after_source_OFF": source_coherence[1][0],
-               "lag1_after_z_ON": z_coherence[0][0], "lag1_after_z_OFF": z_coherence[1][0],
-               "projection_leverage_source_ON": values["projection_leverage_source"][0],
-               "projection_leverage_source_OFF": values["projection_leverage_source"][1],
-               "projection_leverage_z_ON": values["projection_leverage_z"][0],
-               "projection_leverage_z_OFF": values["projection_leverage_z"][1]}
-        rows.append(row)
-        coherence["before"]["ON"].append(before_coherence[0][1]); coherence["before"]["OFF"].append(before_coherence[1][1])
-        coherence["after_source"]["ON"].append(source_coherence[0][1]); coherence["after_source"]["OFF"].append(source_coherence[1][1])
-        coherence["after_z"]["ON"].append(z_coherence[0][1]); coherence["after_z"]["OFF"].append(z_coherence[1][1])
-    high_support = np.asarray([np.hypot(row["source_support_ON"], row["source_support_OFF"]) for row in rows])
-    high_support &= np.isfinite(high_support)
-    high_cut = float(np.nanmedian(high_support)) if np.any(high_support) else np.nan
-    high_mask = np.isfinite(high_support) & (high_support >= high_cut)
-
-    def population(values, mask=None):
-        values = np.asarray(values, dtype=float)
-        if mask is not None:
-            values = values[mask]
-        return _distribution_summary(values)
-
-    delta_m = {band: np.asarray([row["delta_m_source_%s" % band] for row in rows]) for band in BANDS}
-    delta_z = {band: np.asarray([row["delta_z_linear_%s" % band] for row in rows]) for band in BANDS}
-    def paired_summary(values):
-        valid = np.isfinite(values["ON"]) & np.isfinite(values["OFF"])
-        difference = values["ON"][valid] - values["OFF"][valid]
-        average = 0.5 * (values["ON"][valid] + values["OFF"][valid])
-        return {"spearman_ON_vs_OFF": _spearman(values["ON"], values["OFF"]),
-                "ON_minus_OFF": _distribution_summary(difference),
-                "average": _distribution_summary(average)}
-    def projection_section(values):
-        return {"ON": {"all": population(values["ON"]), "high_support": population(values["ON"], high_mask)},
-                "OFF": {"all": population(values["OFF"]), "high_support": population(values["OFF"], high_mask)},
-                "high_support_definition": "combined source-support upper half; cut=%.6g" % high_cut,
-                "paired": paired_summary(values)}
-    def projected_fits(kind):
-        fits = {}
-        for band in BANDS:
-            x = np.concatenate([cluster[0] for cluster in projected_clusters[band][kind] if cluster[0].size])
-            u = np.concatenate([cluster[1] for cluster in projected_clusters[band][kind] if cluster[1].size])
-            stats, edges = _error_binned_stats(x, u)
-            fits[band] = {"fit": _error_variance_fit(stats, False), "binned": stats}
-        return fits
-    after_source = projected_fits("source")
-    after_z = projected_fits("z")
-    original_f = {band: original_datasets[band]["free"] for band in BANDS}
-    after_source_f = {band: after_source[band]["fit"] for band in BANDS}
-    after_z_f = {band: after_z[band]["fit"] for band in BANDS}
-    pgood = np.asarray([row["p_good"] for row in rows])
-    original_scale = np.asarray([np.nanmean((row["normalized_residual_scale_ON"], row["normalized_residual_scale_OFF"])) for row in rows])
-    after_scale = np.asarray([np.nanmean((row["normalized_scale_after_source_ON"], row["normalized_scale_after_source_OFF"])) for row in rows])
-    abs_dm = np.nanmean(np.abs(np.column_stack((delta_m["ON"], delta_m["OFF"]))), axis=1)
-    abs_dz = np.nanmean(np.abs(np.column_stack((delta_z["ON"], delta_z["OFF"]))), axis=1)
-    summary = {"source_projection": projection_section(delta_m), "z_projection": projection_section(delta_z),
-               "fractional_variance": {"original_f_total": original_f,
-                                        "f_after_source_projection": after_source_f,
-                                        "f_after_z_projection": after_z_f},
-               "residual_coherence": {mode: {band: _distribution_summary(values[band]) for band in BANDS}
-                                      for mode, values in coherence.items()},
-               "p_good_correlations": {
-                   "p_good_vs_abs_delta_m_source": _spearman(pgood, abs_dm),
-                   "p_good_vs_abs_delta_z_linear": _spearman(pgood, abs_dz),
-                   "p_good_vs_post_source_projection_scale": _spearman(pgood, after_scale),
-                   "p_good_vs_original_residual_scale": _spearman(pgood, original_scale),
-                   "p_good_vs_source_support": _spearman(pgood, high_support),
-                   "p_good_vs_split_evidence": _spearman(pgood, np.asarray([row["split_minus_joint_log_evidence"] for row in rows]))},
-               "high_support_count": int(np.sum(high_mask)),
-               "high_support_cut": high_cut,
-               "fractional_scale_reduction_source": {band: float(1.0 - after_source_f[band]["f_model"] / original_f[band]["f_model"])
-                                                      if np.isfinite(after_source_f[band]["f_model"]) and np.isfinite(original_f[band]["f_model"]) and original_f[band]["f_model"] != 0 else np.nan
-                                                      for band in BANDS},
-               "fractional_scale_reduction_z": {band: float(1.0 - after_z_f[band]["f_model"] / original_f[band]["f_model"])
-                                                 if np.isfinite(after_z_f[band]["f_model"]) and np.isfinite(original_f[band]["f_model"]) and original_f[band]["f_model"] != 0 else np.nan
-                                                 for band in BANDS}}
-    plot_data = {"rows": rows, "original": original_datasets, "after_source": after_source,
-                 "after_z": after_z, "high_mask": high_mask}
-    return summary, rows, plot_data
+    summary["definition"] = "u_nominal=r/sigma_data, x_nominal=abs(exp(z_post)*band_scale*X)/sigma_data; u_effective=r/sigma_eff, x_effective=abs(band_scale*X)/sigma_data"
+    summary["effective_sigma_definition"] = "sqrt((data_error_scale*sigma_data)^2 + (model_fraction*band_scale*X)^2)"
+    summary["adopted_sigma_hyperparameters"] = {
+        "data_error_scale_ON": float(data_error_scale_on),
+        "data_error_scale_OFF": float(data_error_scale_off),
+        "model_fraction_ON": float(model_fraction_on),
+        "model_fraction_OFF": float(model_fraction_off)}
+    return summary, rows, {**datasets, "effective": effective_datasets}
 
 
 def _calculate_local_evidences(blocks, z_grid, settings, workers):
@@ -1377,6 +1399,8 @@ def _calculate_local_evidences(blocks, z_grid, settings, workers):
 
 
 def _evidence_config(args, measurement_path):
+    compact_mask_path = (Path(args.compact_mask).expanduser().resolve()
+                         if args.compact_mask is not None else None)
     return {
         "schema": EVIDENCE_SCHEMA,
         "measurement_identity": _h5_identity(measurement_path),
@@ -1386,6 +1410,13 @@ def _evidence_config(args, measurement_path):
         "alpha_mean": float(args.alpha_mean), "alpha_sigma": float(args.alpha_sigma),
         "z0_sigma": float(args.z0_sigma), "error_floor": args.error_floor,
         "error_floor_factor": args.error_floor_factor,
+        "data_error_scale_ON": float(args.data_error_scale_on),
+        "data_error_scale_OFF": float(args.data_error_scale_off),
+        "model_fraction_ON": float(args.model_fraction_on),
+        "model_fraction_OFF": float(args.model_fraction_off),
+        "compact_mask_enabled": compact_mask_path is not None,
+        "compact_mask_identity": (_h5_identity(compact_mask_path)
+                                   if compact_mask_path is not None else None),
     }
 
 
@@ -1682,7 +1713,12 @@ def _normal_tail_abs_probability(mean, sigma, threshold):
 
 def _posterior_rows(store, evidences, posterior, alpha_prior_mean=ALPHA_MEAN_DEFAULT,
                     alpha_prior_sigma=ALPHA_SIGMA_DEFAULT,
-                    delta_z_band=0.0, delta_p_band=0.0):
+                    delta_z_band=0.0, delta_p_band=0.0,
+                    error_floor=None, error_floor_factor=None,
+                    data_error_scale_on=DATA_ERROR_SCALE_ON_DEFAULT,
+                    data_error_scale_off=DATA_ERROR_SCALE_OFF_DEFAULT,
+                    model_fraction_on=MODEL_FRACTION_ON_DEFAULT,
+                    model_fraction_off=MODEL_FRACTION_OFF_DEFAULT):
     obs_rows, ifu_accum, amp_accum, exp_accum = [], {}, {}, {}
     for evidence, block in zip(evidences, store.blocks):
         indices, values = _layout_design(posterior.layout, evidence.key)
@@ -1690,13 +1726,14 @@ def _posterior_rows(store, evidences, posterior, alpha_prior_mean=ALPHA_MEAN_DEF
         z_variance = float(np.sum(values * values * posterior.variance[indices]))
         z_sigma = np.sqrt(max(z_variance, 0.0))
         conditional_valid = block.likelihood_valid
-        T_effective, P_effective, _, band_offset = _band_contrast_transform(
+        T_effective, P_effective, band_scale, band_offset = _band_contrast_transform(
             block, delta_z_band, delta_p_band)
+        sigma_effective = _likelihood_sigma(
+            block, band_scale, np.asarray([data_error_scale_on, data_error_scale_off]),
+            np.asarray([model_fraction_on, model_fraction_off]), error_floor, error_floor_factor)
         p_values, alpha_values = [], []
         if conditional_valid.any():
-            sigma = block.error[conditional_valid]
-            if evidence.error_floor_used > 0:
-                sigma = np.maximum(sigma, evidence.error_floor_used)
+            sigma = sigma_effective[conditional_valid]
             mean_beta, cov_beta = _conditional_beta(T_effective[conditional_valid], P_effective[conditional_valid],
                                                     block.H[conditional_valid], sigma, z_mean,
                                                     np.asarray([0.0, alpha_prior_mean]),
@@ -1767,6 +1804,41 @@ def _posterior_rows(store, evidences, posterior, alpha_prior_mean=ALPHA_MEAN_DEF
         exp_key = (evidence.key.h5_id, evidence.key.exposure)
         exp_accum.setdefault(exp_key, []).append(evidence)
     return obs_rows, amp_accum, ifu_accum, exp_accum
+
+
+def _information_precision_qa(evidences, physical_rows, exposure_rows):
+    support = np.asarray([np.hypot(e.x_amp[0], e.x_amp[1]) for e in evidences], dtype=float)
+    finite_support = np.isfinite(support)
+    cutoff = float(np.nanmedian(support[finite_support])) if np.any(finite_support) else np.nan
+    upper = finite_support & (support >= cutoff)
+    informative = np.asarray([e.site_tau > 0 for e in evidences], dtype=bool)
+
+    def summarize(values, mask=None):
+        values = np.asarray(values, dtype=float)
+        if mask is not None:
+            values = values[mask]
+        return _distribution_summary(values)
+
+    upper_exposures = {(e.key.h5_id, e.key.exposure) for e, use in zip(evidences, upper) if use}
+    upper_amplifiers = {(e.key.ifu, e.key.amp) for e, use in zip(evidences, upper) if use}
+    gamma_upper = np.asarray([row["gamma_sigma"] for row in exposure_rows
+                              if (row["h5_id"], row["exposure"]) in upper_exposures])
+    eta_upper = np.asarray([row["eta_sigma"] for row in physical_rows
+                            if (PhysicalIFUKey(row["SPECID"], row["IFUSLOT"], row["IFUID"]), row["AMP"]) in upper_amplifiers])
+    return {
+        "upper_half_source_support_cut": cutoff,
+        "upper_half_source_support_count": int(np.sum(upper)),
+        "local_z_sigma": {"all": summarize([e.local_z_sigma for e in evidences]),
+                           "upper_half_source_support": summarize([e.local_z_sigma for e in evidences], upper)},
+        "informative_site_sigma": {"all": summarize([e.site_sigma for e in evidences], informative),
+                                    "upper_half_source_support": summarize([e.site_sigma for e in evidences], upper & informative)},
+        "I_m": {"all": summarize([e.I_m for e in evidences]),
+                "upper_half_source_support": summarize([e.I_m for e in evidences], upper)},
+        "gamma_sigma": {"all": summarize([row["gamma_sigma"] for row in exposure_rows]),
+                         "upper_half_source_support": summarize(gamma_upper)},
+        "eta_sigma": {"all": summarize([row["eta_sigma"] for row in physical_rows]),
+                       "upper_half_source_support": summarize(eta_upper)},
+    }
 
 
 def _population_rows(amp_accum, posterior):
@@ -1903,7 +1975,416 @@ def _set_robust_ylim(axis, values):
     axis.set_ylim(lower - 0.2 * span, upper + 0.2 * span)
 
 
-def _plot_outputs(output_dir, store, evidences, obs_rows, physical_rows, ifu_rows, exposure_rows, stages, posterior, z_grid, band_contrast, split_alpha_diagnostic):
+def _pgood_matched_gallery_selection(evidences, n_rows=5):
+    support = np.asarray([np.hypot(e.x_amp[0], e.x_amp[1]) for e in evidences], dtype=float)
+    p_good = np.asarray([e.p_good for e in evidences], dtype=float)
+    finite = np.isfinite(support) & np.isfinite(p_good)
+    nonedge = finite & ~np.asarray([e.grid_edge_flag for e in evidences], dtype=bool)
+    support_pool = np.flatnonzero(nonedge if np.any(nonedge) else finite)
+    targets = np.percentile(support[support_pool], (10, 30, 50, 70, 90)) if support_pool.size else np.full(n_rows, np.nan)
+
+    def pool(kind):
+        rules = (("strict", .99 if kind == "good" else .01),
+                 ("relaxed_0p1", .90 if kind == "good" else .10),
+                 ("relaxed_0p25", .75 if kind == "good" else .25),
+                 ("median_split", .50))
+        available = nonedge if np.any(nonedge) else finite
+        for label, threshold in rules:
+            selected = (p_good > threshold) if kind == "good" else (p_good < threshold)
+            candidates = np.flatnonzero(available & selected)
+            if candidates.size >= n_rows:
+                return candidates, label
+        selected = (p_good > .99) if kind == "good" else (p_good < .01)
+        candidates = np.flatnonzero(finite & selected)
+        if candidates.size:
+            return candidates, "strict_with_grid_edges"
+        return np.flatnonzero(finite), "all_fallback"
+
+    good_candidates, good_rule = pool("good")
+    bad_candidates, bad_rule = pool("bad")
+
+    def choose(candidates, target, used):
+        remaining = np.asarray([index for index in candidates if index not in used], dtype=int)
+        choices = remaining if remaining.size else candidates
+        if choices.size == 0:
+            return None
+        return int(min(choices, key=lambda index: (abs(support[index] - target), index)))
+
+    used_good, used_bad, selected = set(), set(), []
+    for row, target in enumerate(targets, 1):
+        good_index = choose(good_candidates, target, used_good)
+        bad_index = choose(bad_candidates, target, used_bad)
+        if good_index is None or bad_index is None:
+            continue
+        used_good.add(good_index); used_bad.add(bad_index)
+
+        def identifier(index):
+            key = evidences[index].key
+            return ("%s/exposure=%d/SPECID=%d/IFUSLOT=%d/IFUID=%d/AMP=%s"
+                    % (evidences[index].h5_name, key.exposure, key.ifu.specid,
+                       key.ifu.ifuslot, key.ifu.ifuid, key.amp))
+
+        selected.append({"row": row, "target_support": float(target),
+                         "good_index": good_index, "bad_index": bad_index,
+                         "good_identifier": identifier(good_index),
+                         "bad_identifier": identifier(bad_index),
+                         "good_p_good": float(p_good[good_index]),
+                         "bad_p_good": float(p_good[bad_index]),
+                         "good_X_support": float(support[good_index]),
+                         "bad_X_support": float(support[bad_index]),
+                         "good_grid_edge": bool(evidences[good_index].grid_edge_flag),
+                         "bad_grid_edge": bool(evidences[bad_index].grid_edge_flag),
+                         "good_pool_rule": good_rule, "bad_pool_rule": bad_rule})
+    return selected
+
+
+def _plot_pgood_matched_fiber_gallery(output_dir, store, evidences, obs_rows,
+                                      error_model_rows, gallery_selection,
+                                      delta_z_band, delta_p_band,
+                                      data_error_scale_on, data_error_scale_off,
+                                      model_fraction_on, model_fraction_off,
+                                      error_floor=None, error_floor_factor=None):
+    fig, axes = plt.subplots(5, 2, figsize=(17, 22), sharex=False)
+    colors = {"ON": "tab:blue", "OFF": "tab:orange"}
+    panel_data = {}
+    pair_limits = {}
+    for pair in gallery_selection:
+        pair_values = []
+        for column, index in enumerate((pair["good_index"], pair["bad_index"])):
+            block, row, evidence = store.blocks[index], obs_rows[index], evidences[index]
+            _, P_effective, band_scale, band_offset = _band_contrast_transform(
+                block, delta_z_band, delta_p_band)
+            sigma_eff = _likelihood_sigma(
+                block, band_scale, np.asarray([data_error_scale_on, data_error_scale_off]),
+                np.asarray([model_fraction_on, model_fraction_off]), error_floor, error_floor_factor)
+            prediction = (np.exp(row["posterior_z_mean"]) * P_effective + row["p_mean"]
+                          + row["alpha_mean"] * block.H + band_offset[None, :])
+            source_model = np.exp(row["posterior_z_mean"]) * band_scale[None, :] * block.X
+            panel_data[(pair["row"], column)] = (block, row, evidence, P_effective,
+                                                  band_scale, band_offset, prediction,
+                                                  source_model, sigma_eff)
+            valid = block.likelihood_valid & np.isfinite(block.T) & np.isfinite(prediction) & np.isfinite(source_model)
+            values = np.concatenate((block.T[valid], prediction[valid], source_model[valid],
+                                     (prediction - sigma_eff)[valid], (prediction + sigma_eff)[valid]))
+            pair_values.append(values[np.isfinite(values)])
+        combined = np.concatenate([values for values in pair_values if values.size]) if any(values.size for values in pair_values) else np.asarray([])
+        if combined.size:
+            low, high = float(np.min(combined)), float(np.max(combined))
+            span = max(high - low, max(abs(low), abs(high), 1.0) * 1e-6)
+            limits = (low - .05 * span, high + .05 * span)
+        else:
+            limits = None
+        pair_limits[pair["row"]] = limits
+
+    for pair in gallery_selection:
+        for column, index in enumerate((pair["good_index"], pair["bad_index"])):
+            axis = axes[pair["row"] - 1, column]
+            block, row, evidence, _, _, _, prediction, source_model, sigma_eff = panel_data[(pair["row"], column)]
+            diag = error_model_rows[index]
+            for band_index, band in enumerate(BANDS):
+                valid = block.likelihood_valid[:, band_index]
+                order = np.argsort(block.q[valid])
+                q = block.q[valid][order]
+                observed = block.T[:, band_index][valid][order]
+                fitted = prediction[:, band_index][valid][order]
+                source = source_model[:, band_index][valid][order]
+                sigma = sigma_eff[:, band_index][valid][order]
+                color = colors[band]
+                axis.scatter(q, observed, s=7, alpha=.60, color=color,
+                             label="%s observed" % band)
+                axis.plot(q, fitted, color=color, lw=1.0, label="%s full prediction" % band)
+                axis.plot(q, source, color=color, lw=.8, ls="--", alpha=.55,
+                          label="%s source contribution" % band)
+                axis.fill_between(q, fitted - sigma, fitted + sigma, color=color, alpha=.06,
+                                  linewidth=0)
+            if pair_limits[pair["row"]] is not None:
+                axis.set_ylim(*pair_limits[pair["row"]])
+            axis.grid(alpha=.18)
+            axis.set_ylabel("T")
+            if pair["row"] == len(gallery_selection):
+                axis.set_xlabel("q")
+            axis.set_title("P%d support; |X_amp|=%.4g" %
+                           (10 + 20 * (pair["row"] - 1),
+                            np.hypot(evidence.x_amp[0], evidence.x_amp[1])), fontsize=8)
+            annotation = ("H5=%s / exp=%d\n"
+                          "SPECID/IFUSLOT/IFUID/AMP=%d/%d/%d/%s\n"
+                          "p_good=%.4g  I_m=%.4g\n"
+                          "X_amp ON/OFF=%.4g / %.4g\n"
+                          "posterior_m=%.5g  p=%.4g  alpha=%.4g\n"
+                          "n_valid ON/OFF=%d / %d  compact-masked=%d\n"
+                          "eff chi2 ON/OFF=%.4g / %.4g\n"
+                          "split-joint=%.4g") % (
+                              row["H5"], row["exposure"], row["SPECID"], row["IFUSLOT"],
+                              row["IFUID"], row["AMP"], evidence.p_good, evidence.I_m,
+                              evidence.x_amp[0], evidence.x_amp[1],
+                              np.exp(row["posterior_z_mean"]), row["p_mean"], row["alpha_mean"],
+                              evidence.n_valid[0], evidence.n_valid[1],
+                              (store.compact_masked_fiber_counts[index]
+                               if store.compact_mask_qa.get("enabled", False) else 0),
+                              diag["effective_reduced_chi2_ON"], diag["effective_reduced_chi2_OFF"],
+                              evidence.split_minus_joint_log_evidence)
+            axis.text(.01, .99, annotation, transform=axis.transAxes, va="top", ha="left",
+                      fontsize=5.8, family="monospace",
+                      bbox={"facecolor": "white", "alpha": .78, "edgecolor": "none", "pad": 2})
+    axes[0, 0].legend(fontsize=6, ncol=2, loc="lower left", framealpha=.85)
+    fig.text(.25, .995, "p_good ~ 1", ha="center", va="top", fontsize=12)
+    fig.text(.75, .995, "p_good ~ 0", ha="center", va="top", fontsize=12)
+    fig.suptitle("Matched p_good fiber gallery: observed T, full prediction, source contribution",
+                 y=.999, fontsize=13)
+    fig.tight_layout(rect=(0, 0, 1, .985), h_pad=1.2, w_pad=.8)
+    fig.savefig(Path(output_dir) / "m101_bayes_pgood_matched_fiber_gallery.png", dpi=150)
+    plt.close(fig)
+
+
+def _virus_source_inverse(T, B, H, posterior_z_mean, p_mean, alpha_mean,
+                          band_scale, band_offset):
+    """Recover the observed VIRUS source term in external-prediction units."""
+    return ((np.asarray(T, dtype=float) - p_mean
+             - alpha_mean * np.asarray(H, dtype=float) - band_offset)
+            / (np.exp(posterior_z_mean) * band_scale)
+            - np.asarray(B, dtype=float))
+
+
+@njit(nogil=True)
+def _virus_gaussian_splat_shot_xy(indices, xpos, ypos, fluxes,
+                                  x_origin, y_origin, nx, ny, sigma, radius,
+                                  support_radius, fiber_area, flux_sum,
+                                  weight_sum, support_map):
+    """The cube builder's local Gaussian splat, with no cube-specific planes."""
+    sigma_squared = sigma * sigma
+    support_radius_squared = (2.0 * sigma) * (2.0 * sigma)
+    width = 2 * radius + 1
+    gaussian_x = np.empty(width, dtype=np.float32)
+    gaussian_y = np.empty(width, dtype=np.float32)
+    for item in range(indices.size):
+        index = indices[item]
+        flux = fluxes[index]
+        x_value = xpos[index]
+        y_value = ypos[index]
+        if not np.isfinite(flux) or not np.isfinite(x_value) or not np.isfinite(y_value):
+            continue
+        x_center = int(np.floor(x_value - x_origin))
+        y_center = int(np.floor(y_value - y_origin))
+        for offset in range(-radius, radius + 1):
+            dx = x_center + offset + x_origin - x_value
+            gaussian_x[offset + radius] = np.exp(-0.5 * dx * dx / sigma_squared)
+            dy = y_center + offset + y_origin - y_value
+            gaussian_y[offset + radius] = np.exp(-0.5 * dy * dy / sigma_squared)
+        for x_offset in range(-radius, radius + 1):
+            pixel_x = x_center + x_offset
+            if pixel_x < 0 or pixel_x >= nx:
+                continue
+            for y_offset in range(-radius, radius + 1):
+                pixel_y = y_center + y_offset
+                if pixel_y < 0 or pixel_y >= ny:
+                    continue
+                weight = gaussian_x[x_offset + radius] * gaussian_y[y_offset + radius]
+                flux_sum[pixel_y, pixel_x] += weight * flux / fiber_area
+                weight_sum[pixel_y, pixel_x] += weight
+        for y_offset in range(-support_radius, support_radius + 1):
+            pixel_y = y_center + y_offset
+            if pixel_y < 0 or pixel_y >= ny:
+                continue
+            for x_offset in range(-support_radius, support_radius + 1):
+                pixel_x = x_center + x_offset
+                if pixel_x < 0 or pixel_x >= nx:
+                    continue
+                dx = (x_origin + pixel_x) - x_value
+                dy = (y_origin + pixel_y) - y_value
+                if dx * dx + dy * dy <= support_radius_squared:
+                    support_map[pixel_y, pixel_x] = 1
+
+
+def _virus_synthetic_band_inputs(store, obs_rows, band_index, delta_z_band,
+                                 delta_p_band):
+    band_scale = float(np.exp(0.5 * delta_z_band * BAND_SIGN[band_index]))
+    band_offset = float(0.5 * delta_p_band * BAND_SIGN[band_index])
+    ras, decs, fluxes, shot_values = [], [], [], {}
+    total_candidates = 0
+    for block, row in zip(store.blocks, obs_rows):
+        T = block.T[:, band_index]
+        B = block.B[:, band_index]
+        H = block.H[:, band_index]
+        ra = block.effective_ra[:, band_index]
+        dec = block.effective_dec[:, band_index]
+        z_mean = float(row["posterior_z_mean"])
+        p_mean = float(row["p_mean"])
+        alpha_mean = float(row["alpha_mean"])
+        error = block.error[:, band_index]
+        valid = ((not block.date_mask_bad)
+                 & np.isfinite(T) & np.isfinite(B) & np.isfinite(H)
+                 & np.isfinite(ra) & np.isfinite(dec)
+                 & np.isfinite(error) & (error > 0)
+                 & np.isfinite(z_mean) & np.isfinite(p_mean)
+                 & np.isfinite(alpha_mean))
+        source = _virus_source_inverse(T, B, H, z_mean, p_mean, alpha_mean,
+                                       band_scale, band_offset)
+        valid &= np.isfinite(source)
+        total_candidates += int(np.sum(valid))
+        if np.any(valid):
+            start = len(fluxes)
+            ras.extend(ra[valid].tolist())
+            decs.extend(dec[valid].tolist())
+            fluxes.extend(source[valid].tolist())
+            key = (int(block.key.h5_id), int(block.key.exposure))
+            shot_values.setdefault(key, []).extend(range(start, start + int(np.sum(valid))))
+    if fluxes:
+        ra = np.asarray(ras, dtype=float)
+        dec = np.asarray(decs, dtype=float)
+        flux = np.asarray(fluxes, dtype=float)
+    else:
+        ra = np.empty(0, dtype=float); dec = np.empty(0, dtype=float); flux = np.empty(0, dtype=float)
+    return {"ra": ra, "dec": dec, "flux": flux,
+            "shot_indices": [np.asarray(shot_values[key], dtype=np.int64)
+                             for key in sorted(shot_values)],
+            "n_candidates": total_candidates, "band_scale": band_scale,
+            "band_offset": band_offset}
+
+
+def _virus_ncontrib_summary(values):
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values) & (values > 0)]
+    if not values.size:
+        return {"count": 0, "min": 0, "p05": np.nan, "median": np.nan,
+                "p95": np.nan, "max": 0}
+    p05, median, p95 = np.percentile(values, (5, 50, 95))
+    return {"count": int(values.size), "min": int(np.min(values)),
+            "p05": float(p05), "median": float(median), "p95": float(p95),
+            "max": int(np.max(values))}
+
+
+def _reconstruct_virus_band(inputs, target_wcs, target_shape, target_pixel_scale,
+                            image_out, ncontrib_out, coverage_out):
+    height, width = target_shape
+    pixel_x, pixel_y = target_wcs.world_to_pixel_values(inputs["ra"], inputs["dec"])
+    pixel_x = np.asarray(pixel_x, dtype=float) + 1.0
+    pixel_y = np.asarray(pixel_y, dtype=float) + 1.0
+    nshots = len(inputs["shot_indices"])
+    sigma = (1.8 / 2.35) / target_pixel_scale
+    radius = 3
+    support_radius = int(np.ceil(2.0 * sigma))
+    fiber_area = np.pi * 0.75 ** 2
+    memory_budget = 160 * 1024 ** 2
+    rows_per_chunk = max(1, min(height, memory_budget // max(1, nshots * width * 4)))
+    for y0 in range(0, height, rows_per_chunk):
+        y1 = min(height, y0 + rows_per_chunk)
+        chunk_height = y1 - y0
+        shot_images = np.full((nshots, chunk_height, width), np.nan, dtype=np.float32)
+        chunk_ncontrib = np.zeros((chunk_height, width), dtype=np.uint8)
+        chunk_coverage = np.zeros((chunk_height, width), dtype=np.float32)
+        for shot_number, indices in enumerate(inputs["shot_indices"]):
+            flux_sum = np.zeros((chunk_height, width), dtype=np.float32)
+            weight_sum = np.zeros((chunk_height, width), dtype=np.float32)
+            support_map = np.zeros((chunk_height, width), dtype=np.uint8)
+            _virus_gaussian_splat_shot_xy(
+                indices, pixel_x, pixel_y, inputs["flux"], 1.0, 1.0 + y0,
+                width, chunk_height, sigma, radius, support_radius, fiber_area,
+                flux_sum, weight_sum, support_map)
+            supported = (support_map != 0) & (weight_sum > 0)
+            if np.any(supported):
+                shot_images[shot_number, supported] = (flux_sum[supported]
+                                                       / weight_sum[supported])
+                chunk_ncontrib[supported] += 1
+                chunk_coverage += np.minimum(weight_sum, 1.0) * supported
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            image = np.nanmedian(shot_images, axis=0).astype(np.float32)
+        image[chunk_ncontrib < 2] = 0.0
+        image[~np.isfinite(image)] = 0.0
+        image_out[y0:y1] = image
+        ncontrib_out[y0:y1] = chunk_ncontrib
+        coverage_out[y0:y1] = chunk_coverage / max(nshots, 1)
+    return {"finite_pixels_supported": int(np.sum(ncontrib_out > 0)),
+            "ncontrib": _virus_ncontrib_summary(ncontrib_out),
+            "sigma_pixels": float(sigma), "fwhm_arcsec": 1.8,
+            "fiber_area_arcsec2": float(fiber_area),
+            "rows_per_chunk": int(rows_per_chunk)}
+
+
+def _write_virus_synthetic_fits(path, band, image, ncontrib, coverage, target_wcs,
+                                inputs, reconstruction, compact_mask_path,
+                                delta_z_band, delta_p_band):
+    header = target_wcs.to_header()
+    header["BAND"] = band
+    header["PRODUCT"] = "posterior-calibrated VIRUS synthetic photometry"
+    header["SOURCE"] = "observed VIRUS measurement, not external_prediction"
+    header["MODEL"] = "T=exp(z)*band_scale*(X+B)+p+alpha*H+band_offset"
+    header["INVERSE"] = "(T-p-alpha*H-band_offset)/(exp(z)*band_scale)-B"
+    header["SPATIAL"] = "current VIRUS cube Gaussian-splat reconstruction"
+    header["FWHM"] = (1.8, "arcsec spatial Gaussian reconstruction FWHM")
+    header["FIBRAD"] = (0.75, "arcsec physical VIRUS fiber radius")
+    header["DZBAND"] = float(delta_z_band)
+    header["DPBAND"] = float(delta_p_band)
+    header["NSHOTS"] = len(inputs["shot_indices"])
+    header["NVALID"] = int(inputs["n_candidates"])
+    header["MASKUSED"] = (compact_mask_path is not None,
+                           "compact mask supplied as target WCS only")
+    header["MASKCENS"] = (False, "compact-mask values did not censor fibers")
+    header["MASKNOTE"] = "masked fibers retained in visualization products"
+    if compact_mask_path is not None:
+        header["MASKFILE"] = str(compact_mask_path)[:68]
+        header["WCSSRC"] = "compact-mask FITS celestial WCS and shape"
+    primary = fits.PrimaryHDU(data=np.asarray(image, dtype=np.float32), header=header)
+    ncontrib_hdu = fits.ImageHDU(data=np.asarray(ncontrib, dtype=np.uint8), name="NCONTRIB")
+    coverage_hdu = fits.ImageHDU(data=np.asarray(coverage, dtype=np.float32), name="COVERAGE")
+    for hdu in (ncontrib_hdu, coverage_hdu):
+        hdu.header["BAND"] = band
+        hdu.header["PRODUCT"] = "posterior-calibrated VIRUS synthetic photometry"
+    fits.HDUList([primary, ncontrib_hdu, coverage_hdu]).writeto(path, overwrite=True)
+
+
+def _build_virus_synthetic_products(output_dir, store, obs_rows, band_contrast,
+                                    compact_mask_path):
+    if compact_mask_path is None:
+        print("VIRUS synthetic ON/OFF images skipped: --compact-mask was not supplied")
+        return {"enabled": False, "reason": "--compact-mask was not supplied"}
+    if store.compact_mask_wcs is None or store.compact_mask_shape is None:
+        raise ValueError("compact-mask WCS/shape unavailable for VIRUS synthetic images")
+    target_wcs = store.compact_mask_wcs
+    target_shape = tuple(store.compact_mask_shape)
+    scales = np.asarray(proj_plane_pixel_scales(target_wcs), dtype=float) * 3600.0
+    if not np.all(np.isfinite(scales)) or np.any(scales <= 0):
+        raise ValueError("compact-mask WCS has invalid pixel scale")
+    target_pixel_scale = float(np.mean(scales))
+    output_dir = Path(output_dir); output_dir.mkdir(parents=True, exist_ok=True)
+    qa = {"enabled": True, "target_shape": list(target_shape),
+          "target_pixel_scale_arcsec": target_pixel_scale,
+          "target_wcs_source": str(compact_mask_path),
+          "fwhm_arcsec": 1.8, "fiber_radius_arcsec": 0.75,
+          "compact_mask_excluded_fibers_retained": True, "bands": {}}
+    with tempfile.TemporaryDirectory(prefix="m101_virus_synthetic_") as temp_dir:
+        for band_index, band in enumerate(BANDS):
+            started = time.perf_counter()
+            inputs = _virus_synthetic_band_inputs(
+                store, obs_rows, band_index,
+                band_contrast["delta_z_band"], band_contrast["delta_p_band"])
+            image_path = Path(temp_dir) / (band + "_image.dat")
+            ncontrib_path = Path(temp_dir) / (band + "_ncontrib.dat")
+            coverage_path = Path(temp_dir) / (band + "_coverage.dat")
+            image = np.memmap(image_path, mode="w+", dtype=np.float32, shape=target_shape)
+            ncontrib = np.memmap(ncontrib_path, mode="w+", dtype=np.uint8, shape=target_shape)
+            coverage = np.memmap(coverage_path, mode="w+", dtype=np.float32, shape=target_shape)
+            reconstruction = _reconstruct_virus_band(
+                inputs, target_wcs, target_shape, target_pixel_scale,
+                image, ncontrib, coverage)
+            path = output_dir / ("m101_bayes_virus_synthetic_%s.fits" % band)
+            _write_virus_synthetic_fits(
+                path, band, image, ncontrib, coverage, target_wcs, inputs,
+                reconstruction, compact_mask_path,
+                band_contrast["delta_z_band"], band_contrast["delta_p_band"])
+            image.flush(); ncontrib.flush(); coverage.flush()
+            qa["bands"][band] = {
+                "finite_virus_fibers_used": int(inputs["n_candidates"]),
+                "unique_exposure_shots_combined": int(len(inputs["shot_indices"])),
+                "reconstruction": reconstruction,
+                "output": str(path),
+            }
+            del image, ncontrib, coverage
+            print("VIRUS synthetic %s image: %.3f s" % (band, time.perf_counter() - started))
+    return qa
+
+
+def _plot_outputs(output_dir, store, evidences, obs_rows, physical_rows, ifu_rows, exposure_rows, stages, posterior, z_grid, band_contrast, split_alpha_diagnostic, error_model_rows, gallery_selection, data_error_scale_on, data_error_scale_off, model_fraction_on, model_fraction_off, error_floor=None, error_floor_factor=None):
     output_dir = Path(output_dir); output_dir.mkdir(parents=True, exist_ok=True)
     support = np.asarray([np.hypot(e.x_amp[0], e.x_amp[1]) for e in evidences])
     info = np.asarray([e.I_m for e in evidences]); quality = np.asarray([e.p_good for e in evidences])
@@ -2040,6 +2521,54 @@ def _plot_outputs(output_dir, store, evidences, obs_rows, physical_rows, ifu_row
         axes[axis_row, 2].scatter(block.q, mean_residual, s=4); _set_robust_ylim(axes[axis_row, 2], mean_residual); axes[axis_row, 2].axhline(0, color="k", lw=.8); axes[axis_row, 2].set_ylabel("mean residual"); axes[axis_row, 2].set_xlabel("q"); axes[axis_row, 2].set_title("%s/%s/%s %s pgood=%.3g I=%.3g da=%.3g sig=%.3g" % (row["SPECID"], row["IFUSLOT"], row["IFUID"], row["AMP"], row["p_good"], row["I_m"], row["split_delta_alpha"], row["split_delta_alpha_significance"]), fontsize=8)
     for ax in axes.flat: ax.grid(alpha=.2)
     fig.suptitle("Flagged amplifier gallery"); fig.tight_layout(rect=(0, 0, 1, .98)); fig.savefig(output_dir / "m101_bayes_flagged_gallery.png", dpi=130); plt.close(fig)
+    _plot_pgood_matched_fiber_gallery(
+        output_dir, store, evidences, obs_rows, error_model_rows, gallery_selection,
+        band_contrast["delta_z_band"], band_contrast["delta_p_band"],
+        data_error_scale_on, data_error_scale_off, model_fraction_on, model_fraction_off,
+        error_floor, error_floor_factor)
+    _plot_compact_mask_qa(output_dir, store, evidences)
+
+
+def _plot_compact_mask_qa(output_dir, store, evidences):
+    if not store.compact_mask_qa.get("enabled", False):
+        return None
+    masked_counts = np.asarray(store.compact_masked_fiber_counts, dtype=int)
+    n_valid_on = np.asarray([e.n_valid[0] for e in evidences], dtype=int)
+    n_valid_off = np.asarray([e.n_valid[1] for e in evidences], dtype=int)
+    support = np.asarray([np.hypot(e.x_amp[0], e.x_amp[1]) for e in evidences], dtype=float)
+    p_good = np.asarray([e.p_good for e in evidences], dtype=float)
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8))
+    max_masked = int(np.max(masked_counts)) if masked_counts.size else 0
+    axes[0, 0].hist(masked_counts, bins=np.arange(-.5, max_masked + 1.5), color="tab:red", alpha=.75)
+    axes[0, 0].set(xlabel="physical fibers masked per amplifier observation", ylabel="count",
+                   title="Compact-mask exclusions")
+    max_valid = max(int(np.max(n_valid_on)) if n_valid_on.size else 0,
+                    int(np.max(n_valid_off)) if n_valid_off.size else 0)
+    axes[0, 1].hist(n_valid_on, bins=np.linspace(-.5, max_valid + .5, min(max_valid + 2, 30)),
+                    alpha=.6, label="ON", color="tab:blue")
+    axes[0, 1].hist(n_valid_off, bins=np.linspace(-.5, max_valid + .5, min(max_valid + 2, 30)),
+                    alpha=.6, label="OFF", color="tab:orange")
+    axes[0, 1].set(xlabel="remaining n_valid", ylabel="amplifier observations", title="Remaining fibers")
+    axes[0, 1].legend(fontsize=8)
+    axes[1, 0].scatter(support, p_good, c=masked_counts, cmap="Reds", s=10)
+    axes[1, 0].set(xlabel="external support |X_amp|", ylabel="p_good", title="p_good after compact masking")
+    qa = store.compact_mask_qa
+    axes[1, 1].axis("off")
+    axes[1, 1].text(.02, .98, "mask QA\n"
+                    "physical rows masked: %d\n"
+                    "new invalid ON/OFF: %d / %d\n"
+                    "remaining n_valid ON: %s\n"
+                    "remaining n_valid OFF: %s" % (
+                        qa["physical_fiber_rows_masked_by_union"], qa["newly_invalid_ON"], qa["newly_invalid_OFF"],
+                        qa["remaining_n_valid_ON"], qa["remaining_n_valid_OFF"]),
+                    transform=axes[1, 1].transAxes, va="top", family="monospace", fontsize=8)
+    for axis in axes.flat:
+        axis.grid(alpha=.2)
+    fig.suptitle("External compact-mask QA (validity only; Bayesian model unchanged)")
+    fig.tight_layout(rect=(0, 0, 1, .95))
+    path = Path(output_dir) / "m101_bayes_compact_mask_qa.png"
+    fig.savefig(path, dpi=140); plt.close(fig)
+    return path
 
 
 def _plot_error_model_diagnostic(output_dir, datasets, rows):
@@ -2056,6 +2585,11 @@ def _plot_error_model_diagnostic(output_dir, datasets, rows):
             fixed = datasets[name]["fixed"]
             axis.plot(line_x, free["c0"] + free["f_model"] ** 2 * line_x, "k-", label="free intercept")
             axis.plot(line_x, 1.0 + fixed["f_model"] ** 2 * line_x, "k--", label="fixed intercept")
+        effective_stats = datasets["effective"][name]["stats"]
+        if effective_stats:
+            axis.scatter([row["median_x2"] for row in effective_stats],
+                         [row["robust_scale_u"] ** 2 for row in effective_stats],
+                         s=16, marker="x", color="black", label="effective")
         axis.set(xlabel="median x^2", ylabel="robust scale(u)^2", title="%s variance relation" % name)
         axis.legend(fontsize=8); axis.grid(alpha=.2)
     axes[0, 2].hist(datasets["ON"]["bootstrap_free"]["f_model"], bins=30, alpha=.55, label="ON free", color="tab:blue")
@@ -2089,6 +2623,37 @@ def _plot_error_model_diagnostic(output_dir, datasets, rows):
     fig.tight_layout(rect=(0, 0, 1, .95)); fig.savefig(Path(output_dir) / "m101_bayes_error_model_diagnostic.png", dpi=150); plt.close(fig)
 
 
+def _synthetic_compact_mask_integration():
+    mask = np.zeros((5, 5), dtype=np.uint8); mask[2, 2] = 3
+    mask_wcs = WCS(naxis=2); mask_wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    mask_wcs.wcs.crval = [210.0, 54.0]; mask_wcs.wcs.crpix = [3.0, 3.0]
+    mask_wcs.wcs.cdelt = [-1.0 / 3600.0, 1.0 / 3600.0]
+    safe_ra, safe_dec = mask_wcs.pixel_to_world_values(1.0, 1.0)
+    hit_ra, hit_dec = mask_wcs.pixel_to_world_values(2.0, 2.0)
+    outside_ra, outside_dec = mask_wcs.pixel_to_world_values(20.0, 20.0)
+    arrays = {"effective_RA": np.asarray([[safe_ra, safe_ra], [hit_ra, safe_ra],
+                                           [safe_ra, hit_ra], [hit_ra, safe_ra]]),
+              "effective_Dec": np.asarray([[safe_dec, safe_dec], [hit_dec, safe_dec],
+                                            [safe_dec, hit_dec], [hit_dec, safe_dec]]),
+              "external_valid": np.asarray([[True, True], [True, True], [True, True], [False, True]])}
+    _apply_compact_mask_to_arrays(arrays, mask, mask_wcs)
+    expected = np.asarray([[True, True], [False, False], [False, False], [False, False]])
+    if not np.array_equal(arrays["external_valid"], expected):
+        raise AssertionError("synthetic compact-mask ON/OFF union semantics failed")
+    outside_arrays = {"effective_RA": np.asarray([[outside_ra, safe_ra]]),
+                      "effective_Dec": np.asarray([[outside_dec, safe_dec]]),
+                      "external_valid": np.asarray([[True, True]])}
+    try:
+        _apply_compact_mask_to_arrays(outside_arrays, mask, mask_wcs)
+    except ValueError as exc:
+        message = str(exc)
+        if "total=1" not in message or "ON=1" not in message or "OFF=0" not in message:
+            raise AssertionError("synthetic compact-mask coverage error counts failed: %s" % message)
+    else:
+        raise AssertionError("synthetic compact-mask coverage error was not raised")
+    return {"status": "PASS", "union_semantics": True, "coverage_error": True}
+
+
 def run_synthetic_validation():
     rng = np.random.default_rng(12345); z_grid = np.linspace(-1.2, 1.2, 161)
     T = rng.normal(size=7); P = rng.normal(size=7); H = rng.normal(size=7); sigma = np.full(7, .2); beta = np.array([.1, .4]); beta_sigma = np.array([.3, .2]); z = np.linspace(-.5, .5, 5)
@@ -2115,11 +2680,36 @@ def run_synthetic_validation():
         err = np.full(n, noise)
         return (d[:, None] * np.ones((1, 2)), b[:, None] * np.ones((1, 2)),
                 p[:, None] * np.ones((1, 2)), err[:, None] * np.ones((1, 2)), h)
+    test_d, test_b, test_x, test_error, test_h = synthetic_block(3.0, .03)
+    test_block = AmplifierBlock(
+        AmplifierObservationKey(0, 1, PhysicalIFUKey(1, 1, 1), "LL"), "synthetic",
+        0, 0, np.zeros(2), np.zeros(2), test_d, test_b, test_x, test_error,
+        np.ones_like(test_d, dtype=bool), False, np.linspace(0, 1, 40), np.ones(2),
+        np.arange(40), .2)
+    original_sigma = _likelihood_sigma(test_block, np.ones(2), np.ones(2), np.zeros(2))
+    if not np.array_equal(original_sigma, test_block.error):
+        raise AssertionError("likelihood sigma legacy identity test failed")
+    known_scale = np.asarray([1.2, .8]); known_fraction = np.asarray([.1, .2])
+    known_sigma = _likelihood_sigma(test_block, known_scale, np.asarray([1.0, 2.0]), known_fraction)
+    expected_sigma = np.sqrt((test_block.error * np.asarray([1.0, 2.0])[None, :]) ** 2
+                             + (test_block.X * known_scale[None, :] * known_fraction[None, :]) ** 2)
+    if not np.allclose(known_sigma, expected_sigma, rtol=0.0, atol=1e-14):
+        raise AssertionError("likelihood sigma fractional-error formula test failed")
+    sigma_by_z = [_likelihood_sigma(test_block, known_scale, np.asarray([1.0, 2.0]), known_fraction)
+                  for z_value in (-1.0, 0.0, 1.0)]
+    if not all(np.array_equal(sigma_by_z[0], value) for value in sigma_by_z[1:]):
+        raise AssertionError("likelihood sigma incorrectly depends on z")
+    sigma_smoke = {"legacy_identity": True, "formula_max_abs_error": float(np.max(np.abs(known_sigma - expected_sigma))),
+                   "z_invariant": True}
+    def synthetic_local_evidence(block, **kwargs):
+        kwargs.update(data_error_scale_on=1.0, data_error_scale_off=1.0,
+                      model_fraction_on=0.0, model_fraction_off=0.0)
+        return _local_evidence(block, z_grid, **kwargs)
     smoke = []
     for scale, noise, mismatch, label in ((10, .03, 0.0, "bright"), (0, .03, 0.0, "blank"), (10, .03, 10.0, "bad")):
         d, b, x, err, h = synthetic_block(scale, noise, mismatch)
         block = AmplifierBlock(AmplifierObservationKey(0, 1, PhysicalIFUKey(1, 1, 1), "LL"), "synthetic", 0, 0, np.zeros(2), np.zeros(2), d, b, x, err, np.ones_like(d, dtype=bool), False, np.linspace(0, 1, 40), np.ones(2), np.arange(40), .2)
-        evidence = _local_evidence(block, z_grid)
+        evidence = synthetic_local_evidence(block)
         smoke.append((label, evidence.local_z_sigma, evidence.p_good, evidence.I_m))
     if smoke[0][2] < 0.5 or smoke[1][2] < 0.5 or smoke[2][2] >= 0.5:
         raise AssertionError("synthetic quality-mixture behavior failed: %r" % (smoke,))
@@ -2139,7 +2729,7 @@ def run_synthetic_validation():
         b[:, None] * np.ones((1, 2)), x[:, None] * np.ones((1, 2)),
         np.full((n, 2), .03), np.ones((n, 2), dtype=bool), False,
         np.linspace(0, 1, n), np.ones(2), np.arange(n), .2)
-    preliminary_contrast = _local_evidence(contrast_block, z_grid)
+    preliminary_contrast = synthetic_local_evidence(contrast_block)
     split_summary = {"z_mean": preliminary_contrast.split_z_mean,
                      "z_sigma": preliminary_contrast.split_z_sigma,
                      "p_mean": preliminary_contrast.split_p_mean,
@@ -2147,8 +2737,8 @@ def run_synthetic_validation():
                      "alpha_mean": preliminary_contrast.split_alpha_mean,
                      "alpha_sigma": preliminary_contrast.split_alpha_sigma,
                      "grid_edge": preliminary_contrast.split_grid_edge}
-    corrected_contrast = _local_evidence(
-        contrast_block, z_grid, delta_z_band=preliminary_contrast.split_delta_z,
+    corrected_contrast = synthetic_local_evidence(
+        contrast_block, delta_z_band=preliminary_contrast.split_delta_z,
         delta_p_band=preliminary_contrast.split_delta_p, split_summary=split_summary)
     zero_T, zero_P, _, _ = _band_contrast_transform(contrast_block, 0.0, 0.0)
     if np.max(np.abs(zero_T - contrast_block.T)) > 1e-14 or np.max(np.abs(zero_P - contrast_block.P)) > 1e-14:
@@ -2183,7 +2773,7 @@ def run_synthetic_validation():
         alpha_b[:, None] * np.ones((1, 2)), alpha_x[:, None] * np.ones((1, 2)),
         np.full((n, 2), 0.01), np.ones((n, 2), dtype=bool), False,
         alpha_h, np.ones(2), np.arange(n), 0.2)
-    alpha_evidence = _local_evidence(alpha_block, z_grid)
+    alpha_evidence = synthetic_local_evidence(alpha_block)
     zero_alpha_T = np.exp(0.10) * alpha_P + 0.02 + 0.4 * alpha_h[:, None]
     zero_alpha_block = AmplifierBlock(
         AmplifierObservationKey(0, 1, PhysicalIFUKey(1, 1, 1), "LL"), "synthetic",
@@ -2191,7 +2781,7 @@ def run_synthetic_validation():
         alpha_b[:, None] * np.ones((1, 2)), alpha_x[:, None] * np.ones((1, 2)),
         np.full((n, 2), 0.01), np.ones((n, 2), dtype=bool), False,
         alpha_h, np.ones(2), np.arange(n), 0.2)
-    zero_alpha_evidence = _local_evidence(zero_alpha_block, z_grid)
+    zero_alpha_evidence = synthetic_local_evidence(zero_alpha_block)
     recovered_alpha_delta = alpha_evidence.split_delta_alpha
     zero_alpha_delta = zero_alpha_evidence.split_delta_alpha
     if (np.sign(recovered_alpha_delta) != np.sign(alpha_delta)
@@ -2202,7 +2792,32 @@ def run_synthetic_validation():
     split_alpha_smoke = {"injected_delta_alpha": alpha_delta,
                          "recovered_delta_alpha": recovered_alpha_delta,
                          "zero_delta_alpha_recovered": zero_alpha_delta}
-    return {"status": "PASS", "dense_max_abs_error": dense_error, "order_independence_error": order_error, "local_smoke": smoke, "band_contrast_smoke": band_contrast_smoke, "split_alpha_smoke": split_alpha_smoke}
+    compact_mask_integration = _synthetic_compact_mask_integration()
+    inverse_x = np.asarray([[1.2, 2.4], [3.1, 4.2], [5.0, 6.3]])
+    inverse_b = np.asarray([[.1, .2], [.3, .4], [.5, .6]])
+    inverse_h = np.asarray([[.2, .4], [.6, .8], [1.0, 1.2]])
+    inverse_z, inverse_p, inverse_alpha = .13, .07, .41
+    inverse_scale = np.asarray([1.08, .93])
+    inverse_offset = np.asarray([.025, -.018])
+    inverse_t = (np.exp(inverse_z) * inverse_scale[None, :] * (inverse_x + inverse_b)
+                 + inverse_p + inverse_alpha * inverse_h + inverse_offset[None, :])
+    recovered_x = _virus_source_inverse(
+        inverse_t, inverse_b, inverse_h, inverse_z, inverse_p, inverse_alpha,
+        inverse_scale[None, :], inverse_offset[None, :])
+    inverse_error = float(np.max(np.abs(recovered_x - inverse_x)))
+    if inverse_error > 1e-14:
+        raise AssertionError("synthetic VIRUS source inversion failed: %.4g" % inverse_error)
+    effective_ra = np.asarray([[1.0, 2.0], [3.0, 4.0]])
+    effective_dec = np.asarray([[5.0, 6.0], [7.0, 8.0]])
+    if np.array_equal(effective_ra[:, 0], effective_ra[:, 1]) or np.array_equal(effective_dec[:, 0], effective_dec[:, 1]):
+        raise AssertionError("synthetic ON/OFF effective-coordinate independence failed")
+    virus_synthetic_inversion = {"status": "PASS", "max_abs_error": inverse_error,
+                                 "independent_band_coordinates": True}
+    return {"status": "PASS", "dense_max_abs_error": dense_error, "order_independence_error": order_error,
+            "likelihood_sigma_smoke": sigma_smoke, "local_smoke": smoke,
+            "band_contrast_smoke": band_contrast_smoke, "split_alpha_smoke": split_alpha_smoke,
+            "compact_mask_integration": compact_mask_integration,
+            "virus_synthetic_inversion": virus_synthetic_inversion}
 
 
 def _solution_csvs(output_dir, obs_rows, physical_rows, ifu_rows, exposure_rows):
@@ -2219,6 +2834,8 @@ def main():
     parser.add_argument("--measurements", default="m101_measurements.h5")
     parser.add_argument("--output", default="m101_bayesian_calibration.h5")
     parser.add_argument("--evidence-cache", default="m101_amplifier_evidence.h5")
+    parser.add_argument("--compact-mask", default=None,
+                        help="optional uint8 FITS raster from build_m101_external_compact_mask.py")
     parser.add_argument("--workers", type=int, default=1,
                         help="number of worker processes for local amplifier evidence calculations")
     parser.add_argument("--overwrite", action="store_true")
@@ -2228,6 +2845,14 @@ def main():
     parser.add_argument("--p-sigma-fraction", type=float, default=P_SIGMA_FRACTION_DEFAULT); parser.add_argument("--alpha-mean", type=float, default=ALPHA_MEAN_DEFAULT); parser.add_argument("--alpha-sigma", type=float, default=ALPHA_SIGMA_DEFAULT); parser.add_argument("--z0-sigma", type=float, default=Z0_SIGMA_DEFAULT)
     parser.add_argument("--gamma-sigma", type=float, default=GAMMA_SIGMA_DEFAULT); parser.add_argument("--ifu-sigma", type=float, default=IFU_SIGMA_DEFAULT); parser.add_argument("--eta-sigma", type=float, default=ETA_SIGMA_DEFAULT)
     parser.add_argument("--error-floor", type=float, default=None); parser.add_argument("--error-floor-factor", type=float, default=None); parser.add_argument("--hutchinson-probes", type=int, default=HUTCHINSON_PROBES_DEFAULT)
+    parser.add_argument("--data-error-scale-on", type=float, default=DATA_ERROR_SCALE_ON_DEFAULT,
+                        help="data-error-scale is a multiplier on propagated per-fiber sigma (ON band)")
+    parser.add_argument("--data-error-scale-off", type=float, default=DATA_ERROR_SCALE_OFF_DEFAULT,
+                        help="data-error-scale is a multiplier on propagated per-fiber sigma (OFF band)")
+    parser.add_argument("--model-fraction-on", type=float, default=MODEL_FRACTION_ON_DEFAULT,
+                        help="model-fraction is fractional fiber-level uncertainty on the fixed external source predictor (ON band)")
+    parser.add_argument("--model-fraction-off", type=float, default=MODEL_FRACTION_OFF_DEFAULT,
+                        help="model-fraction is fractional fiber-level uncertainty on the fixed external source predictor (OFF band)")
     parser.add_argument("--error-bootstrap", type=int, default=ERROR_BOOTSTRAP_DEFAULT,
                         help="cluster-bootstrap realizations for the error-model diagnostic")
     args = parser.parse_args()
@@ -2239,11 +2864,23 @@ def main():
     if args.error_floor_factor is not None and args.error_floor_factor <= 0: raise SystemExit("--error-floor-factor must be positive")
     if args.error_bootstrap < 1: raise SystemExit("--error-bootstrap must be at least 1")
     if args.pi_good <= 0 or args.pi_good >= 1: raise SystemExit("--pi-good must be between 0 and 1")
+    if (not np.isfinite(args.data_error_scale_on) or args.data_error_scale_on <= 0
+            or not np.isfinite(args.data_error_scale_off) or args.data_error_scale_off <= 0):
+        raise SystemExit("data-error-scale values must be finite and positive")
+    if (not np.isfinite(args.model_fraction_on) or args.model_fraction_on < 0
+            or not np.isfinite(args.model_fraction_off) or args.model_fraction_off < 0):
+        raise SystemExit("model-fraction values must be finite and non-negative")
+    compact_mask_path = (Path(args.compact_mask).expanduser().resolve()
+                         if args.compact_mask is not None else None)
+    if compact_mask_path is not None and not compact_mask_path.exists():
+        raise SystemExit("compact mask does not exist: %s" % compact_mask_path)
     output = Path(args.output).expanduser().resolve(); output_dir = output.parent
     if output.exists() and not args.overwrite: raise SystemExit("output exists; use --overwrite: %s" % output)
     started = time.perf_counter(); z_grid = np.linspace(args.z_min, args.z_max, args.n_z)
     if args.n_z < 3 or args.z_max <= args.z_min: raise SystemExit("invalid z grid")
-    store_started = time.perf_counter(); store = MeasurementStore(args.measurements); print("measurement load/grouping: %.3f s" % (time.perf_counter() - store_started))
+    store_started = time.perf_counter(); store = MeasurementStore(args.measurements, compact_mask_path); print("measurement load/grouping: %.3f s" % (time.perf_counter() - store_started))
+    if compact_mask_path is not None:
+        print("compact mask lookup/application: %.3f s" % store.compact_mask_lookup_seconds)
     config = _evidence_config(args, store.path); evidence_started = time.perf_counter()
     cached = _load_evidence_cache(args.evidence_cache, store, z_grid, config)
     if cached is not None:
@@ -2252,7 +2889,9 @@ def main():
     else:
         local_settings = (args.pi_good, args.bad_scale, args.p_sigma_fraction,
                           args.alpha_mean, args.alpha_sigma, args.z0_sigma,
-                          args.error_floor, args.error_floor_factor, 0.0, 0.0, None)
+                          args.error_floor, args.error_floor_factor, 0.0, 0.0, None,
+                          args.data_error_scale_on, args.data_error_scale_off,
+                          args.model_fraction_on, args.model_fraction_off)
         preliminary = _calculate_local_evidences(store.blocks, z_grid, local_settings, args.workers)
         contrast_estimate = _estimate_band_contrast(preliminary)
         band_contrast = _complete_band_contrast(contrast_estimate, store)
@@ -2260,7 +2899,9 @@ def main():
         final_settings = (args.pi_good, args.bad_scale, args.p_sigma_fraction,
                           args.alpha_mean, args.alpha_sigma, args.z0_sigma,
                           args.error_floor, args.error_floor_factor,
-                          band_contrast["delta_z_band"], band_contrast["delta_p_band"])
+                          band_contrast["delta_z_band"], band_contrast["delta_p_band"],
+                          args.data_error_scale_on, args.data_error_scale_off,
+                          args.model_fraction_on, args.model_fraction_off)
         split_summaries = [{"z_mean": evidence.split_z_mean,
                             "z_sigma": evidence.split_z_sigma,
                             "p_mean": evidence.split_p_mean,
@@ -2271,7 +2912,7 @@ def main():
                            for evidence in preliminary]
         evidences = _calculate_local_evidences(
             store.blocks, z_grid,
-            [final_settings + (split_summary,)
+            [final_settings[:-4] + (split_summary,) + final_settings[-4:]
              for split_summary in split_summaries], args.workers)
         _write_evidence_cache(args.evidence_cache, evidences, z_grid, config,
                               band_contrast, pre_qa)
@@ -2286,22 +2927,32 @@ def main():
     history_started = time.perf_counter(); stages = _history(evidences, layout, args.gamma_sigma, args.ifu_sigma, args.eta_sigma, args.hutchinson_probes); print("chronological history: %.3f s" % (time.perf_counter() - history_started))
     obs_rows, amp_accum, ifu_accum, exp_accum = _posterior_rows(
         store, evidences, posterior, args.alpha_mean, args.alpha_sigma,
-        band_contrast["delta_z_band"], band_contrast["delta_p_band"])
+        band_contrast["delta_z_band"], band_contrast["delta_p_band"],
+        args.error_floor, args.error_floor_factor,
+        args.data_error_scale_on, args.data_error_scale_off,
+        args.model_fraction_on, args.model_fraction_off)
     physical_rows = _population_rows(amp_accum, posterior); ifu_rows = _ifu_rows(ifu_accum, posterior, store); exposure_rows = _exposure_rows(exp_accum, posterior)
+    information_precision_qa = _information_precision_qa(evidences, physical_rows, exposure_rows)
     split_alpha_diagnostic = _split_alpha_diagnostic(evidences)
     error_started = time.perf_counter()
     error_model_diagnostic, error_model_rows, error_model_plot_data = _error_model_diagnostic(
-        store, evidences, obs_rows, band_contrast, args.error_bootstrap)
+        store, evidences, obs_rows, band_contrast, args.error_bootstrap,
+        args.data_error_scale_on, args.data_error_scale_off,
+        args.model_fraction_on, args.model_fraction_off,
+        args.error_floor, args.error_floor_factor)
     print("error-model diagnostic: %.3f s" % (time.perf_counter() - error_started))
+    pgood_matched_gallery = _pgood_matched_gallery_selection(evidences)
     post_qa = _preliminary_qa(evidences)
     post_qa.update({"median_mean_residual_ON": float(np.nanmedian([r["mean_residual_ON"] for r in obs_rows])),
                     "median_mean_residual_OFF": float(np.nanmedian([r["mean_residual_OFF"] for r in obs_rows])),
                     "median_mean_residual_ON_minus_OFF": float(np.nanmedian([r["mean_residual_ON"] - r["mean_residual_OFF"] for r in obs_rows]))})
-    metadata = {"schema_version": "m101_bayesian_calibration_v1", "created_utc": datetime.now(timezone.utc).isoformat(), "script": str(Path(__file__).resolve()), "git_commit": _git_commit(), "measurement_identity": _h5_identity(store.path), "evidence_cache": _h5_identity(args.evidence_cache), "config": config, "global_priors": {"gamma_sigma": args.gamma_sigma, "ifu_sigma": args.ifu_sigma, "eta_sigma": args.eta_sigma}, "variance_method": posterior.variance_method, "order_independence_max_abs_difference": order_error, "synthetic_validation": run_synthetic_validation(), "contrast_definition": "scipy.linalg.helmert(full=False), iota sums zero per exposure and eta sums zero within each physical IFU", "additive_posterior_conditioning": "p and alpha are conditional on the hierarchy posterior mean z; local marginal moments remain in the evidence cache", "band_contrast": band_contrast, "split_alpha_diagnostic": split_alpha_diagnostic, "qa_pre": pre_qa, "qa_post": post_qa, "no_production_calibration_applied": True}
-    output_started = time.perf_counter(); _write_solution(output, obs_rows, physical_rows, ifu_rows, exposure_rows, _history_rows(stages), metadata); _solution_csvs(output_dir, obs_rows, physical_rows, ifu_rows, exposure_rows); _write_csv(output_dir / "m101_bayes_error_model_diagnostic.csv", error_model_rows); _plot_outputs(output_dir, store, evidences, obs_rows, physical_rows, ifu_rows, exposure_rows, stages, posterior, z_grid, band_contrast, split_alpha_diagnostic); _plot_error_model_diagnostic(output_dir, error_model_plot_data, error_model_rows); print("solution/CSV/plots: %.3f s" % (time.perf_counter() - output_started))
+    virus_synthetic_products = _build_virus_synthetic_products(
+        output_dir, store, obs_rows, band_contrast, compact_mask_path)
+    metadata = {"schema_version": "m101_bayesian_calibration_v1", "created_utc": datetime.now(timezone.utc).isoformat(), "script": str(Path(__file__).resolve()), "git_commit": _git_commit(), "measurement_identity": _h5_identity(store.path), "evidence_cache": _h5_identity(args.evidence_cache), "config": config, "likelihood_error_model": "band-scaled statistical error plus fractional fixed-source predictor uncertainty", "data_error_scale_ON": args.data_error_scale_on, "data_error_scale_OFF": args.data_error_scale_off, "model_fraction_ON": args.model_fraction_on, "model_fraction_OFF": args.model_fraction_off, "source_reference_definition": "band_scale * external_prediction; independent of z", "compact_mask_qa": store.compact_mask_qa, "compact_mask_identity": config["compact_mask_identity"], "compact_mask_semantics": "external-imaging ON/OFF union; if either band effective fiber position intersects the mask, both bands of that physical fiber are excluded", "compact_mask_basis": "external imaging morphology only; no VIRUS residual or Bayesian quantity used", "global_priors": {"gamma_sigma": args.gamma_sigma, "ifu_sigma": args.ifu_sigma, "eta_sigma": args.eta_sigma}, "variance_method": posterior.variance_method, "order_independence_max_abs_difference": order_error, "synthetic_validation": run_synthetic_validation(), "virus_synthetic_products": virus_synthetic_products, "contrast_definition": "scipy.linalg.helmert(full=False), iota sums zero per exposure and eta sums zero within each physical IFU", "additive_posterior_conditioning": "p and alpha are conditional on the hierarchy posterior mean z; local marginal moments remain in the evidence cache", "band_contrast": band_contrast, "split_alpha_diagnostic": split_alpha_diagnostic, "information_precision_qa": information_precision_qa, "qa_pre": pre_qa, "qa_post": post_qa, "no_production_calibration_applied": True}
+    output_started = time.perf_counter(); _write_solution(output, obs_rows, physical_rows, ifu_rows, exposure_rows, _history_rows(stages), metadata); _solution_csvs(output_dir, obs_rows, physical_rows, ifu_rows, exposure_rows); _write_csv(output_dir / "m101_bayes_error_model_diagnostic.csv", error_model_rows); _plot_outputs(output_dir, store, evidences, obs_rows, physical_rows, ifu_rows, exposure_rows, stages, posterior, z_grid, band_contrast, split_alpha_diagnostic, error_model_rows, pgood_matched_gallery, args.data_error_scale_on, args.data_error_scale_off, args.model_fraction_on, args.model_fraction_off, args.error_floor, args.error_floor_factor); _plot_error_model_diagnostic(output_dir, error_model_plot_data, error_model_rows); print("solution/CSV/plots: %.3f s" % (time.perf_counter() - output_started))
     p_values = np.asarray([e.p_good for e in evidences]); info_values = np.asarray([e.I_m for e in evidences]); eta5 = sum(row["P_abs_eta_gt_5pct"] > .95 for row in physical_rows); eta10 = sum(row["P_abs_eta_gt_10pct"] > .95 for row in physical_rows)
     gamma_values = np.asarray([row["gamma_mean"] for row in exposure_rows]); alpha_values = np.asarray([row["alpha_mean"] for row in obs_rows]);
-    summary = {"measurement_h5": str(store.path), "output": str(output), "amplifier_observations": len(evidences), "physical_ifus": len(ifu_rows), "persistent_physical_amplifiers": len(physical_rows), "exposures": len(exposure_rows), "evidence_cache": str(Path(args.evidence_cache).resolve()), "median_I_m": float(np.median(info_values)), "I_m_range": [float(np.min(info_values)), float(np.max(info_values))], "median_p_good": float(np.median(p_values)), "p_good_lt_0.5": int(np.sum(p_values < .5)), "p_good_lt_0.1": int(np.sum(p_values < .1)), "gamma_range": [float(np.min(gamma_values)), float(np.max(gamma_values))], "eta_P_gt_5pct_gt_0.95": int(eta5), "eta_P_gt_10pct_gt_0.95": int(eta10), "median_eta_sigma": float(np.median([r["eta_sigma"] for r in physical_rows])), "median_p": float(np.median([r["p_mean"] for r in obs_rows])), "median_alpha": float(np.median(alpha_values)), "alpha_range": [float(np.min(alpha_values)), float(np.max(alpha_values))], "grid_edge_flags": int(sum(e.grid_edge_flag for e in evidences)), "strong_split_preferences": int(sum(e.split_minus_joint_log_evidence > 5 for e in evidences)), "order_independence_max_abs_difference": order_error, "synthetic_validation": metadata["synthetic_validation"], "band_contrast": band_contrast, "split_alpha_diagnostic": split_alpha_diagnostic, "error_model_diagnostic": error_model_diagnostic, "qa_pre": pre_qa, "qa_post": post_qa, "total_runtime_seconds": time.perf_counter() - started}
+    summary = {"measurement_h5": str(store.path), "output": str(output), "amplifier_observations": len(evidences), "physical_ifus": len(ifu_rows), "persistent_physical_amplifiers": len(physical_rows), "exposures": len(exposure_rows), "evidence_cache": str(Path(args.evidence_cache).resolve()), "likelihood_error_model": "band-scaled statistical error plus fractional fixed-source predictor uncertainty", "data_error_scale_ON": args.data_error_scale_on, "data_error_scale_OFF": args.data_error_scale_off, "model_fraction_ON": args.model_fraction_on, "model_fraction_OFF": args.model_fraction_off, "source_reference_definition": "band_scale * external_prediction; independent of z", "compact_mask_qa": store.compact_mask_qa, "compact_mask_identity": config["compact_mask_identity"], "compact_mask_semantics": "external-imaging ON/OFF union; if either band effective fiber position intersects the mask, both bands of that physical fiber are excluded", "compact_mask_basis": "external imaging morphology only; no VIRUS residual or Bayesian quantity used", "compact_mask_qa_figure": str(output_dir / "m101_bayes_compact_mask_qa.png") if store.compact_mask_qa.get("enabled", False) else None, "virus_synthetic_products": virus_synthetic_products, "only_scientific_likelihood_change": "sigma_data -> sigma_eff", "median_I_m": float(np.median(info_values)), "I_m_range": [float(np.min(info_values)), float(np.max(info_values))], "median_p_good": float(np.median(p_values)), "p_good_lt_0.5": int(np.sum(p_values < .5)), "p_good_lt_0.1": int(np.sum(p_values < .1)), "gamma_range": [float(np.min(gamma_values)), float(np.max(gamma_values))], "eta_P_gt_5pct_gt_0.95": int(eta5), "eta_P_gt_10pct_gt_0.95": int(eta10), "median_eta_sigma": float(np.median([r["eta_sigma"] for r in physical_rows])), "median_p": float(np.median([r["p_mean"] for r in obs_rows])), "median_alpha": float(np.median(alpha_values)), "alpha_range": [float(np.min(alpha_values)), float(np.max(alpha_values))], "grid_edge_flags": int(sum(e.grid_edge_flag for e in evidences)), "strong_split_preferences": int(sum(e.split_minus_joint_log_evidence > 5 for e in evidences)), "fitted_delta_z_band": band_contrast["delta_z_band"], "fitted_delta_p_band": band_contrast["delta_p_band"], "p_good_matched_gallery": pgood_matched_gallery, "information_precision_qa": information_precision_qa, "order_independence_max_abs_difference": order_error, "synthetic_validation": metadata["synthetic_validation"], "band_contrast": band_contrast, "split_alpha_diagnostic": split_alpha_diagnostic, "error_model_diagnostic": error_model_diagnostic, "qa_pre": pre_qa, "qa_post": post_qa, "no_production_calibration_applied": True, "total_runtime_seconds": time.perf_counter() - started}
     (output_dir / "m101_bayes_summary.json").write_text(json.dumps(summary, indent=2, default=str)); print(json.dumps(summary, indent=2, default=str)); print("NO production files modified; no calibration correction was applied to measurements.")
 
 
