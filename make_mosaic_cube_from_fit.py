@@ -516,8 +516,12 @@ def main():
         raise ValueError("no H5 files matched: %s" % args.h5files)
     if any(Path(path).name == "20200523_0000023.h5" for path in h5files):
         raise ValueError("20200523_0000023.h5 is explicitly excluded from the M101 sample")
+    bayesian_read_started = time.perf_counter()
     calibration, fit_metadata, fit_provenance = _read_fit_calibration(args.fit_h5)
+    fit_provenance["read_seconds"] = time.perf_counter() - bayesian_read_started
+    matching_started = time.perf_counter()
     matches, input_amplifiers = _preflight_matches(h5files, calibration)
+    fit_provenance["matching_seconds"] = time.perf_counter() - matching_started
     print("Bayesian rows=%d; input amplifier observations=%d; matched=%d; unmatched=%d" %
           (fit_provenance["rows"], input_amplifiers, len(matches),
            input_amplifiers - len(matches)))
@@ -527,21 +531,25 @@ def main():
     print("Image grid: %d x %d at %.6g arcsec/pixel" % (n, n, args.pixel_scale))
     records = []
     total_fibers = 0
-    residual_started = time.perf_counter()
-    calibration_started = time.perf_counter()
+    virus_read_calibration_seconds = 0.0
+    residual_seconds = 0.0
     for h5file in h5files:
+        calibration_one_started = time.perf_counter()
         spectra, errors, ra, dec, labels, surveys = _calibrate_h5(
             h5file, matches, fq_template, tp, xg, yg)
+        virus_read_calibration_seconds += time.perf_counter() - calibration_one_started
         total_fibers += len(ra)
         residual_sky_started = time.perf_counter()
         spectra = subtract_m101_residual_sky(
             spectra, ra, dec, labels, xg, yg, tp, h5file=h5file.name)
-        print("residual sky %s: %.3f s" % (h5file.name, time.perf_counter() - residual_sky_started))
+        residual_one_seconds = time.perf_counter() - residual_sky_started
+        residual_seconds += residual_one_seconds
+        print("residual sky %s: %.3f s" % (h5file.name, residual_one_seconds))
         records.append({"h5file": h5file, "spectra": spectra.astype(np.float32),
                         "errors": errors.astype(np.float32), "ra": ra, "dec": dec,
                         "labels": labels, "surveys": surveys})
-    print("VIRUS H5 read/calibration: %.3f s" % (time.perf_counter() - calibration_started))
-    print("residual sky: %.3f s" % (time.perf_counter() - residual_started))
+    print("VIRUS H5 read/calibration: %.3f s" % virus_read_calibration_seconds)
+    print("residual sky: %.3f s" % residual_seconds)
 
     offsets = []
     offset = 0
@@ -576,7 +584,7 @@ def main():
     weightcube = np.zeros_like(cube)
     ncontribcube = np.zeros((len(DEF_WAVE), n, n), dtype=np.uint8)
     dqcube = np.zeros((len(DEF_WAVE), n, n), dtype=np.uint16)
-    variance_started = time.perf_counter()
+    reconstruction_started = time.perf_counter()
 
     def render_wavelength(index):
         x, y = tp.wcs_world2pix(raarray[:, index], decarray[:, index], 1)
@@ -590,7 +598,8 @@ def main():
             image, variance, coverage, ncontrib, dq, _ = result
             cube[index] = image; variancecube[index] = variance; weightcube[index] = coverage
             ncontribcube[index] = ncontrib; dqcube[index] = dq
-    print("wavelength-plane reconstruction: %.3f s" % (time.perf_counter() - variance_started))
+    reconstruction_seconds = time.perf_counter() - reconstruction_started
+    print("wavelength-plane reconstruction: %.3f s" % reconstruction_seconds)
 
     p_values = np.asarray([float(matches[key]["p_good"]) for key in matches
                            if np.isfinite(float(matches[key]["p_good"]))])
@@ -636,8 +645,17 @@ def main():
                                     "sigma_pixels": (GAUSSIAN_FWHM_ARCSEC / 2.35) / args.pixel_scale,
                                     "shots": len(shot_indices)},
         "synthetic_validation": synthetic,
-        "timing_seconds": {"total_before_write": time.perf_counter() - started},
+        "timing_seconds": {
+            "bayesian_h5_read": fit_provenance.get("read_seconds", np.nan),
+            "calibration_key_matching": fit_provenance.get("matching_seconds", np.nan),
+            "virus_h5_read_calibration": virus_read_calibration_seconds,
+            "residual_sky": residual_seconds,
+            "adr_construction": time.perf_counter() - adr_started,
+            "wavelength_plane_reconstruction": reconstruction_seconds,
+            "total_before_write": time.perf_counter() - started,
+        },
         "no_calibration_fitting_or_optimization": True,
+        "no_production_calibration_applied": True,
     }
     writing_started = time.perf_counter()
     _write_cube_products(args.surname, cube, variancecube, dqcube, weightcube,
