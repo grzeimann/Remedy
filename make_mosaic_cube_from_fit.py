@@ -9,8 +9,10 @@ from a completed Bayesian solution H5.
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+import csv
 from datetime import datetime, timezone
 import glob
+import gzip
 import json
 from pathlib import Path
 import time
@@ -119,6 +121,106 @@ def _read_fit_calibration(path):
                                    "delta_p_band": float(delta_p)}
 
 
+def _parse_external_blank_bool(value):
+    value = str(value).strip().lower()
+    if value in {"true", "1"}:
+        return True
+    if value in {"false", "0"}:
+        return False
+    raise ValueError("external blank table has ambiguous blank value: %r" % value)
+
+
+def _load_external_blank_fibers(path, h5files):
+    """Load one complete external blank mask per input H5 by basename/row."""
+    path = Path(path).expanduser().resolve()
+    if not path.exists():
+        raise ValueError("external blank-fiber table does not exist: %s" % path)
+    input_by_name = {}
+    masks = {}
+    labels_by_name = {}
+    for h5file in h5files:
+        name = h5file.name
+        if name in input_by_name:
+            raise ValueError("input H5 basenames are ambiguous: %s" % name)
+        with tables.open_file(h5file, mode="r") as h5:
+            if "/Info" not in h5:
+                raise ValueError("input H5 has no Info table: %s" % h5file)
+            info = h5.root.Info
+            groups, labels = validated_m101.build_groups(info)
+            del groups
+            nrows = int(info.nrows)
+        input_by_name[name] = h5file
+        masks[name] = {"seen": np.zeros(nrows, dtype=bool),
+                       "blank": np.zeros(nrows, dtype=bool)}
+        labels_by_name[name] = np.asarray(labels, dtype=int)
+
+    opener = gzip.open if path.suffix == ".gz" else open
+    rows_parsed = 0
+    matching_rows = 0
+    extra_rows = 0
+    extra_h5_names = set()
+    with opener(path, "rt", newline="") as stream:
+        reader = csv.DictReader(stream)
+        required = {"H5", "exposure", "row_index", "blank"}
+        fields = set(reader.fieldnames or ())
+        missing = required - fields
+        if missing:
+            raise ValueError("external blank table lacks columns: %s" % sorted(missing))
+        for row in reader:
+            rows_parsed += 1
+            h5_name = Path(str(row["H5"]).strip()).name
+            if h5_name not in input_by_name:
+                extra_rows += 1
+                extra_h5_names.add(h5_name)
+                continue
+            matching_rows += 1
+            try:
+                row_index = int(str(row["row_index"]).strip())
+                exposure = int(str(row["exposure"]).strip())
+            except (TypeError, ValueError) as exc:
+                raise ValueError("invalid row_index/exposure for %s row %d" %
+                                 (h5_name, rows_parsed)) from exc
+            state = masks[h5_name]
+            if row_index < 0 or row_index >= state["seen"].size:
+                raise ValueError("external blank row_index %d is out of range for %s" %
+                                 (row_index, h5_name))
+            if state["seen"][row_index]:
+                raise ValueError("duplicate external blank row for %s row_index %d" %
+                                 (h5_name, row_index))
+            if exposure != labels_by_name[h5_name][row_index]:
+                raise ValueError("external blank exposure mismatch for %s row_index %d: "
+                                 "CSV=%d H5=%d" %
+                                 (h5_name, row_index, exposure,
+                                  labels_by_name[h5_name][row_index]))
+            state["blank"][row_index] = _parse_external_blank_bool(row["blank"])
+            state["seen"][row_index] = True
+
+    for h5_name, state in masks.items():
+        if not np.all(state["seen"]):
+            missing_rows = int(np.sum(~state["seen"]))
+            raise ValueError("external blank table is incomplete for %s: %d Info rows missing" %
+                             (h5_name, missing_rows))
+
+    result = {name: state["blank"] for name, state in masks.items()}
+    matched_blank = int(sum(np.sum(mask) for mask in result.values()))
+    matched_total = int(sum(mask.size for mask in result.values()))
+    provenance = {
+        "path": str(path),
+        "identity": _file_identity(path),
+        "compressed_file_size_bytes": int(path.stat().st_size),
+        "rows": rows_parsed,
+        "matched_rows": matching_rows,
+        "blank_rows": matched_blank,
+        "nonblank_rows": matched_total - matched_blank,
+        "h5_files_represented": len(input_by_name) + len(extra_h5_names),
+        "input_h5_files_matched": len(input_by_name),
+        "ignored_extra_h5_files": len(extra_h5_names),
+        "ignored_extra_h5_names": sorted(extra_h5_names),
+        "matching_identity": "H5 basename + row_index; CSV exposure cross-checked against validated labels",
+    }
+    return result, provenance
+
+
 def _preflight_matches(h5files, calibration):
     """Match every input amplifier by explicit identity, never row order."""
     started = time.perf_counter()
@@ -164,12 +266,18 @@ def _parse_image_geometry(value, pixel_scale):
     return ra, dec, size_arcsec, n, xg, yg, xgrid, ygrid, tp
 
 
-def subtract_m101_residual_sky(spectra, ra, dec, labels, xg, yg, tp, log=None, h5file=""):
+def subtract_m101_residual_sky(spectra, ra, dec, labels, xg, yg, tp,
+                               external_blank=None, log=None, h5file="",
+                               selection_records=None):
     """The established M101 radial/finite-spectrum residual-sky correction."""
     n_fib, n_wave = spectra.shape
     labels = np.asarray(labels, dtype=int)
     if labels.shape != (n_fib,):
         raise ValueError("residual-sky exposure labels do not match spectra")
+    if external_blank is not None:
+        external_blank = np.asarray(external_blank, dtype=bool)
+        if external_blank.shape != (n_fib,):
+            raise ValueError("external blank mask does not match spectra")
     dra_arcmin = ((ra - M101_RA_DEG) * np.cos(np.deg2rad(M101_DEC_DEG)) * 60.0)
     ddec_arcmin = (dec - M101_DEC_DEG) * 60.0
     sky_region = np.hypot(dra_arcmin, ddec_arcmin) > M101_SKY_MIN_RADIUS_ARCMIN
@@ -185,8 +293,33 @@ def subtract_m101_residual_sky(spectra, ra, dec, labels, xg, yg, tp, log=None, h
         finite_counts = np.isfinite(spectra[exposure_indices]).sum(axis=1)
         sufficient = finite_counts >= int(np.ceil(M101_SKY_MIN_FINITE_FRACTION * n_wave))
         sky_mask = np.zeros(n_fib, dtype=bool)
-        sky_mask[exposure_indices] = sky_region[exposure_indices] & in_region[exposure_indices] & sufficient
+        if external_blank is None:
+            sky_mask[exposure_indices] = (sky_region[exposure_indices] &
+                                          in_region[exposure_indices] & sufficient)
+            selection = "radial_fallback"
+            external_candidates = np.nan
+            finite_blank_candidates = np.nan
+        else:
+            external_candidates = int(np.sum(external_blank[exposure_indices]))
+            finite_blank_candidates = int(np.sum(external_blank[exposure_indices] & sufficient))
+            sky_mask[exposure_indices] = external_blank[exposure_indices] & sufficient
+            selection = "external_blank"
         selected = int(np.sum(sky_mask))
+        selected_inside = int(np.sum(sky_mask & ~sky_region))
+        selected_outside = int(np.sum(sky_mask & sky_region))
+        if selection_records is not None:
+            selection_records.append({
+                "H5": h5file, "exposure": exposure_index + 1,
+                "selection": selection,
+                "exposure_fibers": int(exposure_indices.size),
+                "external_blank_candidates": external_candidates,
+                "finite_blank_candidates": finite_blank_candidates,
+                "selected_sky_fibers": selected,
+                "selected_inside_6arcmin": selected_inside,
+                "selected_outside_6arcmin": selected_outside,
+                "minimum_finite_fraction": M101_SKY_MIN_FINITE_FRACTION,
+                "minimum_sky_fibers": M101_SKY_MIN_FIBERS,
+            })
         if selected < M101_SKY_MIN_FIBERS:
             if log is not None:
                 log.warning("M101 residual sky %s exposure %d skipped: only %d candidates (minimum %d)",
@@ -447,6 +580,13 @@ def _write_cube_products(surname, cube, variancecube, dqcube, weightcube, ncontr
             "Residual sky applied after Bayesian amplifier calibration.",
             "Gaussian subpixel reconstruction; NCONTRIB >= 2 required for valid SCI."):
         header.add_history(text)
+    selection = summary.get("residual_sky_selection", {})
+    if selection.get("method") == "external_blank_fiber_table":
+        header.add_history("Residual sky fibers selected from external blank-fiber table.")
+        header.add_history("External blank classification replaces the 6 arcmin source-selection cut.")
+        header.add_history("Residual spectrum remains one biweight spectrum per H5 exposure.")
+    else:
+        header.add_history("Residual sky fibers selected using radial fallback r > 6 arcmin.")
     header.add_history("Bayesian fit H5 identity: %s" % fit_provenance["identity"])
     header.add_history("delta_z_band=%0.12g and delta_p_band=%0.12g were provenance only." %
                        (fit_provenance["delta_z_band"], fit_provenance["delta_p_band"]))
@@ -502,6 +642,7 @@ def main():
     parser.add_argument("--fq-template", required=True, help="fixed q,f template CSV")
     parser.add_argument("--pixel-scale", type=float, default=1.0, help="output pixel scale in arcsec")
     parser.add_argument("--wave-workers", type=int, default=1, help="wavelength reconstruction threads")
+    parser.add_argument("--external-blank-fibers", help="validated external blank-fiber CSV or CSV.GZ")
     args = parser.parse_args()
     if args.pixel_scale <= 0 or not np.isfinite(args.pixel_scale):
         parser.error("--pixel-scale must be finite and positive")
@@ -514,6 +655,22 @@ def main():
         raise ValueError("no H5 files matched: %s" % args.h5files)
     if any(Path(path).name == "20200523_0000023.h5" for path in h5files):
         raise ValueError("20200523_0000023.h5 is explicitly excluded from the M101 sample")
+    external_blank_by_h5 = None
+    if args.external_blank_fibers:
+        external_started = time.perf_counter()
+        external_blank_by_h5, blank_provenance = _load_external_blank_fibers(
+            args.external_blank_fibers, h5files)
+        blank_provenance["load_seconds"] = time.perf_counter() - external_started
+        print("Residual sky selector: external blank table %s" %
+              blank_provenance["path"])
+        print("external blank table: rows=%d; matched H5 files=%d; ignored extra H5 files=%d; "
+              "blank=%d; nonblank=%d; load/validation=%.3f s" %
+              (blank_provenance["rows"], blank_provenance["input_h5_files_matched"],
+               blank_provenance["ignored_extra_h5_files"], blank_provenance["blank_rows"],
+               blank_provenance["nonblank_rows"], blank_provenance["load_seconds"]))
+    else:
+        blank_provenance = None
+        print("Residual sky selector: radial fallback r > 6 arcmin")
     bayesian_read_started = time.perf_counter()
     calibration, _fit_metadata, fit_provenance = _read_fit_calibration(args.fit_h5)
     fit_provenance["read_seconds"] = time.perf_counter() - bayesian_read_started
@@ -531,6 +688,7 @@ def main():
     total_fibers = 0
     virus_read_calibration_seconds = 0.0
     residual_seconds = 0.0
+    residual_selection_records = []
     for h5file in h5files:
         calibration_one_started = time.perf_counter()
         spectra, errors, ra, dec, labels, surveys = _calibrate_h5(
@@ -538,11 +696,23 @@ def main():
         virus_read_calibration_seconds += time.perf_counter() - calibration_one_started
         total_fibers += len(ra)
         residual_sky_started = time.perf_counter()
+        blank_mask = None if external_blank_by_h5 is None else external_blank_by_h5[h5file.name]
         spectra = subtract_m101_residual_sky(
-            spectra, ra, dec, labels, xg, yg, tp, h5file=h5file.name)
+            spectra, ra, dec, labels, xg, yg, tp, external_blank=blank_mask,
+            h5file=h5file.name, selection_records=residual_selection_records)
         residual_one_seconds = time.perf_counter() - residual_sky_started
         residual_seconds += residual_one_seconds
         print("residual sky %s: %.3f s" % (h5file.name, residual_one_seconds))
+        if external_blank_by_h5 is not None:
+            for row in residual_selection_records:
+                if row["H5"] == h5file.name:
+                    print("residual sky %s exposure %d: selection=%s; exposure fibers=%d; "
+                          "external blank candidates=%d; finite blank candidates=%d; "
+                          "selected sky fibers=%d; selected inside/outside 6 arcmin=%d/%d" %
+                          (row["H5"], row["exposure"], row["selection"],
+                           row["exposure_fibers"], row["external_blank_candidates"],
+                           row["finite_blank_candidates"], row["selected_sky_fibers"],
+                           row["selected_inside_6arcmin"], row["selected_outside_6arcmin"]))
         records.append({"h5file": h5file, "spectra": spectra.astype(np.float32),
                         "errors": errors.astype(np.float32), "ra": ra, "dec": dec,
                         "labels": labels, "surveys": surveys})
@@ -604,6 +774,24 @@ def main():
     z_values = np.asarray([float(record["posterior_z_mean"]) for record in calibration.values()])
     pmean_values = np.asarray([float(record["p_mean"]) for record in calibration.values()])
     alpha_values = np.asarray([float(record["alpha_mean"]) for record in calibration.values()])
+    if external_blank_by_h5 is not None:
+        residual_selection = {
+            "method": "external_blank_fiber_table",
+            **blank_provenance,
+            "radial_cut_applied": False,
+            "minimum_finite_fraction": M101_SKY_MIN_FINITE_FRACTION,
+            "minimum_sky_fibers": M101_SKY_MIN_FIBERS,
+            "per_h5_exposure_counts": residual_selection_records,
+        }
+    else:
+        residual_selection = {
+            "method": "radial_fallback",
+            "minimum_radius_arcmin": M101_SKY_MIN_RADIUS_ARCMIN,
+            "radial_cut_applied": True,
+            "minimum_finite_fraction": M101_SKY_MIN_FINITE_FRACTION,
+            "minimum_sky_fibers": M101_SKY_MIN_FIBERS,
+            "per_h5_exposure_counts": residual_selection_records,
+        }
     fit_summary = {
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "script": str(Path(__file__).resolve()),
@@ -635,6 +823,7 @@ def main():
         "second_gray_normalization_applied": False,
         "external_valid_used_as_cube_mask": False,
         "compact_external_mask_used_as_cube_mask": False,
+        "residual_sky_selection": residual_selection,
         "hardware_date_masks": "validated_m101.masked_rows only",
         "calibration_equation": "(Fibers.spectrum/Survey.offset-p_mean-alpha_mean*K(lambda)*f(q)+Fibers.skyspectrum)/exp(posterior_z_mean)-Fibers.skyspectrum",
         "error_equation": "error_work/exp(posterior_z_mean), with error_work=Fibers.error/abs(Survey.offset)",
