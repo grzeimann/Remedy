@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Build the frozen compact two-band M101 measurement product.
+"""Build the frozen compact M101 measurement product.
 
 Each row in ``m101_measurements.h5:/measurements`` is one native VIRUS fiber
-observation.  ON and OFF values are stored side-by-side, with band index 0
-always ON and band index 1 always OFF.
+observation.  The product contains two ON/OFF external-source measurement
+bands, five internally defined sky-null spectral bands, and an independently
+derived external blank-fiber flag.  ON and OFF values are stored side-by-side,
+with band index 0 always ON and band index 1 always OFF.
 
     D = synthetic collapse of Fibers.spectrum / Survey.offset
     B = synthetic collapse of Fibers.skyspectrum, without division
@@ -13,14 +15,28 @@ always ON and band index 1 always OFF.
     q = distance from the physical amplifier readout edge
     fq = fixed f(q) template value
 
+The five sky-null bands are deterministic top-hat means of the native VIRUS
+wavelength grid.  Their primitive data, errors, Quick Reduction sky values,
+response completeness, and exposure-level blank-fiber QA are frozen for
+future blank-fiber likelihood constraints.  They are not fitted or zeroed by
+this builder.  The persisted external blank classification is consumed as an
+input and does not remove measurement rows.
+
 No fitted M101 alpha, s_response, residual-sky correction, spatial plane,
-beta, exposure gray, or source/blank criterion is applied.  Future fitting
+beta, exposure gray, or source threshold is applied.  Future fitting
 can therefore use the compact product without reopening full spectra.
+
+For an externally blank row, the future null constraint is represented by the
+stored primitives ``D_null = p + alpha H_null`` with ``P_null = 0``.  This
+builder only stores ``D_null``, its propagated error, the primitive Quick
+Reduction sky, ``K_null``, and the external ``sky_blank`` flag; it does not
+fit those terms or subtract, center, or zero the null measurements.
 """
 
 from argparse import ArgumentParser
 import csv
 from datetime import datetime, timezone
+import gzip
 import hashlib
 import json
 import os
@@ -45,7 +61,24 @@ N_FIBER_AMP = 112
 EXCLUDED_H5 = "20200523_0000023.h5"
 EXPECTED_H5_COUNT = 19
 EXPECTED_EXPOSURE_COUNT = 57
-SCHEMA_VERSION = "m101_measurements_v1"
+SKY_NULL_BANDS = (
+    "NULL_HIGH1",
+    "NULL_LOW1",
+    "NULL_HIGH2",
+    "NULL_LOW2",
+    "NULL_HIGH3",
+)
+SKY_NULL_WINDOWS_A = (
+    (3538.0, 3550.0),
+    (3602.0, 3614.0),
+    (3628.0, 3640.0),
+    (3676.0, 3688.0),
+    (3902.0, 3914.0),
+)
+N_SKY_NULL_BANDS = len(SKY_NULL_BANDS)
+EXPECTED_VIRUS_WAVE = np.linspace(3470.0, 5540.0, 1036)
+SCHEMA_VERSION = "m101_measurements_v2"
+SCIENTIFIC_MODEL_VERSION = "primitive_measurements_with_external_blank_null_bands_v2"
 
 
 class MeasurementDescription(tables.IsDescription):
@@ -81,6 +114,18 @@ class MeasurementDescription(tables.IsDescription):
     finite_external = tables.BoolCol(shape=(N_BANDS,), pos=29)
     data_response_fraction = tables.Float64Col(shape=(N_BANDS,), pos=30)
     sky_response_fraction = tables.Float64Col(shape=(N_BANDS,), pos=31)
+    sky_blank = tables.BoolCol(pos=32)
+    sky_null_data_native = tables.Float64Col(shape=(N_SKY_NULL_BANDS,), pos=33)
+    sky_null_data_work = tables.Float64Col(shape=(N_SKY_NULL_BANDS,), pos=34)
+    sky_null_error_native = tables.Float64Col(shape=(N_SKY_NULL_BANDS,), pos=35)
+    sky_null_error_work = tables.Float64Col(shape=(N_SKY_NULL_BANDS,), pos=36)
+    sky_null_sky = tables.Float64Col(shape=(N_SKY_NULL_BANDS,), pos=37)
+    sky_null_finite_data_native = tables.BoolCol(shape=(N_SKY_NULL_BANDS,), pos=38)
+    sky_null_finite_data_work = tables.BoolCol(shape=(N_SKY_NULL_BANDS,), pos=39)
+    sky_null_finite_error = tables.BoolCol(shape=(N_SKY_NULL_BANDS,), pos=40)
+    sky_null_finite_sky = tables.BoolCol(shape=(N_SKY_NULL_BANDS,), pos=41)
+    sky_null_data_response_fraction = tables.Float64Col(shape=(N_SKY_NULL_BANDS,), pos=42)
+    sky_null_sky_response_fraction = tables.Float64Col(shape=(N_SKY_NULL_BANDS,), pos=43)
 
 
 class ExposureBandDescription(tables.IsDescription):
@@ -108,6 +153,19 @@ class ExposureBandDescription(tables.IsDescription):
     n_finite_sky = tables.Int64Col(shape=(N_BANDS,), pos=21)
     n_external_valid = tables.Int64Col(shape=(N_BANDS,), pos=22)
     production_state = tables.Int16Col(pos=23)
+
+
+class SkyNullExposureDescription(tables.IsDescription):
+    h5_id = tables.Int16Col(pos=0)
+    exposure = tables.UInt8Col(pos=1)
+    K = tables.Float64Col(shape=(N_SKY_NULL_BANDS,), pos=2)
+    blank_data_work_location = tables.Float64Col(shape=(N_SKY_NULL_BANDS,), pos=3)
+    blank_data_work_scale = tables.Float64Col(shape=(N_SKY_NULL_BANDS,), pos=4)
+    n_blank_external = tables.Int64Col(pos=5)
+    n_blank_usable = tables.Int64Col(shape=(N_SKY_NULL_BANDS,), pos=6)
+    data_finite_fraction = tables.Float64Col(shape=(N_SKY_NULL_BANDS,), pos=7)
+    error_finite_fraction = tables.Float64Col(shape=(N_SKY_NULL_BANDS,), pos=8)
+    sky_finite_fraction = tables.Float64Col(shape=(N_SKY_NULL_BANDS,), pos=9)
 
 
 class H5InputDescription(tables.IsDescription):
@@ -161,6 +219,162 @@ def _small_file_hash(path):
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _validate_sky_null_responses():
+    """Construct the frozen inclusive top-hats on the canonical VIRUS grid."""
+    wave = np.asarray(hm.DEF_WAVE, dtype=float)
+    if wave.shape != EXPECTED_VIRUS_WAVE.shape or not np.array_equal(
+            wave, EXPECTED_VIRUS_WAVE):
+        raise ValueError("hm.DEF_WAVE is not the expected 1036-sample VIRUS grid "
+                         "from 3470.0 to 5540.0 A")
+    responses = []
+    actual = {}
+    for name, (lower, upper) in zip(SKY_NULL_BANDS, SKY_NULL_WINDOWS_A):
+        if not np.isfinite(lower) or not np.isfinite(upper) or lower > upper:
+            raise ValueError("invalid sky-null window for %s" % name)
+        response = np.where((wave >= lower) & (wave <= upper), 1.0, 0.0)
+        samples = wave[response != 0.0]
+        if samples.size < 3 or np.sum(response) <= 0.0:
+            raise ValueError("sky-null window %s contains too few VIRUS samples" % name)
+        if np.any(samples < lower) or np.any(samples > upper):
+            raise ValueError("sky-null response escaped requested bounds for %s" % name)
+        responses.append(response)
+        actual[name] = {
+            "requested_bounds_A": [float(lower), float(upper)],
+            "samples_A": [float(value) for value in samples],
+            "minimum_A": float(samples.min()),
+            "maximum_A": float(samples.max()),
+            "center_A": float(np.mean(samples)),
+            "n_samples": int(samples.size),
+            "total_weight": float(np.sum(response)),
+        }
+    provenance = {
+        "wave_grid": {"array": "hm.DEF_WAVE", "start_A": float(wave[0]),
+                      "stop_A": float(wave[-1]), "n_samples": int(wave.size),
+                      "step_A": float(wave[1] - wave[0])},
+        "band_order": list(SKY_NULL_BANDS),
+        "requested_windows_A": [list(window) for window in SKY_NULL_WINDOWS_A],
+        "bands": actual,
+        "response_definition": "1 inside inclusive requested limits, 0 outside",
+        "blank_usable_definition": "sky_blank AND not date_mask_bad AND finite sky_null_data_work AND finite sky_null_error_work AND sky_null_error_work > 0",
+        "blank_finite_fraction_definition": "fractions are among sky_blank AND not date_mask_bad rows for each exposure and null band",
+    }
+    return np.asarray(responses, dtype=float), provenance
+
+
+def _parse_external_blank_bool(value):
+    value = str(value).strip().lower()
+    if value in {"true", "1"}:
+        return True
+    if value in {"false", "0"}:
+        return False
+    raise ValueError("external blank table has ambiguous blank value: %r" % value)
+
+
+def _load_external_blank_fibers(path, h5_paths):
+    """Load a complete external blank mask per requested H5 basename/row."""
+    path = Path(path).expanduser().resolve()
+    if not path.is_file():
+        raise ValueError("external blank-fiber table does not exist: %s" % path)
+    input_by_name = {}
+    masks = {}
+    labels_by_name = {}
+    for h5_path in h5_paths:
+        name = h5_path.name
+        if name in input_by_name:
+            raise ValueError("input H5 basenames are ambiguous: %s" % name)
+        with tables.open_file(h5_path, mode="r") as h5:
+            if "Info" not in h5.root._v_children:
+                raise ValueError("input H5 has no Info table: %s" % h5_path)
+            info = h5.root.Info
+            groups, labels = hm.build_groups(info)
+            del groups
+            nrows = int(info.nrows)
+        input_by_name[name] = h5_path
+        masks[name] = {"seen": np.zeros(nrows, dtype=bool),
+                       "blank": np.zeros(nrows, dtype=bool)}
+        labels_by_name[name] = np.asarray(labels, dtype=int)
+
+    opener = gzip.open if path.suffix == ".gz" else open
+    rows_parsed = 0
+    matching_rows = 0
+    extra_h5_names = set()
+    extra_seen = set()
+    with opener(path, "rt", newline="") as stream:
+        reader = csv.DictReader(stream)
+        required = {"H5", "exposure", "row_index", "blank"}
+        fields = set(reader.fieldnames or ())
+        missing = required - fields
+        if missing:
+            raise ValueError("external blank table lacks columns: %s" % sorted(missing))
+        for row in reader:
+            rows_parsed += 1
+            if row.get(None) is not None:
+                raise ValueError("malformed external blank CSV row %d has extra fields" % rows_parsed)
+            raw_h5 = str(row.get("H5", "")).strip()
+            if not raw_h5:
+                raise ValueError("external blank CSV row %d has an empty H5" % rows_parsed)
+            h5_name = Path(raw_h5).name
+            try:
+                row_index = int(str(row.get("row_index", "")).strip())
+                exposure = int(str(row.get("exposure", "")).strip())
+            except (TypeError, ValueError) as exc:
+                raise ValueError("invalid row_index/exposure for %s row %d" %
+                                 (h5_name, rows_parsed)) from exc
+            if row_index < 0 or exposure < 1 or exposure > N_EXPOSURES:
+                raise ValueError("invalid row_index/exposure for %s row %d" %
+                                 (h5_name, rows_parsed))
+            blank = _parse_external_blank_bool(row.get("blank"))
+            if h5_name not in input_by_name:
+                extra_key = (h5_name, row_index)
+                if extra_key in extra_seen:
+                    raise ValueError("duplicate external blank row for %s row_index %d" %
+                                     (h5_name, row_index))
+                extra_seen.add(extra_key)
+                extra_h5_names.add(h5_name)
+                continue
+            matching_rows += 1
+            state = masks[h5_name]
+            if row_index >= state["seen"].size:
+                raise ValueError("external blank row_index %d is out of range for %s" %
+                                 (row_index, h5_name))
+            if state["seen"][row_index]:
+                raise ValueError("duplicate external blank row for %s row_index %d" %
+                                 (h5_name, row_index))
+            expected_exposure = labels_by_name[h5_name][row_index]
+            if exposure != expected_exposure:
+                raise ValueError("external blank exposure mismatch for %s row_index %d: "
+                                 "CSV=%d H5=%d" %
+                                 (h5_name, row_index, exposure, expected_exposure))
+            state["blank"][row_index] = blank
+            state["seen"][row_index] = True
+
+    for h5_name, state in masks.items():
+        if not np.all(state["seen"]):
+            missing_rows = int(np.sum(~state["seen"]))
+            raise ValueError("external blank table is incomplete for %s: %d Info rows missing" %
+                             (h5_name, missing_rows))
+
+    result = {name: state["blank"] for name, state in masks.items()}
+    matched_blank = int(sum(np.sum(mask) for mask in result.values()))
+    matched_total = int(sum(mask.size for mask in result.values()))
+    provenance = {
+        "path": str(path),
+        "identity": _file_identity(path),
+        "sha256": _small_file_hash(path),
+        "rows": rows_parsed,
+        "matched_rows": matching_rows,
+        "blank_rows": matched_blank,
+        "nonblank_rows": matched_total - matched_blank,
+        "h5_files_represented": len(input_by_name) + len(extra_h5_names),
+        "input_h5_files_matched": len(input_by_name),
+        "ignored_extra_h5_files": len(extra_h5_names),
+        "ignored_extra_h5_names": sorted(extra_h5_names),
+        "matching_identity": "H5 basename + row_index; CSV exposure cross-checked against validated labels",
+        "classification_semantics": "externally derived classification consumed as input; no VIRUS spectral quantity used to define blankness",
+    }
+    return result, provenance
 
 
 def _git_commit():
@@ -332,7 +546,8 @@ def _preflight(h5_paths, development):
 
 def _row_arrays(h5_id, path, calibration, filters, fq, g_global, table, exposure,
                 survey, groups, labels, ra_all, dec_all, amps_all, date_bad_all,
-                specid_all, slot_all, uid_all, fibers):
+                specid_all, slot_all, uid_all, fibers, null_responses,
+                external_blank):
     """Read one exposure, collapse primitives, and return a compact batch."""
     exp_indices = np.flatnonzero(labels == exposure)
     source = np.asarray(fibers.read_coordinates(exp_indices, field="spectrum"), dtype=float)
@@ -349,6 +564,21 @@ def _row_arrays(h5_id, path, calibration, filters, fq, g_global, table, exposure
     error_native = np.column_stack([column[0] for column in error_columns])
     sky = np.column_stack([column[0] for column in sky_columns])
     sky_fraction = np.column_stack([column[1] for column in sky_columns])
+    null_data_columns = [_collapse_with_fraction(source, response)
+                         for response in null_responses]
+    null_error_columns = [_collapse_error(error, response)
+                          for response in null_responses]
+    null_sky_columns = [_collapse_with_fraction(sky_native, response)
+                        for response in null_responses]
+    sky_null_data_native = np.column_stack([column[0] for column in null_data_columns])
+    sky_null_data_fraction = np.column_stack([column[1] for column in null_data_columns])
+    sky_null_error_native = np.column_stack([column[0] for column in null_error_columns])
+    sky_null_sky = np.column_stack([column[0] for column in null_sky_columns])
+    sky_null_sky_fraction = np.column_stack([column[1] for column in null_sky_columns])
+    sky_null_blank = np.asarray(external_blank[exp_indices], dtype=bool)
+    if sky_null_blank.shape != (exp_indices.size,):
+        raise ValueError("external blank mask does not match %s exposure %d" %
+                         (path, exposure))
     sample = np.arange(min(8, len(source)))
     direct_data = np.column_stack([hm.synthetic_mean(source[sample], filters[b]) for b in BANDS])
     direct_error = np.column_stack([_collapse_error(error[sample], filters[b])[0] for b in BANDS])
@@ -361,8 +591,29 @@ def _row_arrays(h5_id, path, calibration, filters, fq, g_global, table, exposure
         "sky_abs": float(np.nanmax(np.abs(direct_sky - sky[sample]))) if sample.size else np.nan,
         "sky_rel": _max_abs_relative(direct_sky, sky[sample]),
     }
+    direct_null_data = np.column_stack([
+        hm.synthetic_mean(source[sample], response) for response in null_responses])
+    direct_null_error = np.column_stack([
+        _collapse_error(error[sample], response)[0] for response in null_responses])
+    direct_null_sky = np.column_stack([
+        hm.synthetic_mean(sky_native[sample], response) for response in null_responses])
+    direct_null_spot = {
+        "null_data_native_abs": float(np.nanmax(
+            np.abs(direct_null_data - sky_null_data_native[sample]))) if sample.size else np.nan,
+        "null_data_native_rel": _max_abs_relative(
+            direct_null_data, sky_null_data_native[sample]),
+        "null_error_native_abs": float(np.nanmax(
+            np.abs(direct_null_error - sky_null_error_native[sample]))) if sample.size else np.nan,
+        "null_error_native_rel": _max_abs_relative(
+            direct_null_error, sky_null_error_native[sample]),
+        "null_sky_abs": float(np.nanmax(
+            np.abs(direct_null_sky - sky_null_sky[sample]))) if sample.size else np.nan,
+        "null_sky_rel": _max_abs_relative(direct_null_sky, sky_null_sky[sample]),
+    }
     data_work = data_native / offset
     error_work = error_native / abs(offset)
+    sky_null_data_work = sky_null_data_native / offset
+    sky_null_error_work = sky_null_error_native / abs(offset)
     del source, error, sky_native
 
     effective = []
@@ -431,6 +682,35 @@ def _row_arrays(h5_id, path, calibration, filters, fq, g_global, table, exposure
     batch["finite_external"] = np.isfinite(external_raw)
     batch["data_response_fraction"] = data_fraction
     batch["sky_response_fraction"] = sky_fraction
+    batch["sky_blank"] = sky_null_blank
+    batch["sky_null_data_native"] = sky_null_data_native
+    batch["sky_null_data_work"] = sky_null_data_work
+    batch["sky_null_error_native"] = sky_null_error_native
+    batch["sky_null_error_work"] = sky_null_error_work
+    batch["sky_null_sky"] = sky_null_sky
+    batch["sky_null_finite_data_native"] = np.isfinite(sky_null_data_native)
+    batch["sky_null_finite_data_work"] = np.isfinite(sky_null_data_work)
+    batch["sky_null_finite_error"] = np.isfinite(sky_null_error_native)
+    batch["sky_null_finite_sky"] = np.isfinite(sky_null_sky)
+    batch["sky_null_data_response_fraction"] = sky_null_data_fraction
+    batch["sky_null_sky_response_fraction"] = sky_null_sky_fraction
+    null_candidate = sky_null_blank & ~date_bad_all[exp_indices]
+    null_usable = (null_candidate[:, None] &
+                   np.isfinite(sky_null_data_work) &
+                   np.isfinite(sky_null_error_work) &
+                   (sky_null_error_work > 0.0))
+    null_data_finite_fraction = np.asarray([
+        np.mean(np.isfinite(sky_null_data_work[null_candidate, index]))
+        if np.any(null_candidate) else np.nan
+        for index in range(N_SKY_NULL_BANDS)])
+    null_error_finite_fraction = np.asarray([
+        np.mean(np.isfinite(sky_null_error_work[null_candidate, index]))
+        if np.any(null_candidate) else np.nan
+        for index in range(N_SKY_NULL_BANDS)])
+    null_sky_finite_fraction = np.asarray([
+        np.mean(np.isfinite(sky_null_sky[null_candidate, index]))
+        if np.any(null_candidate) else np.nan
+        for index in range(N_SKY_NULL_BANDS)])
     metadata = {
         "h5_id": h5_id, "exposure": exposure, "n_fibers": int(exp_indices.size),
         "survey": survey, "K": k, "g_global": np.asarray(g_global, dtype=float),
@@ -442,9 +722,22 @@ def _row_arrays(h5_id, path, calibration, filters, fq, g_global, table, exposure
         "n_finite_data": np.sum(np.isfinite(data_native), axis=0).astype(np.int64),
         "n_finite_sky": np.sum(np.isfinite(sky), axis=0).astype(np.int64),
         "n_external_valid": np.sum(external_valid, axis=0).astype(np.int64),
+        "K_null": np.asarray([hm.weighted_scalar(raw_basis, response)
+                              for response in null_responses]),
+        "n_blank_external": int(np.sum(sky_null_blank)),
+        "n_blank_usable": np.sum(null_usable, axis=0).astype(np.int64),
+        "null_data_finite_fraction": null_data_finite_fraction,
+        "null_error_finite_fraction": null_error_finite_fraction,
+        "null_sky_finite_fraction": null_sky_finite_fraction,
+        "null_location": np.asarray([
+            hm.robust_location(sky_null_data_work[null_usable[:, index], index])
+            for index in range(N_SKY_NULL_BANDS)]),
+        "null_scale": np.asarray([
+            hm.robust_scale(sky_null_data_work[null_usable[:, index], index])
+            for index in range(N_SKY_NULL_BANDS)]),
         "spot": dict(_spot_checks(batch, exp_indices, groups, filters, fq, survey,
                                    g_global, source=None, error=None, sky=None),
-                     **direct_spot),
+                     **direct_spot, **direct_null_spot),
     }
     return batch, metadata
 
@@ -509,6 +802,21 @@ def _exposure_row(metadata, table):
     return row
 
 
+def _sky_null_exposure_row(metadata, table):
+    row = np.zeros(1, dtype=table.dtype)
+    row["h5_id"] = metadata["h5_id"]
+    row["exposure"] = metadata["exposure"]
+    row["K"] = metadata["K_null"]
+    row["blank_data_work_location"] = metadata["null_location"]
+    row["blank_data_work_scale"] = metadata["null_scale"]
+    row["n_blank_external"] = metadata["n_blank_external"]
+    row["n_blank_usable"] = metadata["n_blank_usable"]
+    row["data_finite_fraction"] = metadata["null_data_finite_fraction"]
+    row["error_finite_fraction"] = metadata["null_error_finite_fraction"]
+    row["sky_finite_fraction"] = metadata["null_sky_finite_fraction"]
+    return row
+
+
 def _metadata_rows(items):
     rows = []
     for key, value in items.items():
@@ -525,6 +833,10 @@ def _create_file(path, input_metadata, total_rows):
                                    expectedrows=total_rows, filters=filters)
     exposure_band = h5.create_table("/", "exposure_band", ExposureBandDescription,
                                     expectedrows=len(input_metadata) * 3, filters=filters)
+    sky_null_exposure = h5.create_table("/", "sky_null_exposure",
+                                        SkyNullExposureDescription,
+                                        expectedrows=len(input_metadata) * 3,
+                                        filters=filters)
     provenance = h5.create_group("/", "provenance")
     h5_inputs = h5.create_table(provenance, "h5_inputs", H5InputDescription,
                                 expectedrows=len(input_metadata), filters=filters)
@@ -550,11 +862,16 @@ def _create_file(path, input_metadata, total_rows):
     root_attrs.band_order = json.dumps(list(BANDS))
     root_attrs.band_index_0 = "ON"
     root_attrs.band_index_1 = "OFF"
-    root_attrs.scientific_model_version = "primitive_measurements_before_fitting_v1"
+    root_attrs.sky_null_band_order = json.dumps(list(SKY_NULL_BANDS))
+    root_attrs.sky_null_requested_windows_A = json.dumps(
+        [list(window) for window in SKY_NULL_WINDOWS_A])
+    root_attrs.scientific_model_version = SCIENTIFIC_MODEL_VERSION
     root_attrs.no_fitted_calibration_applied = True
     root_attrs.no_residual_sky_subtraction = True
-    root_attrs.no_source_blank_selection = True
-    return h5, measurements, exposure_band, h5_inputs, metadata, checks
+    root_attrs.no_null_band_centering = True
+    root_attrs.external_blank_classification_ingested = True
+    root_attrs.external_blank_classification_filters_rows = False
+    return h5, measurements, exposure_band, sky_null_exposure, h5_inputs, metadata, checks
 
 
 def _append_metadata(metadata_table, values):
@@ -570,15 +887,50 @@ def _mark_complete(h5_inputs, h5_id, complete):
     h5_inputs.flush()
 
 
-def _existing_state(h5, h5_paths, preflight):
-    if "/provenance/h5_inputs" not in h5 or h5.root._v_attrs.schema_version != SCHEMA_VERSION:
+def _metadata_dict(metadata_table):
+    result = {}
+    for row in metadata_table:
+        key = row["key"]
+        value = row["value"]
+        if isinstance(key, bytes):
+            key = key.decode()
+        if isinstance(value, bytes):
+            value = value.decode()
+        try:
+            result[str(key)] = json.loads(value)
+        except (TypeError, ValueError):
+            result[str(key)] = value
+    return result
+
+
+def _existing_state(h5, h5_paths, preflight, blank_provenance,
+                    on_filter, off_filter, fq_template):
+    if ("/provenance/h5_inputs" not in h5 or
+            h5.root._v_attrs.schema_version != SCHEMA_VERSION or
+            "/sky_null_exposure" not in h5):
         raise ValueError("existing output is not a compatible M101 measurement product")
+    attrs = h5.root._v_attrs
+    saved_null_bands = json.loads(str(attrs.sky_null_band_order))
+    saved_null_windows = json.loads(str(attrs.sky_null_requested_windows_A))
+    if saved_null_bands != list(SKY_NULL_BANDS) or saved_null_windows != [
+            list(window) for window in SKY_NULL_WINDOWS_A]:
+        raise ValueError("resume sky-null definitions differ from this builder")
     table = h5.root.provenance.h5_inputs
     if table.nrows != len(h5_paths):
         raise ValueError("resume input H5 count differs from existing product")
     for hid, path in enumerate(h5_paths):
         row = table[hid]
-        if Path(row["filename"].decode() if isinstance(row["filename"], bytes) else row["filename"]).name != path.name:
+        saved_identity = {
+            "filename": row["filename"].decode() if isinstance(row["filename"], bytes)
+            else str(row["filename"]),
+            "full_path": row["full_path"].decode() if isinstance(row["full_path"], bytes)
+            else str(row["full_path"]),
+            "file_size": int(row["file_size"]),
+            "mtime_ns": int(row["mtime_ns"]),
+        }
+        if saved_identity != preflight[hid]["identity"]:
+            raise ValueError("resume H5 identity differs for %s" % path.name)
+        if Path(saved_identity["filename"]).name != path.name:
             raise ValueError("resume H5 ordering differs at h5_id=%d" % hid)
         expected = int(preflight[hid]["native_rows"])
         if int(row["native_rows"]) != expected:
@@ -588,14 +940,41 @@ def _existing_state(h5, h5_paths, preflight):
             if count != expected:
                 raise ValueError("completed H5 %s has %d/%d measurement rows" %
                                  (path.name, count, expected))
+            null_count = int(np.sum(h5.root.sky_null_exposure.cols.h5_id[:] == hid))
+            if null_count != N_EXPOSURES:
+                raise ValueError("completed H5 %s has %d/%d sky-null exposure rows" %
+                                 (path.name, null_count, N_EXPOSURES))
         else:
             count = int(np.sum(h5.root.measurements.cols.h5_id[:] == hid))
             if count:
                 raise ValueError("incomplete H5 %s already has rows; use --overwrite" % path.name)
+            null_count = int(np.sum(h5.root.sky_null_exposure.cols.h5_id[:] == hid))
+            if null_count:
+                raise ValueError("incomplete H5 %s already has sky-null exposure rows; use --overwrite" % path.name)
+    metadata = _metadata_dict(h5.root.provenance.metadata)
+    expected_files = {
+        "on_filter": _file_identity(on_filter),
+        "off_filter": _file_identity(off_filter),
+        "fq_template": _file_identity(fq_template),
+        "external_blank_fibers": blank_provenance["identity"],
+    }
+    expected_hashes = {
+        "on_filter_sha256": _small_file_hash(on_filter),
+        "off_filter_sha256": _small_file_hash(off_filter),
+        "fq_template_sha256": _small_file_hash(fq_template),
+        "external_blank_fibers_sha256": blank_provenance["sha256"],
+    }
+    for key, expected in expected_files.items():
+        if metadata.get(key) != expected:
+            raise ValueError("resume %s identity differs" % key)
+    for key, expected in expected_hashes.items():
+        if metadata.get(key) != expected:
+            raise ValueError("resume %s differs" % key)
 
 
 def _build_h5(h5_id, path, calibration, filters, fq, g_global, measurements,
-              exposure_band, h5_inputs, preflight):
+              exposure_band, sky_null_exposure, h5_inputs, preflight,
+              null_responses, external_blank_by_h5):
     started = time.perf_counter()
     with tables.open_file(path, mode="r") as source_h5:
         info = source_h5.root.Info
@@ -613,16 +992,21 @@ def _build_h5(h5_id, path, calibration, filters, fq, g_global, measurements,
         amps_all = np.asarray([hm.as_text(value) for value in info.cols.amp[:]])
         date_bad_all = hm.masked_rows(path, slot_all, amps_all)
         surveys = _survey_by_exposure(source_h5)
+        if path.name not in external_blank_by_h5 or \
+                external_blank_by_h5[path.name].size != nrows:
+            raise ValueError("external blank mask does not match %s" % path)
         batches, exposure_rows, spot = [], [], []
         for exposure in range(1, N_EXPOSURES + 1):
             batch, metadata = _row_arrays(
                 h5_id, path, calibration, filters, fq, g_global, measurements,
                 exposure, surveys[exposure], groups, labels, ra_all, dec_all,
-                amps_all, date_bad_all, specid_all, slot_all, uid_all, fibers)
+                amps_all, date_bad_all, specid_all, slot_all, uid_all, fibers,
+                null_responses, external_blank_by_h5[path.name])
             if len(batch) != int(np.sum(labels == exposure)):
                 raise ValueError("%s exposure %d compact row count mismatch" % (path, exposure))
             batches.append(batch)
             exposure_rows.append(_exposure_row(metadata, exposure_band))
+            sky_null_exposure.append(_sky_null_exposure_row(metadata, sky_null_exposure))
             spot.append(metadata["spot"])
     combined = np.concatenate(batches)
     if len(combined) != nrows:
@@ -631,6 +1015,7 @@ def _build_h5(h5_id, path, calibration, filters, fq, g_global, measurements,
     # H5 become visible.  The complete marker is written only after validation.
     measurements.append(combined)
     exposure_band.append(np.concatenate(exposure_rows))
+    sky_null_exposure.flush()
     measurements.flush()
     exposure_band.flush()
     _mark_complete(h5_inputs, h5_id, True)
@@ -650,25 +1035,119 @@ def _create_indexes(h5):
         column_object = getattr(h5.root.exposure_band.cols, column)
         if not column_object.is_indexed:
             column_object.create_index()
+        column_object = getattr(h5.root.sky_null_exposure.cols, column)
+        if not column_object.is_indexed:
+            column_object.create_index()
     return time.perf_counter() - started
 
 
 def _load_compact_qa(h5):
     table = h5.root.measurements
     columns = {name: np.asarray(getattr(table.cols, name)[:]) for name in (
-        "h5_id", "exposure", "external_raw", "sky", "finite_data_native",
+        "h5_id", "exposure", "SPECID", "IFUSLOT", "IFUID", "external_raw", "sky",
+        "sky_blank", "sky_null_data_native", "sky_null_data_work",
+        "sky_null_error_native", "sky_null_error_work", "sky_null_sky",
+        "sky_null_finite_data_native", "sky_null_finite_data_work",
+        "sky_null_finite_error", "sky_null_finite_sky",
+        "sky_null_data_response_fraction", "sky_null_sky_response_fraction",
+        "finite_data_native",
         "finite_data_work", "finite_error", "finite_sky", "finite_external",
-        "external_valid", "date_mask_bad", "IFUSLOT", "AMP")}
+        "external_valid", "date_mask_bad")}
+    columns["AMP"] = np.asarray([
+        value.decode() if isinstance(value, (bytes, np.bytes_)) else str(value)
+        for value in table.cols.AMP[:]])
     return columns
+
+
+def _distribution(values):
+    values = _finite(values)
+    if not values.size:
+        return {name: np.nan for name in
+                ("minimum", "p05", "p16", "median", "p84", "p95", "maximum")}
+    percentiles = np.percentile(values, [0, 5, 16, 50, 84, 95, 100])
+    return {name: float(value) for name, value in zip(
+        ("minimum", "p05", "p16", "median", "p84", "p95", "maximum"),
+        percentiles)}
+
+
+def _support_summary(rows):
+    counts = np.asarray([row["N_blank_external"] for row in rows], dtype=float)
+    if not counts.size:
+        return {"n_amplifier_observations": 0, "distribution": _distribution(counts),
+                "threshold_counts": {"zero": 0, "less_than_5": 0,
+                                     "less_than_10": 0, "less_than_20": 0},
+                "threshold_fractions": {"zero": np.nan, "less_than_5": np.nan,
+                                         "less_than_10": np.nan, "less_than_20": np.nan}}
+    threshold_counts = {
+        "zero": int(np.sum(counts == 0)),
+        "less_than_5": int(np.sum(counts < 5)),
+        "less_than_10": int(np.sum(counts < 10)),
+        "less_than_20": int(np.sum(counts < 20)),
+    }
+    return {
+        "n_amplifier_observations": int(counts.size),
+        "distribution": _distribution(counts),
+        "threshold_counts": threshold_counts,
+        "threshold_fractions": {key: float(value / counts.size)
+                                 for key, value in threshold_counts.items()},
+    }
+
+
+def _amplifier_support_rows(values, input_metadata):
+    rows = []
+    for h5_id, item in enumerate(input_metadata):
+        for exposure in range(1, N_EXPOSURES + 1):
+            exposure_selected = ((values["h5_id"] == h5_id) &
+                                 (values["exposure"] == exposure))
+            for slot in np.unique(values["IFUSLOT"][exposure_selected]):
+                for amp in ("LL", "LU", "RL", "RU"):
+                    selected = (exposure_selected &
+                                (values["IFUSLOT"] == slot) &
+                                (values["AMP"] == amp))
+                    if not selected.any():
+                        continue
+                    indices = np.flatnonzero(selected)
+                    if indices.size != N_FIBER_AMP:
+                        raise ValueError("%s exposure %d %s/%s has %d rows, not 112" %
+                                         (item["path"].name, exposure, slot, amp,
+                                          indices.size))
+                    specids = np.unique(values["SPECID"][indices])
+                    ifuids = np.unique(values["IFUID"][indices])
+                    if specids.size != 1 or ifuids.size != 1:
+                        raise ValueError("inconsistent amplifier identity for %s exposure %d %s/%s" %
+                                         (item["path"].name, exposure, slot, amp))
+                    blank = values["sky_blank"][indices]
+                    candidate = blank & ~values["date_mask_bad"][indices]
+                    usable = (candidate[:, None] &
+                              np.isfinite(values["sky_null_data_work"][indices]) &
+                              np.isfinite(values["sky_null_error_work"][indices]) &
+                              (values["sky_null_error_work"][indices] > 0.0))
+                    result = {
+                        "H5": item["path"].name,
+                        "h5_id": int(h5_id),
+                        "exposure": int(exposure),
+                        "SPECID": int(specids[0]),
+                        "IFUSLOT": int(slot),
+                        "IFUID": int(ifuids[0]),
+                        "AMP": amp,
+                        "N_native": int(indices.size),
+                        "N_blank_external": int(np.sum(blank)),
+                    }
+                    for band_index, band in enumerate(SKY_NULL_BANDS):
+                        result["N_blank_usable_%s" % band] = int(np.sum(usable[:, band_index]))
+                    rows.append(result)
+    return rows
 
 
 def _qa_and_outputs(h5, output, input_metadata, total_rows, total_exposures,
                     cache, filters, fq, cache_path, filter_paths, fq_path,
-                    build_started, checks, process_results):
+                    build_started, checks, process_results, blank_provenance,
+                    null_provenance):
     qa_started = time.perf_counter()
     values = _load_compact_qa(h5)
     measurements = h5.root.measurements
     exposure_band = h5.root.exposure_band
+    sky_null_exposure = h5.root.sky_null_exposure
     check_rows = []
 
     def check(name, value, detail="", status="PASS"):
@@ -701,6 +1180,18 @@ def _qa_and_outputs(h5, output, input_metadata, total_rows, total_exposures,
         finite_summary[name] = np.mean(values[name], axis=0).tolist()
         for index, band in enumerate(BANDS):
             check("%s_%s" % (name, band), finite_summary[name][index], "fraction")
+    null_finite_names = {
+        "sky_null_finite_data_native": "data_native",
+        "sky_null_finite_data_work": "data_work",
+        "sky_null_finite_error": "error",
+        "sky_null_finite_sky": "QR_sky",
+    }
+    null_finite_summary = {}
+    for name, label in null_finite_names.items():
+        null_finite_summary[name] = np.mean(values[name], axis=0).tolist()
+        for index, band in enumerate(SKY_NULL_BANDS):
+            check("%s_%s" % (name, band), null_finite_summary[name][index],
+                  "fraction")
     date_fraction = float(np.mean(values["date_mask_bad"]))
     check("date_mask_fraction", date_fraction, "fraction of native rows")
     offsets = np.asarray(exposure_band.cols.survey_offset[:], dtype=float)
@@ -728,6 +1219,19 @@ def _qa_and_outputs(h5, output, input_metadata, total_rows, total_exposures,
     check("external_prediction_identity_max_abs", np.nanmax(np.abs(ext_pred - ext_raw * g_by_row)))
     check("data_work_identity_max_relative", _max_abs_relative(data_work, data_native / offsets_by_row[:, None]))
     check("external_prediction_identity_max_relative", _max_abs_relative(ext_pred, ext_raw * g_by_row))
+    null_data_native = np.asarray(measurements.cols.sky_null_data_native[:], dtype=float)
+    null_data_work = np.asarray(measurements.cols.sky_null_data_work[:], dtype=float)
+    null_error_native = np.asarray(measurements.cols.sky_null_error_native[:], dtype=float)
+    null_error_work = np.asarray(measurements.cols.sky_null_error_work[:], dtype=float)
+    check("sky_null_data_work_identity_max_abs", np.nanmax(
+        np.abs(null_data_work - null_data_native / offsets_by_row[:, None])))
+    check("sky_null_error_work_identity_max_abs", np.nanmax(
+        np.abs(null_error_work - null_error_native /
+               np.abs(offsets_by_row[:, None]))))
+    check("sky_null_data_work_identity_max_relative", _max_abs_relative(
+        null_data_work, null_data_native / offsets_by_row[:, None]))
+    check("sky_null_error_work_identity_max_relative", _max_abs_relative(
+        null_error_work, null_error_native / np.abs(offsets_by_row[:, None])))
     # A deterministic cached-external check is exact because external_raw is
     # copied directly from the validated exposure-local cache array.
     check("external_cache_mapping_max_abs", 0.0, "validated array lengths and direct population")
@@ -742,9 +1246,25 @@ def _qa_and_outputs(h5, output, input_metadata, total_rows, total_exposures,
                     if group.any():
                         group_counts.append(int(np.sum(group)))
                         group_date_masked.append(bool(np.any(values["date_mask_bad"][group])))
+    amplifier_rows = _amplifier_support_rows(values, input_metadata)
     check("physical_group_size_min", min(group_counts) if group_counts else np.nan, "expected 112")
     check("physical_group_size_max", max(group_counts) if group_counts else np.nan, "expected 112")
     check("physical_amplifier_group_count", len(group_counts), "validated groups")
+    check("sky_null_exposure_row_count", int(sky_null_exposure.nrows),
+          "one row per H5 exposure")
+    null_k_values = np.asarray(sky_null_exposure.cols.K[:], dtype=float)
+    null_locations = np.asarray(
+        sky_null_exposure.cols.blank_data_work_location[:], dtype=float)
+    null_scales = np.asarray(
+        sky_null_exposure.cols.blank_data_work_scale[:], dtype=float)
+    for index, band in enumerate(SKY_NULL_BANDS):
+        check("K_%s_min" % band, np.nanmin(null_k_values[:, index]))
+        check("K_%s_median" % band, np.nanmedian(null_k_values[:, index]))
+        check("K_%s_max" % band, np.nanmax(null_k_values[:, index]))
+        check("blank_location_%s_finite_fraction" % band,
+              np.mean(np.isfinite(null_locations[:, index])))
+        check("blank_scale_%s_finite_fraction" % band,
+              np.mean(np.isfinite(null_scales[:, index])))
     spot_values = {}
     for result in process_results:
         for spot in result.get("spot", []):
@@ -764,9 +1284,33 @@ def _qa_and_outputs(h5, output, input_metadata, total_rows, total_exposures,
         row.append()
     checks.flush()
 
+    blank_csv = Path(output).with_name("m101_measurements_blank_amplifier_counts.csv")
+    blank_fields = ["H5", "h5_id", "exposure", "SPECID", "IFUSLOT", "IFUID", "AMP",
+                    "N_native", "N_blank_external"] + [
+                        "N_blank_usable_%s" % band for band in SKY_NULL_BANDS]
+    with blank_csv.open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=blank_fields)
+        writer.writeheader()
+        writer.writerows(amplifier_rows)
+
+    support = _support_summary(amplifier_rows)
+    support_by_h5 = {
+        item["path"].name: _support_summary([
+            row for row in amplifier_rows if row["H5"] == item["path"].name])
+        for item in input_metadata}
+    support_by_exposure = {
+        str(exposure): _support_summary([
+            row for row in amplifier_rows if row["exposure"] == exposure])
+        for exposure in range(1, N_EXPOSURES + 1)}
+    support_by_h5_exposure = {
+        "%s/exposure_%d" % (item["path"].name, exposure): _support_summary([
+            row for row in amplifier_rows if row["H5"] == item["path"].name and
+            row["exposure"] == exposure])
+        for item in input_metadata for exposure in range(1, N_EXPOSURES + 1)}
+
     qa_figure = Path(output).with_name("m101_measurements_qa.png")
     fig, axes = plt.subplots(2, 2, figsize=(12, 9))
-    exposure_values = np.asarray(exposure_band.cols.exposure[:], dtype=int)
+    del exposure_band
     labels = ["data native", "data work", "error", "sky", "external"]
     series = ["finite_data_native", "finite_data_work", "finite_error", "finite_sky", "external_valid"]
     ax = axes[0, 0]
@@ -775,49 +1319,85 @@ def _qa_and_outputs(h5, output, input_metadata, total_rows, total_exposures,
         ax.plot((1, 2, 3), fractions, "o-", label=label)
     ax.set_ylim(-.02, 1.02); ax.set_xlabel("exposure"); ax.set_ylabel("fraction"); ax.set_title("Measurement validity"); ax.grid(alpha=.2); ax.legend(fontsize=8)
     ax = axes[0, 1]
-    for index, band in enumerate(BANDS):
-        sample = values["external_raw"][:, index]
-        sample = sample[np.isfinite(sample)]
-        if sample.size > 100000: sample = sample[::max(1, sample.size // 100000)]
-        ax.hist(sample, bins=80, alpha=.5, label=band)
-    ax.set_title("Cached external_raw"); ax.set_xlabel("external aperture"); ax.set_ylabel("fibers"); ax.legend(); ax.grid(alpha=.2)
+    blank_counts = np.asarray([row["N_blank_external"] for row in amplifier_rows], dtype=float)
+    if blank_counts.size:
+        ax.hist(blank_counts, bins=min(40, max(5, int(np.ptp(blank_counts) + 1))),
+                alpha=.8, color="tab:purple")
+    ax.set_title("External blank fibers per amplifier")
+    ax.set_xlabel("N_blank_external"); ax.set_ylabel("amplifiers"); ax.grid(alpha=.2)
     ax = axes[1, 0]
-    for index, band in enumerate(BANDS):
-        sample = values["sky"][:, index]
+    for index, band in enumerate(SKY_NULL_BANDS):
+        sample = null_locations[:, index]
         sample = sample[np.isfinite(sample)]
-        if sample.size > 100000: sample = sample[::max(1, sample.size // 100000)]
-        ax.hist(sample, bins=80, alpha=.5, label=band)
-    ax.set_title("Collapsed sky_band"); ax.set_xlabel("sky"); ax.set_ylabel("fibers"); ax.legend(); ax.grid(alpha=.2)
+        if sample.size:
+            ax.hist(sample, bins=30, alpha=.45, label=band)
+    ax.set_title("Blank null data robust location")
+    ax.set_xlabel("sky_null_data_work"); ax.set_ylabel("H5 exposures")
+    ax.legend(fontsize=8); ax.grid(alpha=.2)
     ax = axes[1, 1]
-    group_hist = np.asarray(group_counts, dtype=float)
-    if group_hist.size:
-        ax.hist(group_hist[np.logical_not(group_date_masked)], bins=np.arange(110.5, 113.6, .5),
-                rwidth=.8, alpha=.7, label="unmasked")
-        masked_counts = group_hist[np.asarray(group_date_masked, dtype=bool)]
-        if masked_counts.size:
-            ax.hist(masked_counts, bins=np.arange(110.5, 113.6, .5),
-                    rwidth=.8, alpha=.7, label="date-masked")
-    ax.axvline(112, color="k", ls="--", label="expected 112")
-    ax.set_title("Physical amplifier native row counts"); ax.set_xlabel("rows/group"); ax.set_ylabel("groups"); ax.legend(); ax.grid(alpha=.2)
+    for index, band in enumerate(SKY_NULL_BANDS):
+        sample = null_scales[:, index]
+        sample = sample[np.isfinite(sample)]
+        if sample.size:
+            ax.hist(sample, bins=30, alpha=.45, label=band)
+    ax.set_title("Blank null data robust scale")
+    ax.set_xlabel("sky_null_data_work"); ax.set_ylabel("H5 exposures")
+    ax.legend(fontsize=8); ax.grid(alpha=.2)
     fig.suptitle("M101 compact measurement build integrity")
     fig.tight_layout(rect=(0, 0, 1, .96)); fig.savefig(qa_figure, dpi=150); plt.close(fig)
 
+    summary_path = Path(output).with_name("m101_measurements_summary.json")
+    checks_csv = Path(output).with_name("m101_measurements_checks.csv")
     summary = {
         "output": str(Path(output).resolve()),
         "output_bytes": int(Path(output).stat().st_size),
         "h5_count": len(input_metadata), "exposure_count": total_exposures,
         "native_fiber_rows": total_rows, "measurement_rows": actual_rows,
         "finite_fractions": finite_summary, "date_mask_fraction": date_fraction,
+        "sky_null_band_order": list(SKY_NULL_BANDS),
+        "sky_null_definitions": null_provenance,
+        "sky_null_finite_fractions": null_finite_summary,
+        "sky_null_response_completeness_distribution": {
+            band: {"data": _distribution(values["sky_null_data_response_fraction"][:, index]),
+                   "sky": _distribution(values["sky_null_sky_response_fraction"][:, index])}
+            for index, band in enumerate(SKY_NULL_BANDS)},
+        "sky_null_K": {band: {"min": float(np.nanmin(null_k_values[:, i])),
+                              "median": float(np.nanmedian(null_k_values[:, i])),
+                              "max": float(np.nanmax(null_k_values[:, i]))}
+                       for i, band in enumerate(SKY_NULL_BANDS)},
+        "sky_null_blank_robust_location": {
+            band: _distribution(null_locations[:, index])
+            for index, band in enumerate(SKY_NULL_BANDS)},
+        "sky_null_blank_robust_scale": {
+            band: _distribution(null_scales[:, index])
+            for index, band in enumerate(SKY_NULL_BANDS)},
+        "external_blank_provenance": blank_provenance,
+        "blank_amplifier_counts_csv": str(blank_csv.resolve()),
+        "blank_support": support,
+        "blank_support_by_h5": support_by_h5,
+        "blank_support_by_exposure": support_by_exposure,
+        "blank_support_by_h5_exposure": support_by_h5_exposure,
+        "generated_qa_files": [
+            str(qa_figure.resolve()), str(blank_csv.resolve()),
+            str(summary_path.resolve()), str(checks_csv.resolve()),
+            str(Path(output).with_name("m101_measurements_summary.txt").resolve()),
+        ],
+        "timing": {
+            "h5_build_seconds": float(sum(item["seconds"] for item in process_results)),
+            "per_h5_seconds": {item["filename"]: float(item["seconds"])
+                               for item in process_results},
+            "qa_seconds": time.perf_counter() - qa_started,
+        },
         "survey_offset": {"min": float(np.nanmin(offsets)), "median": float(np.nanmedian(offsets)), "max": float(np.nanmax(offsets))},
         "K": {band: {"min": float(np.nanmin(k_values[:, i])), "median": float(np.nanmedian(k_values[:, i])), "max": float(np.nanmax(k_values[:, i]))} for i, band in enumerate(BANDS)},
         "g_global": {band: float(np.nanmedian(g_values[:, i])) for i, band in enumerate(BANDS)},
         "checks": {item["name"]: {"status": item["status"], "value": item["value"], "detail": item["detail"]} for item in check_rows},
         "no_calibration_fitting": True,
         "no_s_response_applied": True, "no_residual_sky_subtraction": True,
-        "no_final_gray": True, "no_source_blank_threshold": True,
+        "no_final_gray": True, "no_null_band_centering": True,
+        "external_blank_classification_filters_rows": False,
         "qa_seconds": time.perf_counter() - qa_started,
     }
-    summary_path = Path(output).with_name("m101_measurements_summary.json")
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True, allow_nan=True))
     text_lines = [
         "M101 compact measurement product", "output=%s" % summary["output"],
@@ -828,11 +1408,25 @@ def _qa_and_outputs(h5, output, input_metadata, total_rows, total_exposures,
         "finite error ON/OFF=%s" % finite_summary["finite_error"],
         "finite sky ON/OFF=%s" % finite_summary["finite_sky"],
         "external-valid ON/OFF=%s" % finite_summary["external_valid"],
+        "sky-null bands=%s" % list(SKY_NULL_BANDS),
+        "sky-null windows=%s" % null_provenance["requested_windows_A"],
+        "sky-null finite data_native=%s" % null_finite_summary["sky_null_finite_data_native"],
+        "sky-null finite data_work=%s" % null_finite_summary["sky_null_finite_data_work"],
+        "sky-null finite error=%s" % null_finite_summary["sky_null_finite_error"],
+        "sky-null finite QR-sky=%s" % null_finite_summary["sky_null_finite_sky"],
+        "sky-null K min/median/max=%s" % summary["sky_null_K"],
+        "blank support distribution=%s" % support["distribution"],
+        "blank support threshold counts=%s" % support["threshold_counts"],
+        "blank support threshold fractions=%s" % support["threshold_fractions"],
+        "blank support by H5=%s" % support_by_h5,
+        "blank support by exposure=%s" % support_by_exposure,
+        "blank robust location=%s" % summary["sky_null_blank_robust_location"],
+        "blank robust scale=%s" % summary["sky_null_blank_robust_scale"],
+        "blank amplifier QA=%s" % str(blank_csv.resolve()),
         "date-mask fraction=%g" % date_fraction,
-        "NO alpha fit; NO s_response; NO residual sky; NO final gray; NO source/blank threshold; NO calibration solution.",
+        "NO calibration fitting; NO posterior z; NO p; NO alpha; NO residual sky subtraction; NO null centering; blank classification stored without removing rows.",
     ]
     Path(output).with_name("m101_measurements_summary.txt").write_text("\n".join(text_lines) + "\n")
-    checks_csv = Path(output).with_name("m101_measurements_checks.csv")
     with checks_csv.open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=("name", "status", "value", "detail"))
         writer.writeheader(); writer.writerows(check_rows)
@@ -848,6 +1442,8 @@ def main():
     parser.add_argument("--on-filter", required=True)
     parser.add_argument("--off-filter", required=True)
     parser.add_argument("--fq-template", required=True)
+    parser.add_argument("--external-blank-fibers", required=True,
+                        help="persisted external blank-fiber CSV or CSV.GZ")
     parser.add_argument("--output", default="m101_measurements.h5")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--resume", action="store_true")
@@ -864,6 +1460,14 @@ def main():
         output.unlink()
     h5_paths = _discover_h5(args)
     preflight, total_rows, total_exposures = _preflight(h5_paths, args.development)
+    null_responses, null_provenance = _validate_sky_null_responses()
+    blank_started = time.perf_counter()
+    external_blank_by_h5, blank_provenance = _load_external_blank_fibers(
+        args.external_blank_fibers, h5_paths)
+    print("external blank CSV load: %.3f s; matched=%d blank=%d nonblank=%d ignored_extra_h5=%d" %
+          (time.perf_counter() - blank_started, blank_provenance["matched_rows"],
+           blank_provenance["blank_rows"], blank_provenance["nonblank_rows"],
+           blank_provenance["ignored_extra_h5_files"]))
     cache_started = time.perf_counter()
     cache, calibrations, filters, fq = _load_inputs(args, h5_paths)
     print("cache load: %.3f s" % (time.perf_counter() - cache_started))
@@ -874,37 +1478,57 @@ def main():
         h5 = tables.open_file(output, mode="a")
         measurements = h5.root.measurements
         exposure_band = h5.root.exposure_band
+        sky_null_exposure = h5.root.sky_null_exposure
         h5_inputs = h5.root.provenance.h5_inputs
         metadata_table = h5.root.provenance.metadata
         checks = h5.root.build_checks
-        _existing_state(h5, h5_paths, preflight)
+        _existing_state(h5, h5_paths, preflight, blank_provenance,
+                        args.on_filter, args.off_filter, args.fq_template)
     else:
-        h5, measurements, exposure_band, h5_inputs, metadata_table, checks = _create_file(
+        h5, measurements, exposure_band, sky_null_exposure, h5_inputs, metadata_table, checks = _create_file(
             output, preflight, total_rows)
         provenance_values = {
             "schema_version": SCHEMA_VERSION,
-            "scientific_model_version": "primitive_measurements_before_fitting_v1",
+            "scientific_model_version": SCIENTIFIC_MODEL_VERSION,
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "script": str(Path(__file__).resolve()),
             "git_commit": _git_commit(),
             "band_order": list(BANDS),
+            "source_band_order": list(BANDS),
+            "sky_null_band_order": list(SKY_NULL_BANDS),
+            "sky_null_definitions": null_provenance,
             "h5_count": len(h5_paths), "exposure_count": total_exposures,
             "native_fiber_rows": total_rows,
             "pass1_cache": _file_identity(args.pass1_cache),
             "pass1_cache_sha256": _small_file_hash(args.pass1_cache),
             "on_filter": _file_identity(args.on_filter), "off_filter": _file_identity(args.off_filter),
+            "on_filter_sha256": _small_file_hash(args.on_filter),
+            "off_filter_sha256": _small_file_hash(args.off_filter),
             "fq_template": _file_identity(args.fq_template),
             "fq_template_sha256": _small_file_hash(args.fq_template),
+            "external_blank_fibers": blank_provenance["identity"],
+            "external_blank_fibers_sha256": blank_provenance["sha256"],
+            "external_blank_provenance": blank_provenance,
+            "h5_input_identities": [item["identity"] for item in preflight],
             "external_images_from_cache": cache.get("images", {}),
             "g_global": {band: float(g_global[i]) for i, band in enumerate(BANDS)},
             "excluded_h5": EXCLUDED_H5,
             "external_source": "PASS-1 calibration external_object/external_valid only",
             "fitted_terms_applied": [],
+            "blank_classification_ingested": True,
+            "blank_classification_filters_rows": False,
+            "no_null_band_centering": True,
             "definitions": {"D": "synthetic_mean(Fibers.spectrum / Survey.offset)",
                             "B": "synthetic_mean(Fibers.skyspectrum), no offset",
                             "external_raw": "cached PSF-matched exact aperture object value",
                             "external_prediction": "g_global_band * external_raw",
                             "K": "weighted_scalar(raw_work_basis(Survey), filter)",
+                            "K_null": "weighted_scalar(raw_work_basis(Survey), sky-null top-hat)",
+                            "sky_null_data": "synthetic_mean(Fibers.spectrum)",
+                            "sky_null_data_work": "sky_null_data_native / Survey.offset",
+                            "sky_null_error": "propagated collapse of Fibers.error",
+                            "sky_null_error_work": "sky_null_error_native / abs(Survey.offset)",
+                            "sky_null_sky": "synthetic_mean(Fibers.skyspectrum), primitive only",
                             "q": "LL/RU j; LU/RL 111-j", "fq": "fixed template value f(q)"},
         }
         _append_metadata(metadata_table, provenance_values)
@@ -916,7 +1540,8 @@ def main():
             print("resume: skipping validated %s" % path.name)
             continue
         result = _build_h5(h5_id, path, calibration, filters, fq, g_global,
-                           measurements, exposure_band, h5_inputs, preflight[h5_id])
+                           measurements, exposure_band, sky_null_exposure, h5_inputs,
+                           preflight[h5_id], null_responses, external_blank_by_h5)
         process_results.append(result)
         print("%s: rows=%d physical_groups=%d time=%.3f s" %
               (path.name, result["rows"], result["groups"], result["seconds"]))
@@ -925,7 +1550,8 @@ def main():
     summary = _qa_and_outputs(h5, output, preflight, total_rows, total_exposures,
                               cache, filters, fq, args.pass1_cache,
                               (args.on_filter, args.off_filter), args.fq_template,
-                              started, checks, process_results)
+                              started, checks, process_results, blank_provenance,
+                              null_provenance)
     h5.flush(); h5.close()
     total_seconds = time.perf_counter() - started
     print("output: %s (%d bytes)" % (summary["output"], summary["output_bytes"]))
@@ -936,7 +1562,7 @@ def main():
     spot_checks = {name: item["value"] for name, item in summary["checks"].items()
                    if name.startswith("spot_")}
     print("numerical spot-check precision: %s" % spot_checks)
-    print("NO alpha fit performed; NO s_response applied; NO residual-sky subtraction; NO final gray; NO source/blank threshold; NO calibration correction solved.")
+    print("NO calibration fit performed; NO posterior z; NO p; NO alpha; NO residual-sky subtraction; NO null centering; blank classification stored without filtering rows.")
     print("total runtime: %.3f s" % total_seconds)
 
 
