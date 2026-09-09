@@ -1,7 +1,7 @@
 import numpy as np
 
 import diagnose_m101_hierarchical as legacy
-from m101_hardware_exclusions import exclusion_reason, hardware_excluded
+from m101_hardware_exclusions import HARDWARE_EXCLUSIONS, exclusion_reason, hardware_excluded
 
 
 def _excluded(**overrides):
@@ -14,7 +14,7 @@ def _excluded(**overrides):
 def test_half_open_date_interval_and_legacy_slot_amp_matching():
     assert _excluded(date=20200521, ifuslot=30)
     assert not _excluded(date=20200522, ifuslot=30)
-    assert not _excluded(date=20200521, ifuslot=30, amp="RU")
+    assert not _excluded(date=20200521, ifuslot=31, amp="RU")
     assert _excluded(date=20200525, ifuslot=39, amp="LL")
 
 
@@ -23,21 +23,46 @@ def test_full_physical_amplifier_identity_is_required():
     assert not _excluded(date=None, specid=309, ifuslot=46, ifuid=6, amp="RL")
     assert not _excluded(date=None, specid=309, ifuslot=47, ifuid=5, amp="RL")
     assert _excluded(date=None, specid=402, ifuslot=77, ifuid=61, amp="RL")
+    assert _excluded(date=None, specid=402, ifuslot=77, ifuid=61,
+                    amp="RL", purpose="cube")
 
 
 def test_scope_and_no_match_behavior():
     assert _excluded(date=None, specid=309, ifuslot=46, ifuid=5, amp="RL", purpose="cube")
     assert not _excluded(date=None, specid=309, ifuslot=46, ifuid=5, amp="LU", purpose="fit")
     assert not _excluded(date=20210101, specid=1, ifuslot=1, ifuid=1, amp="LL")
+    assert exclusion_reason(date=20210101, specid=1, ifuslot=1,
+                            ifuid=1, amp="LL", purpose="cube") is None
+
+
+def test_fit_only_scope_is_not_used_for_cube():
+    record = {"start": 20990101, "stop": 20990102, "ifuslot": 12,
+              "amp": "LL", "scope": "fit_only", "reason": "test",
+              "source": "test"}
+    HARDWARE_EXCLUSIONS.append(record)
+    try:
+        values = {"date": 20990101, "specid": 1, "ifuslot": 12,
+                  "ifuid": 1, "amp": "LL"}
+        assert hardware_excluded(**values, purpose="fit")
+        assert not hardware_excluded(**values, purpose="cube")
+    finally:
+        HARDWARE_EXCLUSIONS.remove(record)
 
 
 def test_multiple_matches_report_all_reasons():
-    reason = exclusion_reason(date=20200521, specid=309, ifuslot=46,
-                              ifuid=5, amp="RL", purpose="fit")
-    assert reason is not None
-    assert reason.count("[") == 2
-    assert "legacy cube mask_dict" in reason
-    assert "M101 persistent amplifier residual QA" in reason
+    record = {"start": 20200430, "stop": 20200501, "ifuslot": 57,
+              "amp": "RL", "scope": "fit_and_cube", "reason": "second",
+              "source": "test"}
+    HARDWARE_EXCLUSIONS.append(record)
+    try:
+        reason = exclusion_reason(date=20200430, specid=1, ifuslot=57,
+                                  ifuid=1, amp="RL", purpose="fit")
+        assert reason is not None
+        assert reason.count("[") == 2
+        assert "legacy cube mask_dict" in reason
+        assert "test" in reason
+    finally:
+        HARDWARE_EXCLUSIONS.remove(record)
 
 
 def test_legacy_registry_matches_previous_masked_rows_on_representative_dates():

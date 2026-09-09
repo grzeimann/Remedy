@@ -38,6 +38,7 @@ from m101_native_data import ExposureData, WAVE, load as load_native_data
 SCHEMA_VERSION = "m101_calibration_v2_draft_1"
 NULL_BANDS = ("HIGH1", "LOW1", "HIGH2", "LOW2", "HIGH3")
 FIBER_DIAMETER_ARCSEC = 1.5
+MINIMUM_BLANK_FIBERS_FOR_POPULATION = 20
 
 
 def focal_plot_filename(exposure_key):
@@ -468,7 +469,10 @@ def _print_rung(qa):
              values["arithmetic_rms"], values["p95_abs"], values["p99_abs"], values["max_abs"]))
 
 
-def diagnose_amplifier_residual_population(data, qa3, output_dir):
+def diagnose_amplifier_residual_population(
+        data, qa3, output_dir,
+        minimum_blank_fibers=MINIMUM_BLANK_FIBERS_FOR_POPULATION):
+    """Report residual population behavior without changing fit validity."""
     records, band_values = [], [[] for _ in ALL_BANDS]
     for item, residual in zip(data, qa3["residual_arrays"]):
         groups = sorted(set(zip(map(tuple, item.ifu), map(str, item.amp))), key=str)
@@ -480,70 +484,142 @@ def diagnose_amplifier_residual_population(data, qa3, output_dir):
             good = np.isfinite(r) & np.isfinite(s) & (s > 0)
             if not np.any(good):
                 continue
-            rv, sv = r[good], s[good]
-            median = float(np.median(rv)); mad = 1.4826 * float(np.median(np.abs(rv - median)))
-            mederr = float(np.median(sv)); sigma_mean = float(np.sqrt(np.sum(sv ** 2)) / rv.size)
-            mean_residual = float(np.mean(rv))
+            ratios = r / s
             rec = {"h5": item.h5_name, "exposure": item.exposure,
                    "SPECID": int(ifu[0]), "IFUSLOT": int(ifu[1]), "IFUID": int(ifu[2]),
-                   "AMP": amp, "N": int(rv.size), "mean_residual": mean_residual,
-                   "sigma_mean": sigma_mean, "mad_residual": mad, "median_error": mederr,
-                   "mean_significance": float(mean_residual / sigma_mean),
-                   "mad_over_error": float(mad / mederr),
-                   "median_normalized_residual": float(np.median(rv / sv))}
+                   "AMP": amp, "N": int(np.sum(good)),
+                   "N_blank_fibers": int(rows.size),
+                   "N_valid_band_measurements": int(np.sum(good)),
+                   "support_status": ("supported" if rows.size >= minimum_blank_fibers
+                                       else "insufficient_support"),
+                   "_ratios": ratios}
             for band_index in range(len(ALL_BANDS)):
                 gb = good[:, band_index]
                 if np.any(gb):
-                    rb, sb = r[gb, band_index], s[gb, band_index]
-                    mb = np.median(rb)
-                    band_values[band_index].append(float(1.4826 * np.median(np.abs(rb - mb)) /
-                                                          np.median(sb)))
+                    band_ratios = ratios[gb, band_index]
+                    band_values[band_index].append(
+                        float(validated_m101.robust_scale(band_ratios)))
             records.append(rec)
     if not records:
         raise ValueError("no valid blank Model-3 amplifier residual measurements")
-    x = np.asarray([r["mean_significance"] for r in records]); y = np.asarray([r["mad_over_error"] for r in records])
+    supported = np.asarray([r["support_status"] == "supported" for r in records], dtype=bool)
+    if not np.any(supported):
+        raise ValueError("no amplifier observations meet minimum blank-fiber support")
+    empirical_band_scales = []
+    for band_index in range(len(ALL_BANDS)):
+        values = [rec["_ratios"][np.isfinite(rec["_ratios"][:, band_index]), band_index]
+                  for rec in records if rec["support_status"] == "supported"
+                  and np.any(np.isfinite(rec["_ratios"][:, band_index]))]
+        values = np.concatenate(values) if values else np.asarray([], dtype=float)
+        scale = float(validated_m101.robust_scale(values)) if values.size else np.nan
+        empirical_band_scales.append(
+            scale if np.isfinite(scale) and scale > 0 else 1.0)
+    empirical_band_scales = np.asarray(empirical_band_scales, dtype=float)
+    for rec in records:
+        ratios = rec.pop("_ratios")
+        normalized = ratios / empirical_band_scales[None, :]
+        normalized = normalized[np.isfinite(normalized)]
+        rec["mean_significance"] = float(np.mean(normalized))
+        normalized_scale = float(validated_m101.robust_scale(normalized))
+        rec["mad_over_error"] = (normalized_scale if np.isfinite(normalized_scale)
+                                  else 0.0)
+        rec["median_normalized_residual"] = float(np.median(normalized))
+    all_x = np.asarray([r["mean_significance"] for r in records])
+    all_y = np.asarray([r["mad_over_error"] for r in records])
+    x, y = all_x[supported], all_y[supported]
     xmed, ymed = np.median(x), np.median(y)
     xmad = max(1.4826 * np.median(np.abs(x - xmed)), np.finfo(float).eps)
     ymad = max(1.4826 * np.median(np.abs(y - ymed)), np.finfo(float).eps)
-    zx, zy = (x - xmed) / xmad, (y - ymed) / ymad
-    out3, out5 = np.maximum(np.abs(zx), np.abs(zy)) > 3, np.maximum(np.abs(zx), np.abs(zy)) > 5
-    for rec, score in zip(records, np.maximum(np.abs(zx), np.abs(zy))): rec["population_score"] = float(score)
+    zx, zy = (all_x - xmed) / xmad, (all_y - ymed) / ymad
+    scores = np.maximum(np.abs(zx), np.abs(zy))
+    out3 = supported & (scores > 3)
+    out5 = supported & (scores > 5)
+    for rec, score, flag3, flag5 in zip(records, scores, out3, out5):
+        rec["population_score"] = float(score)
+        rec["outlier_3mad"] = bool(flag3)
+        rec["outlier_5mad"] = bool(flag5)
     output_dir = Path(output_dir); output_dir.mkdir(parents=True, exist_ok=True)
     fig, axis = plt.subplots(figsize=(6, 5), constrained_layout=True)
-    axis.scatter(x[~out5], y[~out5], s=10, color="tab:blue", alpha=.65)
-    axis.scatter(x[out5], y[out5], s=18, color="crimson", alpha=.9)
+    axis.scatter(all_x[supported & ~out5], all_y[supported & ~out5], s=10,
+                 color="tab:blue", alpha=.65)
+    axis.scatter(all_x[out5], all_y[out5], s=18, color="crimson", alpha=.9)
+    if np.any(~supported):
+        axis.scatter(all_x[~supported], all_y[~supported], s=16, color="0.55",
+                     marker="x", label="insufficient support")
     axis.axvline(0, color="0.25", lw=.8)
     for value in (xmed - 5 * xmad, xmed + 5 * xmad): axis.axvline(value, color="0.45", ls="--", lw=.8)
     for value in (ymed - 5 * ymad, ymed + 5 * ymad): axis.axhline(value, color="0.45", ls="--", lw=.8)
     for rec in sorted(records, key=lambda r: r["population_score"], reverse=True)[:10]:
         axis.annotate("%s/e%d/%s-%d-%d-%d/%s" % (Path(rec["h5"]).stem, rec["exposure"], rec["SPECID"], rec["IFUSLOT"], rec["IFUID"], rec["N"], rec["AMP"]),
                       (rec["mean_significance"], rec["mad_over_error"]), fontsize=6)
-    axis.set(xlabel="mean residual / sigma_mean", ylabel="MAD residual / median error",
-             title="Amplifier residual population: %d observations, %d (%.1f%%) population outliers" %
-             (len(records), int(out5.sum()), 100 * out5.mean()))
+    axis.set(xlabel="mean normalized residual", ylabel="robust scale of normalized residual",
+             title="Amplifier residual population: %d supported, %d (%.1f%%) 5-MAD outliers" %
+             (int(supported.sum()), int(out5.sum()),
+              100 * out5.sum() / supported.sum()))
     fig.savefig(output_dir / "amplifier_residual_population.png", dpi=140); plt.close(fig)
     fig, axis = plt.subplots(figsize=(8, 4), constrained_layout=True)
     axis.boxplot(band_values, tick_labels=ALL_BANDS, showfliers=False)
-    axis.set(ylabel="MAD residual / median error", title="Amplifier residual population by band")
+    axis.set(ylabel="robust scale of r / sigma", title="Amplifier residual population by band")
     fig.savefig(output_dir / "amplifier_residual_population_by_band.png", dpi=140); plt.close(fig)
     print("\nAmplifier residual population diagnostic")
-    print("observations=%d; mean_significance median=%.4g robust_MAD=%.4g; mad_over_error median=%.4g robust_MAD=%.4g" %
-          (len(records), xmed, xmad, ymed, ymad))
+    print("observations=%d; supported=%d; minimum_blank_fibers=%d" %
+          (len(records), int(supported.sum()), minimum_blank_fibers))
+    print("empirical band scales: %s" % json.dumps(
+        {band: float(scale) for band, scale in zip(ALL_BANDS, empirical_band_scales)}))
+    print("mean normalized residual median=%.4g robust_MAD=%.4g; normalized robust scale median=%.4g robust_MAD=%.4g" %
+          (xmed, xmad, ymed, ymad))
     print("population outliers beyond 3 MAD: %d (%.1f%%); beyond 5 MAD: %d (%.1f%%)" %
-          (out3.sum(), 100 * out3.mean(), out5.sum(), 100 * out5.mean()))
-    print("H5 exposure SPECID IFUSLOT IFUID AMP N mean_significance mad_over_error")
+          (out3.sum(), 100 * out3.sum() / supported.sum(), out5.sum(),
+           100 * out5.sum() / supported.sum()))
+    print("H5 exposure SPECID IFUSLOT IFUID AMP N N_blank_fibers N_valid_band_measurements status mean_normalized_residual normalized_robust_scale")
     for rec in sorted(records, key=lambda r: r["population_score"], reverse=True)[:20]:
-        print("%s %d %d %d %d %s %d %+.4g %.4g" %
+        print("%s %d %d %d %d %s %d %d %d %s %+.4g %.4g" %
               (Path(rec["h5"]).stem, rec["exposure"], rec["SPECID"], rec["IFUSLOT"], rec["IFUID"],
-               rec["AMP"], rec["N"], rec["mean_significance"], rec["mad_over_error"]))
+               rec["AMP"], rec["N"], rec["N_blank_fibers"],
+               rec["N_valid_band_measurements"], rec["support_status"],
+               rec["mean_significance"], rec["mad_over_error"]))
+    persistent = {}
+    for rec, flag3, flag5 in zip(records, out3, out5):
+        key = (rec["SPECID"], rec["IFUSLOT"], rec["IFUID"], rec["AMP"])
+        row = persistent.setdefault(key, {
+            "SPECID": key[0], "IFUSLOT": key[1], "IFUID": key[2], "AMP": key[3],
+            "supported_exposures": [], "outlier_exposures_3mad": [],
+            "outlier_exposures_5mad": [],
+        })
+        if rec["support_status"] == "supported":
+            label = "%s/e%d" % (Path(rec["h5"]).stem, rec["exposure"])
+            row["supported_exposures"].append(label)
+            if flag3:
+                row["outlier_exposures_3mad"].append(label)
+            if flag5:
+                row["outlier_exposures_5mad"].append(label)
+    persistent = [row for row in persistent.values()
+                  if row["outlier_exposures_3mad"] or row["outlier_exposures_5mad"]]
+    for row in persistent:
+        row["fraction_5mad"] = (float(len(row["outlier_exposures_5mad"]) /
+                                 len(row["supported_exposures"]))
+                                if row["supported_exposures"] else 0.0)
+    print("persistent physical amplifier outlier summary")
+    for row in sorted(persistent, key=lambda value: (
+            -value["fraction_5mad"], value["SPECID"], value["IFUSLOT"],
+            value["IFUID"], value["AMP"])):
+        print("%d/%d/%d/%s supported=%s outlier3=%s outlier5=%s fraction5=%.3f" %
+              (row["SPECID"], row["IFUSLOT"], row["IFUID"], row["AMP"],
+               row["supported_exposures"], row["outlier_exposures_3mad"],
+               row["outlier_exposures_5mad"], row["fraction_5mad"]))
     for name, values in (("H5/exposure", Counter("%s/e%d" % (r["h5"], r["exposure"]) for r, flag in zip(records, out5) if flag)),
                          ("AMP orientation", Counter(r["AMP"] for r, flag in zip(records, out5) if flag)),
-                         ("physical amplifier", Counter("%s/%d/%d/%d/%s" % (r["h5"], r["SPECID"], r["IFUSLOT"], r["IFUID"], r["AMP"]) for r, flag in zip(records, out5) if flag))):
+                         ("physical amplifier", Counter("%d/%d/%d/%s" % (r["SPECID"], r["IFUSLOT"], r["IFUID"], r["AMP"]) for r, flag in zip(records, out5) if flag))):
         print("5-MAD outliers by %s: %s" % (name, dict(sorted(values.items()))))
-    return {"N": len(records), "median_mean_significance": float(xmed), "robust_mad_mean_significance": float(xmad),
+    return {"N": len(records), "supported_amplifier_observations": int(supported.sum()),
+            "minimum_blank_fibers": int(minimum_blank_fibers),
+            "median_mean_significance": float(xmed), "robust_mad_mean_significance": float(xmad),
             "median_mad_over_error": float(ymed), "robust_mad_mad_over_error": float(ymad),
             "outliers_3_mad": int(out3.sum()), "outliers_5_mad": int(out5.sum()),
-            "outlier_fraction_5_mad": float(out5.mean())}
+            "outlier_fraction_3_mad": float(out3.sum() / supported.sum()),
+            "outlier_fraction_5_mad": float(out5.sum() / supported.sum()),
+            "band_scales": {band: float(scale) for band, scale in zip(ALL_BANDS, empirical_band_scales)},
+            "persistent_outlier_summary": persistent, "records": records}
 
 
 def write_focal_maps(output_dir, qa):
@@ -764,6 +840,7 @@ def main():
         "blank_file_sha256": small_file_hash(args.blank_file),
         "blank_provenance": blank_provenance,
         "measurement_input": input_provenance,
+        "hardware_exclusions": input_provenance.get("hardware_exclusions"),
         "on_filter": file_identity(args.on_filter), "off_filter": file_identity(args.off_filter),
         "fq_template": file_identity(args.fq_template),
         "fq_template_sha256": small_file_hash(args.fq_template),
