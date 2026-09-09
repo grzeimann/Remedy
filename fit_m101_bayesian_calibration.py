@@ -1,12 +1,25 @@
 #!/usr/bin/env python3
-"""First hierarchical Bayesian inference from the frozen M101 measurements.
+"""Hierarchical inference from the frozen M101 measurement product.
 
 The frozen HDF5 measurements are not globally regressed fiber-by-fiber.  For
 each physical amplifier observation, its 112 fibers and two bands define the
 local model
 
-    T = exp(z) P + p + alpha H,
-    T = D + B,  P = X + B,  H = K*f(q).
+For legacy v1 products the local model remains ``T = exp(z) P + p + alpha H``
+with ``T = D + B`` and ``P = X + B``.  A production v2 run supplies the
+independently fitted full-spectrum additive product and first forms
+
+    source: Dcorr = D - (R + cU + dV)
+    null:   Dcorr_null = D_null - (R_null + cU_null + dV_null)
+
+before evaluating the alpha-only likelihood
+
+    source: Dcorr = exp(z) X + alpha H
+    null:   Dcorr_null = alpha H_null,  (only sky_blank rows).
+
+The same alpha applies to ON, OFF, and all five null bands.  The QR sky
+columns are retained for legacy compatibility and never enter the production
+v2 likelihood.
 
 The two additive parameters are marginalized locally with a 2x2 Bayesian
 linear-regression calculation.  Each amplifier is then compressed to a
@@ -23,9 +36,10 @@ production calibration solution.
 
 from argparse import ArgumentParser
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import csv
+import hashlib
 import json
 from pathlib import Path
 import pickle
@@ -77,6 +91,9 @@ EDGE_MASS_LIMIT = 1e-3
 HUTCHINSON_PROBES_DEFAULT = 64
 ERROR_BOOTSTRAP_DEFAULT = 300
 EVIDENCE_SCHEMA = "m101_amplifier_evidence_v5_external_compact_mask"
+SKY_NULL_BANDS = ("NULL_HIGH1", "NULL_LOW1", "NULL_HIGH2", "NULL_LOW2", "NULL_HIGH3")
+N_SKY_NULL_BANDS = len(SKY_NULL_BANDS)
+V2_SCHEMA = "m101_measurements_v2"
 
 
 @dataclass(frozen=True)
@@ -118,14 +135,33 @@ class AmplifierBlock:
     K: np.ndarray
     q: np.ndarray
     sky_scale: float
+    is_v2: bool = False
+    sky_blank: object = None
+    null_D: object = None
+    null_error: object = None
+    null_sky: object = None
+    null_K: object = None
+    additive_source: object = None
+    additive_null: object = None
+    additive_R: object = None
+    additive_IFU: object = None
+    additive_AMP: object = None
+    additive_c: float = 0.0
+    additive_d: float = 0.0
+    additive_ifu_supported: bool = True
+    additive_amp_supported: bool = True
 
     @property
     def T(self):
-        return self.D + self.B
+        if not self.is_v2:
+            return self.D + self.B
+        if self.additive_source is None:
+            return self.D
+        return self.D - np.asarray(self.additive_source, dtype=float)
 
     @property
     def P(self):
-        return self.X + self.B
+        return self.X if self.is_v2 else self.X + self.B
 
     @property
     def H(self):
@@ -133,13 +169,30 @@ class AmplifierBlock:
 
     @property
     def primitive_valid(self):
-        return ((not self.date_mask_bad) & self.external_valid &
-                np.isfinite(self.D) & np.isfinite(self.B) &
-                np.isfinite(self.X) & np.isfinite(self.error))
+        valid = ((not self.date_mask_bad) & self.external_valid &
+                 np.isfinite(self.D) & np.isfinite(self.X) & np.isfinite(self.error))
+        if not self.is_v2:
+            valid &= np.isfinite(self.B)
+        return valid
 
     @property
     def likelihood_valid(self):
         return self.primitive_valid & (self.error > 0.0)
+
+    @property
+    def null_H(self):
+        if not self.is_v2:
+            return np.zeros((len(self.D), N_SKY_NULL_BANDS), dtype=float)
+        return self.fq[:, None] * np.asarray(self.null_K, dtype=float)[None, :]
+
+    @property
+    def null_likelihood_valid(self):
+        if not self.is_v2:
+            return np.zeros((len(self.D), N_SKY_NULL_BANDS), dtype=bool)
+        return (np.asarray(self.sky_blank, dtype=bool)[:, None]
+                & (not self.date_mask_bad)
+                & np.isfinite(self.null_D) & np.isfinite(self.null_error)
+                & (self.null_error > 0.0))
 
 
 @dataclass
@@ -200,6 +253,9 @@ class AmplifierEvidence:
     beta_cov_integrated: np.ndarray
     p_sigma_prior: float
     error_floor_used: float
+    n_blank_external: int = 0
+    n_null: np.ndarray = None
+    null_source_ratio: float = 0.0
 
 
 @dataclass
@@ -323,6 +379,98 @@ def _apply_compact_mask_to_arrays(arrays, mask_data, mask_wcs):
     return compact_hit, inside_footprint, outside, compact_masked_fiber, newly_invalid
 
 
+class AdditiveStructure:
+    """Validated lookup for the compact band collapses of the additive fit."""
+
+    def __init__(self, path, measurement_h5_names, measurement_metadata):
+        self.path = Path(path).expanduser().resolve()
+        if not self.path.exists():
+            raise ValueError("additive structure product does not exist: %s" % self.path)
+        self.identity = _h5_identity(self.path)
+        self.exposures = {}
+        self.ifus = {}
+        self.amplifiers = {}
+        self.metadata = {}
+        with tables.open_file(self.path, mode="r") as h5:
+            version = _text(getattr(h5.root._v_attrs, "schema_version", ""))
+            if version != "m101_additive_structure_v1":
+                raise ValueError("unsupported additive structure schema: %s" % version)
+            if _text(getattr(h5.root._v_attrs, "band_order", "")) != json.dumps(list(BANDS)):
+                raise ValueError("additive band order is not [ON, OFF]")
+            if _text(getattr(h5.root._v_attrs, "null_band_order", "")) != json.dumps(list(SKY_NULL_BANDS)):
+                raise ValueError("additive null-band order does not match the frozen order")
+            required_tables = ("exposures", "physical_ifus", "physical_amplifiers")
+            if any("/%s" % name not in h5 for name in required_tables):
+                raise ValueError("additive product lacks a required identity table")
+            if "/provenance/metadata" in h5:
+                for row in h5.root.provenance.metadata:
+                    self.metadata[_text(row["key"])] = json.loads(_text(row["value"]))
+            input_names = {Path(str(item.get("filename", item.get("path", "")))).name
+                           for item in self.metadata.get("input_h5", [])}
+            if input_names != set(measurement_h5_names.values()):
+                raise ValueError("additive H5 input basenames do not match measurement product")
+            exp_table = h5.root.exposures
+            for row in exp_table:
+                key = (Path(_text(row["H5"])).name, int(row["exposure"]))
+                if key in self.exposures:
+                    raise ValueError("duplicate additive exposure row: %s" % (key,))
+                self.exposures[key] = {
+                    "R_ON_OFF": np.asarray(row["R_ON_OFF"], dtype=float),
+                    "U_ON_OFF": np.asarray(row["U_ON_OFF"], dtype=float),
+                    "V_ON_OFF": np.asarray(row["V_ON_OFF"], dtype=float),
+                    "R_null": np.asarray(row["R_null"], dtype=float),
+                    "U_null": np.asarray(row["U_null"], dtype=float),
+                    "V_null": np.asarray(row["V_null"], dtype=float),
+                    "R_lambda": np.asarray(row["R_lambda"], dtype=float),
+                    "U_lambda": np.asarray(row["U_lambda"], dtype=float),
+                    "V_lambda": np.asarray(row["V_lambda"], dtype=float),
+                }
+            for row in h5.root.physical_ifus:
+                key = (int(row["SPECID"]), int(row["IFUSLOT"]), int(row["IFUID"]))
+                if key in self.ifus:
+                    raise ValueError("duplicate additive IFU row: %s" % (key,))
+                self.ifus[key] = {"c": float(row["c"]), "supported": bool(row["c_supported"])}
+            for row in h5.root.physical_amplifiers:
+                key = (int(row["SPECID"]), int(row["IFUSLOT"]), int(row["IFUID"]), _text(row["AMP"]))
+                if key in self.amplifiers:
+                    raise ValueError("duplicate additive amplifier row: %s" % (key,))
+                self.amplifiers[key] = {"d": float(row["d"]), "supported": bool(row["d_supported"])}
+        expected_exposures = {(name, int(exposure)) for name in measurement_h5_names.values()
+                              for exposure in range(1, 4)}
+        if set(self.exposures) != expected_exposures:
+            missing = sorted(expected_exposures - set(self.exposures))
+            extra = sorted(set(self.exposures) - expected_exposures)
+            raise ValueError("additive exposure identities mismatch; missing=%s extra=%s" % (missing, extra))
+        wavelength = self.metadata.get("wavelength_grid", {})
+        if wavelength.get("n") not in (None, len(hm.DEF_WAVE)):
+            raise ValueError("additive wavelength grid has the wrong length")
+        if wavelength.get("min") is not None and wavelength.get("min") != float(hm.DEF_WAVE[0]):
+            raise ValueError("additive wavelength grid minimum does not match hm.DEF_WAVE")
+        if wavelength.get("max") is not None and wavelength.get("max") != float(hm.DEF_WAVE[-1]):
+            raise ValueError("additive wavelength grid maximum does not match hm.DEF_WAVE")
+        expected_wave_hash = hashlib.sha256(np.asarray(hm.DEF_WAVE, dtype="<f8").tobytes()).hexdigest()
+        if wavelength.get("sha256") not in (None, expected_wave_hash):
+            raise ValueError("additive wavelength grid hash does not match hm.DEF_WAVE")
+        for band_key, metadata_key in (("ON", "on_filter"), ("OFF", "off_filter")):
+            additive_id = self.metadata.get(metadata_key, {}).get("sha256")
+            measurement_id = measurement_metadata.get(metadata_key + "_sha256")
+            if additive_id and measurement_id and additive_id != measurement_id:
+                raise ValueError("additive %s filter identity disagrees with measurement product" % band_key)
+
+    def prediction(self, h5_name, exposure, ifu, amp):
+        exp = self.exposures[(Path(h5_name).name, int(exposure))]
+        ifu_row = self.ifus.get(tuple(ifu), {"c": 0.0, "supported": False})
+        amp_row = self.amplifiers.get(tuple(ifu) + (str(amp),), {"d": 0.0, "supported": False})
+        c, d = ifu_row["c"], amp_row["d"]
+        return {
+            "source": exp["R_ON_OFF"] + c * exp["U_ON_OFF"] + d * exp["V_ON_OFF"],
+            "null": exp["R_null"] + c * exp["U_null"] + d * exp["V_null"],
+            "R": exp["R_ON_OFF"], "IFU": c * exp["U_ON_OFF"], "AMP": d * exp["V_ON_OFF"],
+            "c": c, "d": d, "ifu_supported": ifu_row["supported"],
+            "amp_supported": amp_row["supported"],
+        }
+
+
 class MeasurementStore:
     """Load the compact measurement columns once and group amplifier blocks."""
 
@@ -330,8 +478,12 @@ class MeasurementStore:
                 "IFUID", "AMP", "j", "q", "fq", "RA", "Dec", "effective_RA",
                 "effective_Dec", "data_work", "sky", "external_prediction",
                 "error_work", "external_valid", "date_mask_bad")
+    V2_REQUIRED = REQUIRED + ("sky_blank", "sky_null_data_work", "sky_null_error_work",
+                              "sky_null_sky", "sky_null_finite_data_work",
+                              "sky_null_finite_error", "sky_null_finite_sky",
+                              "sky_null_data_response_fraction")
 
-    def __init__(self, path, compact_mask_path=None):
+    def __init__(self, path, compact_mask_path=None, additive_structure_path=None):
         self.path = Path(path).expanduser().resolve()
         if not self.path.exists():
             raise ValueError("measurement product does not exist: %s" % self.path)
@@ -345,20 +497,37 @@ class MeasurementStore:
         self.h5_names = {}
         self.exposure_rows = {}
         self.exposure_scales = {}
+        self.is_v2 = False
+        self.null_band_order = None
+        self.centering = {}
+        self.measurement_metadata = {}
+        self.additive_structure_path = (Path(additive_structure_path).expanduser().resolve()
+                                        if additive_structure_path is not None else None)
+        self.additive_structure = None
         self._load()
 
     def _load(self):
         with tables.open_file(self.path, mode="r") as h5:
             version = _text(getattr(h5.root._v_attrs, "schema_version", ""))
-            if not version.startswith("m101_measurements_v1"):
+            if version == V2_SCHEMA:
+                self.is_v2 = True
+            elif version.startswith("m101_measurements_v1"):
+                self.is_v2 = False
+            else:
                 raise ValueError("unsupported measurement schema: %s" % version)
             band_order = _text(getattr(h5.root._v_attrs, "band_order", ""))
             if json.loads(band_order) != list(BANDS):
                 raise ValueError("measurement band_order is not [ON, OFF]")
+            if self.is_v2:
+                null_order = _text(getattr(h5.root._v_attrs, "sky_null_band_order", ""))
+                if json.loads(null_order) != list(SKY_NULL_BANDS):
+                    raise ValueError("measurement sky_null_band_order does not match the frozen v2 order")
+                self.null_band_order = tuple(json.loads(null_order))
             if "/measurements" not in h5 or "/exposure_band" not in h5:
                 raise ValueError("measurement H5 lacks /measurements or /exposure_band")
             table = h5.root.measurements
-            missing = set(self.REQUIRED) - set(table.colnames)
+            required = self.V2_REQUIRED if self.is_v2 else self.REQUIRED
+            missing = set(required) - set(table.colnames)
             if missing:
                 raise ValueError("measurement table lacks columns: %s" % sorted(missing))
             if "/provenance/h5_inputs" in h5:
@@ -383,6 +552,9 @@ class MeasurementStore:
                     raise ValueError("/provenance/h5_inputs has inconsistent h5_id values")
             if not self.h5_names:
                 raise ValueError("measurement H5 lacks /provenance/h5_inputs")
+            if "/provenance/metadata" in h5:
+                for row in h5.root.provenance.metadata:
+                    self.measurement_metadata[_text(row["key"])] = json.loads(_text(row["value"]))
             eb = h5.root.exposure_band
             for row in eb:
                 key = (int(row["h5_id"]), int(row["exposure"]))
@@ -390,20 +562,94 @@ class MeasurementStore:
                     "K": np.asarray(row["K"], dtype=float),
                     "g": np.asarray(row["g_global"], dtype=float),
                 }
+            if self.is_v2:
+                if "/sky_null_exposure" not in h5:
+                    raise ValueError("v2 measurement H5 lacks /sky_null_exposure")
+                null_table = h5.root.sky_null_exposure
+                if null_table.nrows != len(self.exposure_rows):
+                    raise ValueError("/sky_null_exposure does not have one row per exposure")
+                for row in null_table:
+                    key = (int(row["h5_id"]), int(row["exposure"]))
+                    if key not in self.exposure_rows:
+                        raise ValueError("sky-null exposure row is not in /exposure_band: %s" % (key,))
+                    null_k = np.asarray(row["K"], dtype=float)
+                    location = np.asarray(row["blank_data_work_location"], dtype=float)
+                    if null_k.shape != (N_SKY_NULL_BANDS,) or location.shape != (N_SKY_NULL_BANDS,):
+                        raise ValueError("sky-null exposure arrays have the wrong shape")
+                    self.exposure_rows[key].update({"K_null": null_k,
+                                                    "blank_location": location,
+                                                    "blank_scale": np.asarray(row["blank_data_work_scale"], dtype=float),
+                                                    "n_blank_external": int(row["n_blank_external"])})
+                if any("K_null" not in row for row in self.exposure_rows.values()):
+                    raise ValueError("missing sky-null K metadata for an exposure")
             if self.exposure_rows:
                 self.g_global = np.nanmedian(
                     np.vstack([value["g"] for value in self.exposure_rows.values()]), axis=0)
             else:
                 raise ValueError("measurement H5 has no exposure_band metadata")
             arrays = {name: np.asarray(getattr(table.cols, name)[:])
-                      for name in self.REQUIRED}
+                      for name in required}
             arrays["AMP"] = np.asarray([_text(value) for value in arrays["AMP"]])
         self.nrows = len(arrays["h5_id"])
         if self.nrows == 0:
             raise ValueError("measurement table is empty")
+        if self.additive_structure_path is not None:
+            if not self.is_v2:
+                raise ValueError("--additive-structure requires m101_measurements_v2")
+            self.additive_structure = AdditiveStructure(
+                self.additive_structure_path, self.h5_names, self.measurement_metadata)
+        if self.is_v2:
+            if self.additive_structure is None:
+                self._center_v2_arrays(arrays)
+            else:
+                self.centering = {"mode": "disabled_with_additive_structure",
+                                  "definition": "additive product owns R_e, IFU, and amplifier additive terms"}
         if self.compact_mask_path is not None:
             self._apply_compact_mask(arrays)
         self._group_arrays(arrays)
+
+    def _center_v2_arrays(self, arrays):
+        """Apply only the exposure-wide externally blank robust zero levels."""
+        h5_id = np.asarray(arrays["h5_id"], dtype=int)
+        exposure = np.asarray(arrays["exposure"], dtype=int)
+        blank = np.asarray(arrays["sky_blank"], dtype=bool)
+        date_bad = np.asarray(arrays["date_mask_bad"], dtype=bool)
+        source_centers, null_centers = {}, {}
+        for key in sorted(self.exposure_rows):
+            select = (h5_id == key[0]) & (exposure == key[1]) & blank & ~date_bad
+            source_values = np.asarray(arrays["data_work"])[select]
+            source_errors = np.asarray(arrays["error_work"])[select]
+            source_centers[key] = np.asarray([
+                _robust_location_scale(source_values[:, band][np.isfinite(source_values[:, band])
+                    & np.isfinite(source_errors[:, band]) & (source_errors[:, band] > 0)])[0]
+                for band in range(N_BANDS)], dtype=float)
+            null_values = np.asarray(arrays["sky_null_data_work"])[select]
+            null_errors = np.asarray(arrays["sky_null_error_work"])[select]
+            null_centers[key] = np.asarray([
+                _robust_location_scale(null_values[:, band][np.isfinite(null_values[:, band])
+                    & np.isfinite(null_errors[:, band]) & (null_errors[:, band] > 0)])[0]
+                for band in range(N_SKY_NULL_BANDS)], dtype=float)
+            stored = np.asarray(self.exposure_rows[key]["blank_location"], dtype=float)
+            if not np.allclose(null_centers[key], stored, rtol=1e-10, atol=1e-12, equal_nan=True):
+                raise ValueError("recomputed null blank location disagrees with persisted exposure metadata for %s" % (key,))
+            if not np.all(np.isfinite(source_centers[key])):
+                raise ValueError("cannot define source blank center for exposure %s" % (key,))
+            # A null band with no usable blank rows contributes no likelihood rows.
+            # Keep its primitive values finite for QA by using zero only in this
+            # undefined, empty case; persisted locations remain NaN provenance.
+            null_centers[key] = np.where(np.isfinite(null_centers[key]), null_centers[key], 0.0)
+        source_row_centers = np.asarray([source_centers[(int(h), int(e))]
+                                         for h, e in zip(h5_id, exposure)])
+        null_row_centers = np.asarray([null_centers[(int(h), int(e))]
+                                       for h, e in zip(h5_id, exposure)])
+        arrays["data_work"] = np.asarray(arrays["data_work"], dtype=float) - source_row_centers
+        arrays["sky_null_data_work"] = (np.asarray(arrays["sky_null_data_work"], dtype=float)
+                                         - null_row_centers)
+        self.centering = {
+            "source": {"%d:%d" % key: source_centers[key].tolist() for key in source_centers},
+            "null": {"%d:%d" % key: null_centers[key].tolist() for key in null_centers},
+            "definition": "one robust external-blank zero level per H5/exposure/band",
+        }
 
     def _apply_compact_mask(self, arrays):
         mask_data, mask_wcs = load_compact_mask(self.compact_mask_path)
@@ -485,6 +731,12 @@ class MeasurementStore:
                 h5_value, exp_value,
                 PhysicalIFUKey(int(specid[indices[0]]), int(slot[indices[0]]), int(uid[indices[0]])),
                 amp_name)
+            additive = None
+            if self.additive_structure is not None:
+                additive = self.additive_structure.prediction(
+                    self.h5_names[h5_value], exp_value,
+                    (int(specid[indices[0]]), int(slot[indices[0]]), int(uid[indices[0]])),
+                    amp_name)
             block = AmplifierBlock(
                 key=key, h5_name=self.h5_names[h5_value],
                 ra=float(np.nanmean(a["RA"][indices])),
@@ -500,7 +752,27 @@ class MeasurementStore:
                 fq=np.asarray(a["fq"][indices], dtype=float),
                 K=np.asarray(self.exposure_rows[(h5_value, exp_value)]["K"], dtype=float),
                 q=np.asarray(a["q"][indices], dtype=int),
-                sky_scale=np.nan,
+                sky_scale=1.0 if self.is_v2 else np.nan,
+                is_v2=self.is_v2,
+                sky_blank=(np.asarray(a["sky_blank"][indices], dtype=bool)
+                           if self.is_v2 else None),
+                null_D=(np.asarray(a["sky_null_data_work"][indices], dtype=float)
+                        if self.is_v2 else None),
+                null_error=(np.asarray(a["sky_null_error_work"][indices], dtype=float)
+                            if self.is_v2 else None),
+                null_sky=(np.asarray(a["sky_null_sky"][indices], dtype=float)
+                          if self.is_v2 else None),
+                null_K=(np.asarray(self.exposure_rows[(h5_value, exp_value)]["K_null"], dtype=float)
+                        if self.is_v2 else None),
+                additive_source=(additive["source"] if additive is not None else None),
+                additive_null=(additive["null"] if additive is not None else None),
+                additive_R=(additive["R"] if additive is not None else None),
+                additive_IFU=(additive["IFU"] if additive is not None else None),
+                additive_AMP=(additive["AMP"] if additive is not None else None),
+                additive_c=(additive["c"] if additive is not None else 0.0),
+                additive_d=(additive["d"] if additive is not None else 0.0),
+                additive_ifu_supported=(additive["ifu_supported"] if additive is not None else True),
+                additive_amp_supported=(additive["amp_supported"] if additive is not None else True),
             )
             self.blocks.append(block)
             if "_compact_masked_fiber" in a:
@@ -520,6 +792,11 @@ class MeasurementStore:
         self._calculate_exposure_scales()
 
     def _calculate_exposure_scales(self):
+        if self.is_v2:
+            for block in self.blocks:
+                block.sky_scale = 1.0
+            self.block_count = len(self.blocks)
+            return
         grouped = {}
         for block in self.blocks:
             grouped.setdefault((block.key.h5_id, block.key.exposure), []).append(block)
@@ -553,12 +830,24 @@ def _normal_logpdf_grid(z_grid, mean, sigma):
     return -0.5 * ((z_grid - mean) / sigma) ** 2 - np.log(sigma * np.sqrt(2 * np.pi))
 
 
-def _marginal_grid(T, P, H, sigma, beta_mean, beta_sigma, z_grid):
-    """Marginalized log likelihood and beta|z using only 2x2 operations."""
-    T, P, H, sigma = [np.asarray(value, dtype=float) for value in (T, P, H, sigma)]
+def _linear_design(H, additive_model="p-alpha"):
+    H = np.asarray(H, dtype=float)
     if H.ndim == 1:
         H = H[:, None]
-    A = np.column_stack((np.ones(len(T)), H))
+    if H.shape[1] != 1:
+        raise ValueError("H must be a single shared alpha regressor")
+    if additive_model == "alpha-only":
+        return H
+    if additive_model == "p-alpha":
+        return np.column_stack((np.ones(len(H)), H))
+    raise ValueError("unknown additive model: %s" % additive_model)
+
+
+def _marginal_grid(T, P, H, sigma, beta_mean, beta_sigma, z_grid,
+                   additive_model="p-alpha"):
+    """Marginalized log likelihood for [H] or [1,H] additive design."""
+    T, P, H, sigma = [np.asarray(value, dtype=float) for value in (T, P, H, sigma)]
+    A = _linear_design(H, additive_model)
     prior_var = np.asarray(beta_sigma, dtype=float) ** 2
     prior_precision = np.diag(1.0 / prior_var)
     beta_mean = np.asarray(beta_mean, dtype=float)
@@ -590,10 +879,11 @@ def _marginal_grid(T, P, H, sigma, beta_mean, beta_sigma, z_grid):
                         _trapezoid_log_integral(log_m, z_grid))
 
 
-def _conditional_beta(T, P, H, sigma, z, beta_mean, beta_sigma):
+def _conditional_beta(T, P, H, sigma, z, beta_mean, beta_sigma,
+                      additive_model="p-alpha"):
     """Return beta|z,data for the nominal local model."""
     T, P, H, sigma = [np.asarray(value, dtype=float) for value in (T, P, H, sigma)]
-    A = np.column_stack((np.ones(len(T)), H))
+    A = _linear_design(H, additive_model)
     prior_var = np.asarray(beta_sigma, dtype=float) ** 2
     Q = np.diag(1.0 / prior_var) + A.T @ ((1.0 / sigma**2)[:, None] * A)
     cov = np.linalg.inv(Q)
@@ -642,15 +932,16 @@ def _split_band_fits(block, z_grid, alpha_mean, alpha_sigma, p_sigma_prior,
                      data_error_scale_on=DATA_ERROR_SCALE_ON_DEFAULT,
                      data_error_scale_off=DATA_ERROR_SCALE_OFF_DEFAULT,
                      model_fraction_on=MODEL_FRACTION_ON_DEFAULT,
-                     model_fraction_off=MODEL_FRACTION_OFF_DEFAULT):
+                     model_fraction_off=MODEL_FRACTION_OFF_DEFAULT,
+                     additive_model="p-alpha"):
     """Fit the existing local model separately in each band for QA."""
     T_effective, P_effective, band_scale, _ = _band_contrast_transform(
         block, delta_z_band, delta_p_band)
     sigma_effective = _likelihood_sigma(
         block, band_scale, np.asarray([data_error_scale_on, data_error_scale_off]),
         np.asarray([model_fraction_on, model_fraction_off]), error_floor, error_floor_factor)
-    beta_prior_mean = np.asarray([0.0, alpha_mean])
-    beta_prior_sigma = np.asarray([p_sigma_prior, alpha_sigma])
+    beta_prior_mean = np.asarray([alpha_mean]) if additive_model == "alpha-only" else np.asarray([0.0, alpha_mean])
+    beta_prior_sigma = np.asarray([alpha_sigma]) if additive_model == "alpha-only" else np.asarray([p_sigma_prior, alpha_sigma])
     z_means, z_sigmas, p_means, p_sigmas = [], [], [], []
     alpha_means, alpha_sigmas, edges, log_evidence = [], [], [], 0.0
     for band_index in range(N_BANDS):
@@ -659,7 +950,7 @@ def _split_band_fits(block, z_grid, alpha_mean, alpha_sigma, p_sigma_prior,
         split = _marginal_grid(T_effective[:, band_index][selected],
                                P_effective[:, band_index][selected],
                                block.H[:, band_index][selected], sigma,
-                               beta_prior_mean, beta_prior_sigma, z_grid)
+                               beta_prior_mean, beta_prior_sigma, z_grid, additive_model)
         log_q0 = _normal_logpdf_grid(z_grid, 0.0, z0_sigma)
         log_z = _trapezoid_log_integral(split.log_m + log_q0, z_grid)
         log_evidence += log_z
@@ -674,8 +965,12 @@ def _split_band_fits(block, z_grid, alpha_mean, alpha_sigma, p_sigma_prior,
         beta_second = split.beta_cov + np.einsum("zi,zj->zij", split.beta_mean, split.beta_mean)
         beta_cov = np.sum(mass[:, None, None] * beta_second, axis=0) - np.outer(beta_mean, beta_mean)
         z_means.append(mean_z); z_sigmas.append(np.sqrt(variance_z))
-        p_means.append(float(beta_mean[0])); p_sigmas.append(np.sqrt(max(float(beta_cov[0, 0]), 0.0)))
-        alpha_means.append(float(beta_mean[1])); alpha_sigmas.append(np.sqrt(max(float(beta_cov[1, 1]), 0.0)))
+        if additive_model == "alpha-only":
+            p_means.append(0.0); p_sigmas.append(0.0)
+            alpha_means.append(float(beta_mean[0])); alpha_sigmas.append(np.sqrt(max(float(beta_cov[0, 0]), 0.0)))
+        else:
+            p_means.append(float(beta_mean[0])); p_sigmas.append(np.sqrt(max(float(beta_cov[0, 0]), 0.0)))
+            alpha_means.append(float(beta_mean[1])); alpha_sigmas.append(np.sqrt(max(float(beta_cov[1, 1]), 0.0)))
         edges.append(bool(mass[0] + mass[-1] > EDGE_MASS_LIMIT))
     return {"z_mean": np.asarray(z_means), "z_sigma": np.asarray(z_sigmas),
             "p_mean": np.asarray(p_means), "p_sigma": np.asarray(p_sigmas),
@@ -691,6 +986,140 @@ def _moment_information(mean, variance, prior_mean, prior_variance):
                         (variance + (mean - prior_mean) ** 2) / prior_variance - 1.0))
 
 
+def _v2_stacked_rows(block, delta_z_band, error_floor, error_floor_factor,
+                     data_error_scale_on, data_error_scale_off,
+                     model_fraction_on, model_fraction_off, null_error_scale):
+    """Return centered source rows plus externally blank null rows."""
+    T_source, P_source, band_scale, _ = _band_contrast_transform(
+        block, delta_z_band, 0.0)
+    sigma_source = _likelihood_sigma(
+        block, band_scale, np.asarray([data_error_scale_on, data_error_scale_off]),
+        np.asarray([model_fraction_on, model_fraction_off]), error_floor,
+        error_floor_factor)
+    source_valid = block.likelihood_valid
+    T = [T_source[source_valid]]
+    P = [P_source[source_valid]]
+    H = [block.H[source_valid]]
+    sigma = [sigma_source[source_valid]]
+    null_valid = block.null_likelihood_valid
+    null_data = np.asarray(block.null_D, dtype=float)
+    if block.additive_null is not None:
+        null_data = null_data - np.asarray(block.additive_null, dtype=float)[None, :]
+    T.append(null_data[null_valid])
+    P.append(np.zeros(int(np.sum(null_valid)), dtype=float))
+    H.append(block.null_H[null_valid])
+    sigma.append(float(null_error_scale) * np.asarray(block.null_error)[null_valid])
+    return (np.concatenate(T), np.concatenate(P), np.concatenate(H), np.concatenate(sigma),
+            np.sum(source_valid, axis=0).astype(int),
+            np.sum(null_valid, axis=0).astype(int),
+            source_valid, null_valid, T_source, P_source, sigma_source)
+
+
+def _local_evidence_v2(block, z_grid, pi_good, bad_scale, alpha_mean,
+                       alpha_sigma, z0_sigma, error_floor, error_floor_factor,
+                       delta_z_band, additive_model, p_sigma_absolute,
+                       null_error_scale, data_error_scale_on,
+                       data_error_scale_off, model_fraction_on,
+                       model_fraction_off, split_summary=None):
+    if additive_model == "p-alpha" and (p_sigma_absolute is None or p_sigma_absolute <= 0):
+        raise ValueError("v2 p-alpha requires a positive absolute --p-sigma")
+    T, P, H, sigma, source_counts, null_counts, source_valid, null_valid, _, _, _ = _v2_stacked_rows(
+        block, delta_z_band, error_floor, error_floor_factor, data_error_scale_on,
+        data_error_scale_off, model_fraction_on, model_fraction_off, null_error_scale)
+    p_prior = 0.0 if additive_model == "alpha-only" else float(p_sigma_absolute)
+    prior_mean = np.asarray([alpha_mean]) if additive_model == "alpha-only" else np.asarray([0.0, alpha_mean])
+    prior_sigma = np.asarray([alpha_sigma]) if additive_model == "alpha-only" else np.asarray([p_prior, alpha_sigma])
+    good = _marginal_grid(T, P, H, sigma, prior_mean, prior_sigma, z_grid, additive_model)
+    bad = _marginal_grid(T, P, H, sigma * float(bad_scale), prior_mean, prior_sigma, z_grid, additive_model)
+    log_q0 = _normal_logpdf_grid(z_grid, 0.0, z0_sigma)
+    log_total = logsumexp(np.vstack((np.log(pi_good) + good.log_m,
+                                     np.log(1.0 - pi_good) + bad.log_m)), axis=0)
+    log_z_total = _trapezoid_log_integral(log_total + log_q0, z_grid)
+    log_z_good = _trapezoid_log_integral(good.log_m + log_q0, z_grid)
+    log_z_bad = _trapezoid_log_integral(bad.log_m + log_q0, z_grid)
+    p_good = float(np.exp(np.log(pi_good) + log_z_good -
+                          logsumexp((np.log(pi_good) + log_z_good,
+                                     np.log(1.0 - pi_good) + log_z_bad))))
+    dz = float(z_grid[1] - z_grid[0])
+    weights = np.ones(len(z_grid)) * dz; weights[[0, -1]] *= .5
+    mass = np.exp(log_total + log_q0 + np.log(weights) - log_z_total); mass /= np.sum(mass)
+    mean_z = float(np.sum(mass * z_grid)); variance_z = max(float(np.sum(mass * (z_grid - mean_z) ** 2)), dz * dz / 12.0)
+    sigma_z = np.sqrt(variance_z); centered = z_grid - mean_z
+    skew = float(np.sum(mass * centered ** 3) / sigma_z ** 3) if sigma_z > 0 else 0.0
+    quality = np.exp(np.log(pi_good) + good.log_m - log_total)
+    beta_mean_z_small = quality[:, None] * good.beta_mean + (1.0 - quality[:, None]) * bad.beta_mean
+    n_beta = len(prior_mean)
+    beta_second = np.empty((len(z_grid), n_beta, n_beta))
+    for i in range(len(z_grid)):
+        beta_second[i] = (quality[i] * (good.beta_cov + np.outer(good.beta_mean[i], good.beta_mean[i]))
+                          + (1.0 - quality[i]) * (bad.beta_cov + np.outer(bad.beta_mean[i], bad.beta_mean[i])))
+    beta_mean = np.sum(mass[:, None] * beta_mean_z_small, axis=0)
+    beta_cov = np.sum(mass[:, None, None] * beta_second, axis=0) - np.outer(beta_mean, beta_mean)
+    beta_cov = .5 * (beta_cov + beta_cov.T)
+    p_mean = 0.0 if additive_model == "alpha-only" else float(beta_mean[0])
+    p_sig = 0.0 if additive_model == "alpha-only" else np.sqrt(max(float(beta_cov[0, 0]), 0.0))
+    alpha_index = 0 if additive_model == "alpha-only" else 1
+    alpha_post = float(beta_mean[alpha_index]); alpha_sig = np.sqrt(max(float(beta_cov[alpha_index, alpha_index]), 0.0))
+    beta_mean_z = np.zeros((len(z_grid), 2)); beta_mean_z[:, 1] = beta_mean_z_small[:, alpha_index]
+    beta_cov_integrated = np.zeros((2, 2)); beta_cov_integrated[1, 1] = beta_cov[alpha_index, alpha_index]
+    if additive_model == "p-alpha":
+        beta_mean_z[:, 0] = beta_mean_z_small[:, 0]
+        beta_cov_integrated = beta_cov
+    rho_z_alpha = float(np.sum(mass * centered * (beta_mean_z[:, 1] - alpha_post)) /
+                        (sigma_z * alpha_sig)) if sigma_z > 0 and alpha_sig > 0 else 0.0
+    rho_z_p = float(np.sum(mass * centered * (beta_mean_z[:, 0] - p_mean)) /
+                    (sigma_z * p_sig)) if additive_model == "p-alpha" and sigma_z > 0 and p_sig > 0 else 0.0
+    rho_p_alpha = float(beta_cov_integrated[0, 1] / (p_sig * alpha_sig)) if p_sig > 0 and alpha_sig > 0 else 0.0
+    preliminary = split_summary
+    if preliminary is None:
+        preliminary = _split_band_fits(block, z_grid, alpha_mean, alpha_sigma, p_prior,
+                                       error_floor, error_floor_factor,
+                                       data_error_scale_on=data_error_scale_on,
+                                       data_error_scale_off=data_error_scale_off,
+                                       model_fraction_on=model_fraction_on,
+                                       model_fraction_off=model_fraction_off,
+                                       additive_model=additive_model)
+    final_split = _split_band_fits(
+        block, z_grid, alpha_mean, alpha_sigma, p_prior,
+        error_floor, error_floor_factor, delta_z_band, 0.0, z0_sigma,
+        data_error_scale_on, data_error_scale_off, model_fraction_on,
+        model_fraction_off, additive_model)
+    split_delta_alpha = float(preliminary["alpha_mean"][0] - preliminary["alpha_mean"][1])
+    split_delta_alpha_sigma = float(np.hypot(preliminary["alpha_sigma"][0], preliminary["alpha_sigma"][1]))
+    site_tau = 1.0 / variance_z - 1.0 / (z0_sigma * z0_sigma)
+    site_nu = mean_z / variance_z
+    noninformative = bool(site_tau <= 0 or not np.isfinite(site_tau))
+    if noninformative: site_tau, site_nu, site_z_hat, site_sigma = 0., 0., np.nan, np.inf
+    else: site_z_hat, site_sigma = site_nu / site_tau, np.sqrt(1. / site_tau)
+    beta_prior_var = alpha_sigma ** 2 if additive_model == "alpha-only" else p_prior ** 2
+    p_info = 0.0 if additive_model == "alpha-only" else _moment_information(p_mean, beta_cov[0, 0], 0., beta_prior_var)
+    return AmplifierEvidence(
+        key=block.key, h5_name=block.h5_name, ra=block.ra, dec=block.dec,
+        x_amp=np.asarray([np.sum(block.X[:, i][source_valid[:, i]]) for i in range(2)]),
+        median_x=np.asarray([np.nanmedian(block.X[:, i][source_valid[:, i]]) if np.any(source_valid[:, i]) else np.nan for i in range(2)]),
+        n_valid=source_counts, local_z_mean=mean_z, local_z_sigma=sigma_z, local_z_skew=skew,
+        local_m_mean=float(np.sum(mass * np.exp(z_grid))), p_mean=p_mean, p_sigma=p_sig,
+        alpha_mean=alpha_post, alpha_sigma=alpha_sig, rho_z_p=rho_z_p, rho_z_alpha=rho_z_alpha,
+        rho_p_alpha=rho_p_alpha, p_information=p_info,
+        alpha_information=_moment_information(alpha_post, beta_cov[alpha_index, alpha_index], alpha_mean, alpha_sigma ** 2),
+        I_m=float(np.sum(mass * (log_total + log_q0 - log_z_total - log_q0))), p_good=p_good,
+        site_tau=float(site_tau), site_nu=float(site_nu), site_z_hat=float(site_z_hat), site_sigma=float(site_sigma),
+        noninformative_site=noninformative, grid_edge_flag=bool(mass[0] + mass[-1] > EDGE_MASS_LIMIT),
+        split_minus_joint_log_evidence=float(final_split["log_evidence"] - log_z_good),
+        split_z_mean=preliminary["z_mean"], split_z_sigma=preliminary["z_sigma"],
+        split_p_mean=preliminary["p_mean"], split_p_sigma=preliminary["p_sigma"],
+        split_alpha_mean=preliminary["alpha_mean"], split_alpha_sigma=preliminary["alpha_sigma"],
+        split_grid_edge=preliminary["grid_edge"], split_delta_z=float(preliminary["z_mean"][0] - preliminary["z_mean"][1]),
+        split_delta_p=float(preliminary["p_mean"][0] - preliminary["p_mean"][1]),
+        split_delta_alpha=split_delta_alpha, split_delta_alpha_sigma=split_delta_alpha_sigma,
+        split_delta_alpha_significance=split_delta_alpha / split_delta_alpha_sigma if split_delta_alpha_sigma > 0 else np.nan,
+        log_m_good=good.log_m, log_m_bad=bad.log_m, log_m_total=log_total,
+        beta_mean_z=beta_mean_z, beta_cov_integrated=beta_cov_integrated,
+        p_sigma_prior=p_prior, error_floor_used=float(error_floor or 0.0),
+        n_blank_external=int(np.sum(block.sky_blank)), n_null=null_counts,
+        null_source_ratio=float(np.sum(null_counts) / max(np.sum(source_counts), 1)))
+
+
 def _local_evidence(block, z_grid, pi_good=PI_GOOD_DEFAULT,
                     bad_scale=BAD_SCALE_DEFAULT,
                     p_sigma_fraction=P_SIGMA_FRACTION_DEFAULT,
@@ -703,7 +1132,16 @@ def _local_evidence(block, z_grid, pi_good=PI_GOOD_DEFAULT,
                     data_error_scale_on=DATA_ERROR_SCALE_ON_DEFAULT,
                     data_error_scale_off=DATA_ERROR_SCALE_OFF_DEFAULT,
                     model_fraction_on=MODEL_FRACTION_ON_DEFAULT,
-                    model_fraction_off=MODEL_FRACTION_OFF_DEFAULT):
+                    model_fraction_off=MODEL_FRACTION_OFF_DEFAULT,
+                    additive_model="p-alpha", p_sigma_absolute=None,
+                    null_error_scale=1.0):
+    if block.is_v2:
+        return _local_evidence_v2(
+            block, z_grid, pi_good, bad_scale, alpha_mean, alpha_sigma, z0_sigma,
+            error_floor, error_floor_factor, delta_z_band, additive_model,
+            p_sigma_absolute, null_error_scale, data_error_scale_on,
+            data_error_scale_off, model_fraction_on, model_fraction_off,
+            split_summary)
     primitive = block.primitive_valid
     likelihood = block.likelihood_valid
     valid_by_band = np.sum(likelihood, axis=0).astype(int)
@@ -1403,10 +1841,16 @@ def _evidence_config(args, measurement_path):
                          if args.compact_mask is not None else None)
     return {
         "schema": EVIDENCE_SCHEMA,
+        "measurement_schema": getattr(args, "measurement_schema", None),
         "measurement_identity": _h5_identity(measurement_path),
+        "additive_structure_identity": (_h5_identity(args.additive_structure)
+                                         if getattr(args, "additive_structure", None) else None),
         "z_grid": [float(args.z_min), float(args.z_max), int(args.n_z)],
         "pi_good": float(args.pi_good), "bad_scale": float(args.bad_scale),
         "p_sigma_fraction": float(args.p_sigma_fraction),
+        "additive_model": args.additive_model,
+        "p_sigma_absolute": args.p_sigma,
+        "null_error_scale": float(args.null_error_scale),
         "alpha_mean": float(args.alpha_mean), "alpha_sigma": float(args.alpha_sigma),
         "z0_sigma": float(args.z0_sigma), "error_floor": args.error_floor,
         "error_floor_factor": args.error_floor_factor,
@@ -1434,6 +1878,9 @@ def _evidence_table_description(nz):
         X_amp = tables.Float64Col(shape=(2,))
         median_x = tables.Float64Col(shape=(2,))
         n_valid = tables.Int16Col(shape=(2,))
+        n_blank_external = tables.Int16Col()
+        n_null = tables.Int16Col(shape=(N_SKY_NULL_BANDS,))
+        null_source_ratio = tables.Float64Col()
         local_z_mean = tables.Float64Col()
         local_z_sigma = tables.Float64Col()
         local_z_skew = tables.Float64Col()
@@ -1503,6 +1950,9 @@ def _write_evidence_cache(path, evidences, z_grid, config, band_contrast, pre_qa
             row["X_amp"] = evidence.x_amp
             for field in ("median_x", "n_valid"):
                 row[field] = getattr(evidence, field)
+            row["n_blank_external"] = evidence.n_blank_external
+            row["n_null"] = evidence.n_null if evidence.n_null is not None else np.zeros(N_SKY_NULL_BANDS, dtype=int)
+            row["null_source_ratio"] = evidence.null_source_ratio
             for field in ("local_z_mean", "local_z_sigma", "local_z_skew", "local_m_mean", "p_mean", "p_sigma",
                           "alpha_mean", "alpha_sigma", "rho_z_p", "rho_z_alpha", "rho_p_alpha",
                           "p_information", "alpha_information", "I_m", "p_good", "site_tau", "site_nu",
@@ -1550,6 +2000,7 @@ def _load_evidence_cache(path, store, z_grid, config):
                     return None
                 values = {field: row[field] for field in (
                     "median_x", "n_valid", "local_z_mean", "local_z_sigma", "local_z_skew",
+                    "n_blank_external", "n_null", "null_source_ratio",
                     "local_m_mean", "p_mean", "p_sigma", "alpha_mean", "alpha_sigma", "rho_z_p",
                     "rho_z_alpha", "rho_p_alpha", "p_information", "alpha_information", "I_m", "p_good",
                     "site_tau", "site_nu", "site_z_hat", "site_sigma", "noninformative_site", "grid_edge_flag",
@@ -1718,7 +2169,8 @@ def _posterior_rows(store, evidences, posterior, alpha_prior_mean=ALPHA_MEAN_DEF
                     data_error_scale_on=DATA_ERROR_SCALE_ON_DEFAULT,
                     data_error_scale_off=DATA_ERROR_SCALE_OFF_DEFAULT,
                     model_fraction_on=MODEL_FRACTION_ON_DEFAULT,
-                    model_fraction_off=MODEL_FRACTION_OFF_DEFAULT):
+                    model_fraction_off=MODEL_FRACTION_OFF_DEFAULT,
+                    additive_model="p-alpha", null_error_scale=1.0):
     obs_rows, ifu_accum, amp_accum, exp_accum = [], {}, {}, {}
     for evidence, block in zip(evidences, store.blocks):
         indices, values = _layout_design(posterior.layout, evidence.key)
@@ -1732,7 +2184,21 @@ def _posterior_rows(store, evidences, posterior, alpha_prior_mean=ALPHA_MEAN_DEF
             block, band_scale, np.asarray([data_error_scale_on, data_error_scale_off]),
             np.asarray([model_fraction_on, model_fraction_off]), error_floor, error_floor_factor)
         p_values, alpha_values = [], []
-        if conditional_valid.any():
+        if block.is_v2:
+            (stack_T, stack_P, stack_H, stack_sigma, _, _, _, _, _, _, _) = _v2_stacked_rows(
+                block, delta_z_band, error_floor, error_floor_factor,
+                data_error_scale_on, data_error_scale_off, model_fraction_on,
+                model_fraction_off, null_error_scale)
+            mode = additive_model
+            prior_mean = np.asarray([alpha_prior_mean]) if mode == "alpha-only" else np.asarray([0., alpha_prior_mean])
+            prior_sigma = np.asarray([alpha_prior_sigma]) if mode == "alpha-only" else np.asarray([evidence.p_sigma_prior, alpha_prior_sigma])
+            mean_beta, cov_beta = _conditional_beta(stack_T, stack_P, stack_H, stack_sigma,
+                                                     z_mean, prior_mean, prior_sigma, mode)
+            alpha_index = 0 if mode == "alpha-only" else 1
+            p_mean = 0.0 if mode == "alpha-only" else float(mean_beta[0])
+            p_sigma = 0.0 if mode == "alpha-only" else np.sqrt(max(cov_beta[0, 0], 0.0))
+            alpha_mean, alpha_sigma = float(mean_beta[alpha_index]), np.sqrt(max(cov_beta[alpha_index, alpha_index], 0.0))
+        elif conditional_valid.any():
             sigma = sigma_effective[conditional_valid]
             mean_beta, cov_beta = _conditional_beta(T_effective[conditional_valid], P_effective[conditional_valid],
                                                     block.H[conditional_valid], sigma, z_mean,
@@ -1744,8 +2210,7 @@ def _posterior_rows(store, evidences, posterior, alpha_prior_mean=ALPHA_MEAN_DEF
         else:
             p_mean, alpha_mean = evidence.p_mean, evidence.alpha_mean
             p_sigma, alpha_sigma = evidence.p_sigma, evidence.alpha_sigma
-        prediction = (np.exp(z_mean) * P_effective + p_mean + alpha_mean * block.H
-                      + band_offset[None, :])
+        prediction = np.exp(z_mean) * P_effective + p_mean + alpha_mean * block.H + band_offset[None, :]
         residual = block.T - prediction
         rms, robust = [], []
         mean_residual, median_residual = [], []
@@ -1767,6 +2232,15 @@ def _posterior_rows(store, evidences, posterior, alpha_prior_mean=ALPHA_MEAN_DEF
                "IFUID": evidence.key.ifu.ifuid, "AMP": evidence.key.amp, "RA": evidence.ra, "Dec": evidence.dec,
                "X_amp_ON": evidence.x_amp[0], "X_amp_OFF": evidence.x_amp[1],
                "n_valid_ON": evidence.n_valid[0], "n_valid_OFF": evidence.n_valid[1],
+               "N_source_ON": evidence.n_valid[0], "N_source_OFF": evidence.n_valid[1],
+               "N_blank_external": evidence.n_blank_external,
+               "N_null_NULL_HIGH1": int(evidence.n_null[0]) if evidence.n_null is not None else 0,
+               "N_null_NULL_LOW1": int(evidence.n_null[1]) if evidence.n_null is not None else 0,
+               "N_null_NULL_HIGH2": int(evidence.n_null[2]) if evidence.n_null is not None else 0,
+               "N_null_NULL_LOW2": int(evidence.n_null[3]) if evidence.n_null is not None else 0,
+               "N_null_NULL_HIGH3": int(evidence.n_null[4]) if evidence.n_null is not None else 0,
+               "N_null_total": int(np.sum(evidence.n_null)) if evidence.n_null is not None else 0,
+               "null_source_equation_ratio": evidence.null_source_ratio,
                "local_z_mean": evidence.local_z_mean, "local_z_sigma": evidence.local_z_sigma,
                "local_m_mean": evidence.local_m_mean, "p_mean": p_mean, "p_sigma": p_sigma,
                "alpha_mean": alpha_mean, "alpha_sigma": alpha_sigma, "rho_z_p": evidence.rho_z_p,
@@ -1795,6 +2269,14 @@ def _posterior_rows(store, evidences, posterior, alpha_prior_mean=ALPHA_MEAN_DEF
                "mean_residual_ON": mean_residual[0], "mean_residual_OFF": mean_residual[1],
                "median_residual_ON": median_residual[0], "median_residual_OFF": median_residual[1],
                "model_flags": ";".join(flags)}
+        if block.additive_source is not None:
+            row.update({
+                "additive_R_ON": float(block.additive_R[0]), "additive_R_OFF": float(block.additive_R[1]),
+                "additive_IFU_ON": float(block.additive_IFU[0]), "additive_IFU_OFF": float(block.additive_IFU[1]),
+                "additive_AMP_ON": float(block.additive_AMP[0]), "additive_AMP_OFF": float(block.additive_AMP[1]),
+                "additive_c": float(block.additive_c), "additive_d": float(block.additive_d),
+                "additive_IFU_supported": bool(block.additive_ifu_supported),
+                "additive_AMP_supported": bool(block.additive_amp_supported)})
         obs_rows.append(row)
         physical_key = evidence.key.ifu
         amp_key = PhysicalAmplifierKey(physical_key, evidence.key.amp)
@@ -1907,10 +2389,11 @@ def _solution_descriptions():
         h5_id = tables.Int16Col(); exposure = tables.UInt8Col(); H5 = tables.StringCol(256)
         SPECID = tables.Int32Col(); IFUSLOT = tables.Int32Col(); IFUID = tables.Int32Col(); AMP = tables.StringCol(2)
         RA = tables.Float64Col(); Dec = tables.Float64Col(); X_amp_ON = tables.Float64Col(); X_amp_OFF = tables.Float64Col()
-        n_valid_ON = tables.Int16Col(); n_valid_OFF = tables.Int16Col(); local_z_mean = tables.Float64Col(); local_z_sigma = tables.Float64Col(); local_m_mean = tables.Float64Col()
+        n_valid_ON = tables.Int16Col(); n_valid_OFF = tables.Int16Col(); N_source_ON = tables.Int16Col(); N_source_OFF = tables.Int16Col(); N_blank_external = tables.Int16Col(); N_null_NULL_HIGH1 = tables.Int16Col(); N_null_NULL_LOW1 = tables.Int16Col(); N_null_NULL_HIGH2 = tables.Int16Col(); N_null_NULL_LOW2 = tables.Int16Col(); N_null_NULL_HIGH3 = tables.Int16Col(); N_null_total = tables.Int32Col(); null_source_equation_ratio = tables.Float64Col(); local_z_mean = tables.Float64Col(); local_z_sigma = tables.Float64Col(); local_m_mean = tables.Float64Col()
         p_mean = tables.Float64Col(); p_sigma = tables.Float64Col(); alpha_mean = tables.Float64Col(); alpha_sigma = tables.Float64Col(); rho_z_p = tables.Float64Col(); rho_z_alpha = tables.Float64Col(); rho_p_alpha = tables.Float64Col(); split_z_mean_ON = tables.Float64Col(); split_z_sigma_ON = tables.Float64Col(); split_z_mean_OFF = tables.Float64Col(); split_z_sigma_OFF = tables.Float64Col(); split_delta_z = tables.Float64Col(); split_p_mean_ON = tables.Float64Col(); split_p_sigma_ON = tables.Float64Col(); split_p_mean_OFF = tables.Float64Col(); split_p_sigma_OFF = tables.Float64Col(); split_delta_p = tables.Float64Col(); split_alpha_mean_ON = tables.Float64Col(); split_alpha_sigma_ON = tables.Float64Col(); split_alpha_mean_OFF = tables.Float64Col(); split_alpha_sigma_OFF = tables.Float64Col(); split_delta_alpha = tables.Float64Col(); split_delta_alpha_sigma = tables.Float64Col(); split_delta_alpha_significance = tables.Float64Col(); P_alpha_lt_0p2 = tables.Float64Col(); P_alpha_gt_0p6 = tables.Float64Col()
         I_m = tables.Float64Col(); p_good = tables.Float64Col(); site_tau = tables.Float64Col(); site_nu = tables.Float64Col(); site_z_hat = tables.Float64Col(); site_sigma = tables.Float64Col(); grid_edge_flag = tables.BoolCol(); joint_vs_split_band_log_evidence = tables.Float64Col()
         posterior_z_mean = tables.Float64Col(); posterior_z_sigma = tables.Float64Col(); posterior_m_mean = tables.Float64Col(); residual_RMS_ON = tables.Float64Col(); residual_RMS_OFF = tables.Float64Col(); robust_RMS_ON = tables.Float64Col(); robust_RMS_OFF = tables.Float64Col(); mean_residual_ON = tables.Float64Col(); mean_residual_OFF = tables.Float64Col(); median_residual_ON = tables.Float64Col(); median_residual_OFF = tables.Float64Col(); model_flags = tables.StringCol(256)
+        additive_R_ON = tables.Float64Col(); additive_R_OFF = tables.Float64Col(); additive_IFU_ON = tables.Float64Col(); additive_IFU_OFF = tables.Float64Col(); additive_AMP_ON = tables.Float64Col(); additive_AMP_OFF = tables.Float64Col(); additive_c = tables.Float64Col(); additive_d = tables.Float64Col(); additive_IFU_supported = tables.BoolCol(); additive_AMP_supported = tables.BoolCol()
     class Physical(tables.IsDescription):
         SPECID = tables.Int32Col(); IFUSLOT = tables.Int32Col(); IFUID = tables.Int32Col(); AMP = tables.StringCol(2); eta_mean = tables.Float64Col(); eta_sigma = tables.Float64Col(); P_abs_eta_gt_2pct = tables.Float64Col(); P_abs_eta_gt_5pct = tables.Float64Col(); P_abs_eta_gt_10pct = tables.Float64Col(); n_informative_observations = tables.Int32Col(); cumulative_I_m = tables.Float64Col(); median_p_good = tables.Float64Col(); minimum_p_good = tables.Float64Col(); X_support_min = tables.Float64Col(); X_support_max = tables.Float64Col()
     class IFU(tables.IsDescription):
@@ -1960,6 +2443,98 @@ def _metadata_description():
 
 def _history_rows(stages):
     return stages
+
+
+def _null_residual_rows(store, evidences, obs_rows, posterior, additive_model,
+                        alpha_prior_mean, alpha_prior_sigma, delta_z_band,
+                        null_error_scale, error_floor, error_floor_factor,
+                        data_error_scale_on, data_error_scale_off,
+                        model_fraction_on, model_fraction_off):
+    rows = []
+    for evidence, block, obs in zip(evidences, store.blocks, obs_rows):
+        indices, values = _layout_design(posterior.layout, evidence.key)
+        z = float(np.dot(values, posterior.mean[indices]))
+        (T, P, H, sigma, _, _, _, null_valid, _, _, _) = _v2_stacked_rows(
+            block, delta_z_band, error_floor, error_floor_factor,
+            data_error_scale_on, data_error_scale_off, model_fraction_on,
+            model_fraction_off, null_error_scale)
+        source_n = int(np.sum(evidence.n_valid)); offset = source_n
+        if additive_model == "alpha-only":
+            prior_mean, prior_sigma = np.asarray([alpha_prior_mean]), np.asarray([alpha_prior_sigma])
+        else:
+            prior_mean, prior_sigma = np.asarray([0., alpha_prior_mean]), np.asarray([evidence.p_sigma_prior, alpha_prior_sigma])
+        beta, _ = _conditional_beta(T, P, H, sigma, z, prior_mean, prior_sigma, additive_model)
+        p = 0. if additive_model == "alpha-only" else float(beta[0])
+        alpha = float(beta[0] if additive_model == "alpha-only" else beta[1])
+        for k, band in enumerate(SKY_NULL_BANDS):
+            valid = null_valid[:, k]
+            null_data = np.asarray(block.null_D)[:, k]
+            if block.additive_null is not None:
+                null_data = null_data - float(np.asarray(block.additive_null)[k])
+            residual = null_data[valid] - (p + alpha * block.null_H[:, k][valid])
+            loc, scale = _robust_location_scale(residual)
+            sigma_med = np.nanmedian(np.asarray(block.null_error)[:, k][valid]) if np.any(valid) else np.nan
+            rows.append({"H5": evidence.h5_name, "exposure": evidence.key.exposure,
+                         "SPECID": evidence.key.ifu.specid, "IFUSLOT": evidence.key.ifu.ifuslot,
+                         "IFUID": evidence.key.ifu.ifuid, "AMP": evidence.key.amp,
+                         "null_band": band, "N_blank": int(np.sum(block.sky_blank)),
+                         "N_null": int(np.sum(valid)), "posterior_z_mean": z,
+                         "p_mean": p, "alpha_mean": alpha,
+                         "robust_residual_location": loc, "robust_residual_scale": scale,
+                         "normalized_residual_location": loc / sigma_med if np.isfinite(loc) and np.isfinite(sigma_med) and sigma_med > 0 else np.nan})
+    return rows
+
+
+def _null_exposure_summary(rows):
+    result = []
+    keys = sorted(set((r["H5"], r["exposure"], r["null_band"]) for r in rows))
+    for key in keys:
+        subset = [r for r in rows if (r["H5"], r["exposure"], r["null_band"]) == key]
+        result.append({"H5": key[0], "exposure": key[1], "null_band": key[2],
+                       "N_amplifiers": len(subset),
+                       "robust_location": _robust_location_scale([r["robust_residual_location"] for r in subset])[0],
+                       "robust_scale": _robust_location_scale([r["robust_residual_location"] for r in subset])[1],
+                       "median_N_blank": float(np.median([r["N_blank"] for r in subset]))})
+    return result
+
+
+def _plot_null_diagnostics(output_dir, rows):
+    if not rows:
+        return []
+    paths = []
+    bands = list(SKY_NULL_BANDS)
+    fig, axes = plt.subplots(3, 2, figsize=(11, 12), constrained_layout=True)
+    for i, band in enumerate(bands):
+        subset = [r for r in rows if r["null_band"] == band]
+        loc = np.asarray([r["robust_residual_location"] for r in subset], float)
+        axes.flat[i].hist(loc[np.isfinite(loc)], bins=30, color="tab:blue", alpha=.8)
+        axes.flat[i].set_title(band + " residual location")
+        axes.flat[i].set_xlabel("D' - (p + alpha H)")
+        axes.flat[i].set_ylabel("amplifiers")
+    axes.flat[-1].axis("off")
+    path = output_dir / "m101_bayes_null_residual_locations.png"; fig.savefig(path, dpi=140); plt.close(fig); paths.append(str(path))
+    fig, ax = plt.subplots(figsize=(9, 5), constrained_layout=True)
+    med, lo, hi = [], [], []
+    for band in bands:
+        values = np.asarray([r["robust_residual_location"] for r in rows if r["null_band"] == band], float)
+        med.append(np.nanmedian(values)); lo.append(np.nanpercentile(values, 16)); hi.append(np.nanpercentile(values, 84))
+    x = np.arange(len(bands)); ax.errorbar(x, med, yerr=[np.asarray(med)-lo, np.asarray(hi)-med], fmt="o-")
+    ax.axhline(0., color="k", lw=.8); ax.set_xticks(x, bands); ax.set_ylabel("amplifier residual location"); ax.set_title("sky-null high/low sequence")
+    path = output_dir / "m101_bayes_null_high_low_sequence.png"; fig.savefig(path, dpi=140); plt.close(fig); paths.append(str(path))
+    fig, axes = plt.subplots(len(bands), 4, figsize=(15, 13), squeeze=False, constrained_layout=True)
+    for i, band in enumerate(bands):
+        subset = [r for r in rows if r["null_band"] == band]
+        y = np.asarray([r["robust_residual_location"] for r in subset], float)
+        fields = ("IFUSLOT", "posterior_z_mean", "alpha_mean", "N_blank")
+        labels = ("IFUSLOT", "posterior z", "alpha", "N blank")
+        for j, (field, label) in enumerate(zip(fields, labels)):
+            x = np.asarray([r[field] for r in subset], float)
+            axes[i, j].scatter(x, y, s=5, alpha=.25)
+            axes[i, j].axhline(0., color="k", lw=.6)
+            axes[i, j].set_xlabel(label); axes[i, j].set_ylabel(band + " residual")
+            axes[i, j].grid(alpha=.15)
+    path = output_dir / "m101_bayes_null_residual_relationships.png"; fig.savefig(path, dpi=140); plt.close(fig); paths.append(str(path))
+    return paths
 
 
 def _set_robust_ylim(axis, values):
@@ -2335,6 +2910,8 @@ def _write_virus_synthetic_fits(path, band, image, ncontrib, coverage, target_wc
 
 def _build_virus_synthetic_products(output_dir, store, obs_rows, band_contrast,
                                     compact_mask_path):
+    if store.is_v2:
+        return {"enabled": False, "reason": "v2 diagnostic does not reconstruct a cube"}
     if compact_mask_path is None:
         print("VIRUS synthetic ON/OFF images skipped: --compact-mask was not supplied")
         return {"enabled": False, "reason": "--compact-mask was not supplied"}
@@ -2495,8 +3072,8 @@ def _plot_outputs(output_dir, store, evidences, obs_rows, physical_rows, ifu_row
             axes[0, band].scatter(block.q[valid[:, band]], residual[:, band][valid[:, band]], s=2, alpha=.15, color=color)
             axes[1, band].scatter(block.X[:, band][valid[:, band]], residual[:, band][valid[:, band]], s=2, alpha=.15, color=color)
             axes[0, band].set_xlabel("q"); axes[1, band].set_xlabel("X"); axes[0, band].set_ylabel("residual"); axes[1, band].set_ylabel("residual")
-            axes[0, 2].scatter(block.B[:, band][valid[:, band]], residual[:, band][valid[:, band]], s=2, alpha=.15, color=color)
-            axes[0, 2].set_xlabel("B"); axes[0, 2].set_ylabel("residual")
+            axes[0, 2].scatter(block.X[:, band][valid[:, band]], residual[:, band][valid[:, band]], s=2, alpha=.15, color=color)
+            axes[0, 2].set_xlabel("external X"); axes[0, 2].set_ylabel("residual")
             residual_values[band].extend(residual[:, band][valid[:, band]])
             residual_values[2].extend(residual[:, band][valid[:, band]])
     for band in range(N_BANDS):
@@ -2813,11 +3390,69 @@ def run_synthetic_validation():
         raise AssertionError("synthetic ON/OFF effective-coordinate independence failed")
     virus_synthetic_inversion = {"status": "PASS", "max_abs_error": inverse_error,
                                  "independent_band_coordinates": True}
+    # v2 source/null model checks.  The QR sky is deliberately made absurdly
+    # different below; it must be absent from the v2 likelihood.
+    n = 40; fq = np.linspace(.5, 1.2, n); x = np.linspace(1., 8., n)[:, None] * np.ones((1, 2))
+    h_source = fq[:, None] * np.asarray([.7, .4])[None, :]
+    h_null = fq[:, None] * np.asarray([.2, .1, .3, .15, .25])[None, :]
+    injected_z, injected_p, injected_alpha = .12, .07, .41
+    source_d = np.exp(injected_z) * x + injected_p + injected_alpha * h_source
+    null_d = injected_p + injected_alpha * h_null
+    v2_block = AmplifierBlock(
+        AmplifierObservationKey(0, 1, PhysicalIFUKey(1, 1, 1), "LL"), "synthetic-v2",
+        0, 0, np.zeros((n, 2)), np.zeros((n, 2)), source_d,
+        np.full((n, 2), 999.), x, np.full((n, 2), .01),
+        np.ones((n, 2), dtype=bool), False, fq, np.asarray([.7, .4]), np.arange(n), 1.,
+        is_v2=True, sky_blank=np.ones(n, dtype=bool), null_D=null_d,
+        null_error=np.full((n, N_SKY_NULL_BANDS), .01),
+        null_sky=np.zeros((n, N_SKY_NULL_BANDS)), null_K=np.asarray([.2, .1, .3, .15, .25]))
+    alpha_block = replace(v2_block, D=np.exp(injected_z) * x + injected_alpha * h_source,
+                          null_D=injected_alpha * h_null)
+    v2_alpha = _local_evidence(alpha_block, z_grid, alpha_mean=.4, alpha_sigma=.5,
+                               p_sigma_absolute=None, additive_model="alpha-only",
+                               data_error_scale_on=1., data_error_scale_off=1.,
+                               model_fraction_on=0., model_fraction_off=0.)
+    v2_palpha = _local_evidence(v2_block, z_grid, alpha_mean=.4, alpha_sigma=.5,
+                                p_sigma_absolute=.5, additive_model="p-alpha",
+                                data_error_scale_on=1., data_error_scale_off=1.,
+                                model_fraction_on=0., model_fraction_off=0.)
+    if v2_alpha.p_mean != 0.0 or abs(v2_alpha.alpha_mean - injected_alpha) > .03:
+        raise AssertionError("v2 alpha-only synthetic recovery failed")
+    if abs(v2_palpha.p_mean - injected_p) > .03 or abs(v2_palpha.alpha_mean - injected_alpha) > .03:
+        raise AssertionError("v2 p-alpha synthetic recovery failed")
+    null_only = _marginal_grid(null_d[:, 0], np.zeros(n), h_null[:, 0], np.full(n, .01),
+                               np.asarray([injected_p, injected_alpha]), np.asarray([.5, .5]), z_grid)
+    if np.ptp(null_only.log_m) > 1e-12:
+        raise AssertionError("null P=0 rows directly changed z likelihood")
+    changed_sky = replace(v2_block, B=v2_block.B + 12345., null_sky=v2_block.null_sky + 54321.)
+    changed = _local_evidence(changed_sky, z_grid, alpha_mean=.4, alpha_sigma=.5,
+                               p_sigma_absolute=.5, additive_model="p-alpha",
+                               data_error_scale_on=1., data_error_scale_off=1.,
+                               model_fraction_on=0., model_fraction_off=0.)
+    if abs(changed.log_m_total[0] - v2_palpha.log_m_total[0]) > 1e-12 or abs(changed.p_mean - v2_palpha.p_mean) > 1e-12:
+        raise AssertionError("v2 likelihood depends on QR sky")
+    v2_layout = build_global_layout([v2_block])
+    posterior_a = solve_global(v2_layout, [v2_palpha], np.asarray([True]), .25, .1, .1, 4)
+    posterior_b = solve_global(v2_layout, [changed], np.asarray([True]), .25, .1, .1, 4)
+    if np.max(np.abs(posterior_a.mean - posterior_b.mean)) > 1e-12:
+        raise AssertionError("v2 posterior depends on QR sky")
+    no_null = replace(v2_block, sky_blank=np.zeros(n, dtype=bool))
+    no_null_evidence = _local_evidence(no_null, z_grid, alpha_mean=.4, alpha_sigma=.5,
+                                       p_sigma_absolute=.5, additive_model="p-alpha",
+                                       data_error_scale_on=1., data_error_scale_off=1.,
+                                       model_fraction_on=0., model_fraction_off=0.)
+    no_null_rows = _v2_stacked_rows(no_null, 0., None, None, 1., 1., 0., 0., 1.)
+    source_only = _marginal_grid(no_null_rows[0], no_null_rows[1], no_null_rows[2], no_null_rows[3],
+                                 np.asarray([0., .4]), np.asarray([.5, .5]), z_grid)
+    if np.max(np.abs(no_null_rows[0].size - 2*n)) > 0 or np.max(np.abs(no_null_rows[1] - x.ravel())) > 1e-12:
+        raise AssertionError("zero-null v2 amplifier did not reduce to source-only likelihood")
+    v2_synthetic = {"source_model": "PASS", "null_P_zero": "PASS", "sky_invariance": "PASS",
+                    "zero_null_rows": "PASS", "alpha_only": "PASS", "p_alpha": "PASS"}
     return {"status": "PASS", "dense_max_abs_error": dense_error, "order_independence_error": order_error,
             "likelihood_sigma_smoke": sigma_smoke, "local_smoke": smoke,
             "band_contrast_smoke": band_contrast_smoke, "split_alpha_smoke": split_alpha_smoke,
             "compact_mask_integration": compact_mask_integration,
-            "virus_synthetic_inversion": virus_synthetic_inversion}
+            "virus_synthetic_inversion": virus_synthetic_inversion, "v2_model": v2_synthetic}
 
 
 def _solution_csvs(output_dir, obs_rows, physical_rows, ifu_rows, exposure_rows):
@@ -2834,6 +3469,8 @@ def main():
     parser.add_argument("--measurements", default="m101_measurements.h5")
     parser.add_argument("--output", default="m101_bayesian_calibration.h5")
     parser.add_argument("--evidence-cache", default="m101_amplifier_evidence.h5")
+    parser.add_argument("--additive-structure", default=None,
+                        help="m101_additive_structure_v1 product for the production alpha-only path")
     parser.add_argument("--compact-mask", default=None,
                         help="optional uint8 FITS raster from build_m101_external_compact_mask.py")
     parser.add_argument("--workers", type=int, default=1,
@@ -2843,6 +3480,10 @@ def main():
     parser.add_argument("--z-min", type=float, default=Z_MIN_DEFAULT); parser.add_argument("--z-max", type=float, default=Z_MAX_DEFAULT); parser.add_argument("--n-z", type=int, default=N_Z_DEFAULT)
     parser.add_argument("--pi-good", type=float, default=PI_GOOD_DEFAULT); parser.add_argument("--bad-scale", type=float, default=BAD_SCALE_DEFAULT)
     parser.add_argument("--p-sigma-fraction", type=float, default=P_SIGMA_FRACTION_DEFAULT); parser.add_argument("--alpha-mean", type=float, default=ALPHA_MEAN_DEFAULT); parser.add_argument("--alpha-sigma", type=float, default=ALPHA_SIGMA_DEFAULT); parser.add_argument("--z0-sigma", type=float, default=Z0_SIGMA_DEFAULT)
+    parser.add_argument("--additive-model", choices=("alpha-only", "p-alpha"), default="p-alpha")
+    parser.add_argument("--p-sigma", type=float, default=None,
+                        help="absolute Normal(0,p_sigma) prior for v2 p-alpha")
+    parser.add_argument("--null-error-scale", type=float, default=1.0)
     parser.add_argument("--gamma-sigma", type=float, default=GAMMA_SIGMA_DEFAULT); parser.add_argument("--ifu-sigma", type=float, default=IFU_SIGMA_DEFAULT); parser.add_argument("--eta-sigma", type=float, default=ETA_SIGMA_DEFAULT)
     parser.add_argument("--error-floor", type=float, default=None); parser.add_argument("--error-floor-factor", type=float, default=None); parser.add_argument("--hutchinson-probes", type=int, default=HUTCHINSON_PROBES_DEFAULT)
     parser.add_argument("--data-error-scale-on", type=float, default=DATA_ERROR_SCALE_ON_DEFAULT,
@@ -2860,9 +3501,15 @@ def main():
         raise SystemExit("--workers must be at least 1")
     if args.synthetic_test:
         print(json.dumps(run_synthetic_validation(), indent=2, default=str)); return
+    if args.additive_structure is not None and args.additive_model != "alpha-only":
+        raise SystemExit("--additive-structure requires --additive-model alpha-only; p is fixed to zero")
     if args.error_floor is not None and args.error_floor <= 0: raise SystemExit("--error-floor must be positive")
     if args.error_floor_factor is not None and args.error_floor_factor <= 0: raise SystemExit("--error-floor-factor must be positive")
     if args.error_bootstrap < 1: raise SystemExit("--error-bootstrap must be at least 1")
+    if not np.isfinite(args.null_error_scale) or args.null_error_scale <= 0:
+        raise SystemExit("--null-error-scale must be finite and positive")
+    if args.p_sigma is not None and (not np.isfinite(args.p_sigma) or args.p_sigma <= 0):
+        raise SystemExit("--p-sigma must be finite and positive")
     if args.pi_good <= 0 or args.pi_good >= 1: raise SystemExit("--pi-good must be between 0 and 1")
     if (not np.isfinite(args.data_error_scale_on) or args.data_error_scale_on <= 0
             or not np.isfinite(args.data_error_scale_off) or args.data_error_scale_off <= 0):
@@ -2878,7 +3525,11 @@ def main():
     if output.exists() and not args.overwrite: raise SystemExit("output exists; use --overwrite: %s" % output)
     started = time.perf_counter(); z_grid = np.linspace(args.z_min, args.z_max, args.n_z)
     if args.n_z < 3 or args.z_max <= args.z_min: raise SystemExit("invalid z grid")
-    store_started = time.perf_counter(); store = MeasurementStore(args.measurements, compact_mask_path); print("measurement load/grouping: %.3f s" % (time.perf_counter() - store_started))
+    store_started = time.perf_counter(); store = MeasurementStore(
+        args.measurements, compact_mask_path, args.additive_structure); print("measurement load/grouping: %.3f s" % (time.perf_counter() - store_started))
+    args.measurement_schema = V2_SCHEMA if store.is_v2 else "m101_measurements_v1"
+    if store.is_v2 and args.additive_model == "p-alpha" and args.p_sigma is None:
+        raise SystemExit("v2 p-alpha requires --p-sigma; use an absolute prior such as --p-sigma 1.0")
     if compact_mask_path is not None:
         print("compact mask lookup/application: %.3f s" % store.compact_mask_lookup_seconds)
     config = _evidence_config(args, store.path); evidence_started = time.perf_counter()
@@ -2891,17 +3542,24 @@ def main():
                           args.alpha_mean, args.alpha_sigma, args.z0_sigma,
                           args.error_floor, args.error_floor_factor, 0.0, 0.0, None,
                           args.data_error_scale_on, args.data_error_scale_off,
-                          args.model_fraction_on, args.model_fraction_off)
+                          args.model_fraction_on, args.model_fraction_off,
+                          args.additive_model, args.p_sigma, args.null_error_scale)
         preliminary = _calculate_local_evidences(store.blocks, z_grid, local_settings, args.workers)
         contrast_estimate = _estimate_band_contrast(preliminary)
         band_contrast = _complete_band_contrast(contrast_estimate, store)
+        if store.is_v2:
+            band_contrast["delta_p_band"] = 0.0
+            band_contrast["band_offset_ON"] = 0.0
+            band_contrast["band_offset_OFF"] = 0.0
         pre_qa = _preliminary_qa(preliminary)
         final_settings = (args.pi_good, args.bad_scale, args.p_sigma_fraction,
                           args.alpha_mean, args.alpha_sigma, args.z0_sigma,
                           args.error_floor, args.error_floor_factor,
                           band_contrast["delta_z_band"], band_contrast["delta_p_band"],
+                          None,
                           args.data_error_scale_on, args.data_error_scale_off,
-                          args.model_fraction_on, args.model_fraction_off)
+                          args.model_fraction_on, args.model_fraction_off,
+                          args.additive_model, args.p_sigma, args.null_error_scale)
         split_summaries = [{"z_mean": evidence.split_z_mean,
                             "z_sigma": evidence.split_z_sigma,
                             "p_mean": evidence.split_p_mean,
@@ -2912,7 +3570,7 @@ def main():
                            for evidence in preliminary]
         evidences = _calculate_local_evidences(
             store.blocks, z_grid,
-            [final_settings[:-4] + (split_summary,) + final_settings[-4:]
+            [final_settings[:10] + (split_summary,) + final_settings[11:]
              for split_summary in split_summaries], args.workers)
         _write_evidence_cache(args.evidence_cache, evidences, z_grid, config,
                               band_contrast, pre_qa)
@@ -2930,7 +3588,16 @@ def main():
         band_contrast["delta_z_band"], band_contrast["delta_p_band"],
         args.error_floor, args.error_floor_factor,
         args.data_error_scale_on, args.data_error_scale_off,
+        args.model_fraction_on, args.model_fraction_off,
+        args.additive_model, args.null_error_scale)
+    null_residual_rows = (_null_residual_rows(
+        store, evidences, obs_rows, posterior, args.additive_model,
+        args.alpha_mean, args.alpha_sigma, band_contrast["delta_z_band"],
+        args.null_error_scale, args.error_floor, args.error_floor_factor,
+        args.data_error_scale_on, args.data_error_scale_off,
         args.model_fraction_on, args.model_fraction_off)
+        if store.is_v2 else [])
+    null_exposure_summary = _null_exposure_summary(null_residual_rows)
     physical_rows = _population_rows(amp_accum, posterior); ifu_rows = _ifu_rows(ifu_accum, posterior, store); exposure_rows = _exposure_rows(exp_accum, posterior)
     information_precision_qa = _information_precision_qa(evidences, physical_rows, exposure_rows)
     split_alpha_diagnostic = _split_alpha_diagnostic(evidences)
@@ -2948,11 +3615,37 @@ def main():
                     "median_mean_residual_ON_minus_OFF": float(np.nanmedian([r["mean_residual_ON"] - r["mean_residual_OFF"] for r in obs_rows]))})
     virus_synthetic_products = _build_virus_synthetic_products(
         output_dir, store, obs_rows, band_contrast, compact_mask_path)
-    metadata = {"schema_version": "m101_bayesian_calibration_v1", "created_utc": datetime.now(timezone.utc).isoformat(), "script": str(Path(__file__).resolve()), "git_commit": _git_commit(), "measurement_identity": _h5_identity(store.path), "evidence_cache": _h5_identity(args.evidence_cache), "config": config, "likelihood_error_model": "band-scaled statistical error plus fractional fixed-source predictor uncertainty", "data_error_scale_ON": args.data_error_scale_on, "data_error_scale_OFF": args.data_error_scale_off, "model_fraction_ON": args.model_fraction_on, "model_fraction_OFF": args.model_fraction_off, "source_reference_definition": "band_scale * external_prediction; independent of z", "compact_mask_qa": store.compact_mask_qa, "compact_mask_identity": config["compact_mask_identity"], "compact_mask_semantics": "external-imaging ON/OFF union; if either band effective fiber position intersects the mask, both bands of that physical fiber are excluded", "compact_mask_basis": "external imaging morphology only; no VIRUS residual or Bayesian quantity used", "global_priors": {"gamma_sigma": args.gamma_sigma, "ifu_sigma": args.ifu_sigma, "eta_sigma": args.eta_sigma}, "variance_method": posterior.variance_method, "order_independence_max_abs_difference": order_error, "synthetic_validation": run_synthetic_validation(), "virus_synthetic_products": virus_synthetic_products, "contrast_definition": "scipy.linalg.helmert(full=False), iota sums zero per exposure and eta sums zero within each physical IFU", "additive_posterior_conditioning": "p and alpha are conditional on the hierarchy posterior mean z; local marginal moments remain in the evidence cache", "band_contrast": band_contrast, "split_alpha_diagnostic": split_alpha_diagnostic, "information_precision_qa": information_precision_qa, "qa_pre": pre_qa, "qa_post": post_qa, "no_production_calibration_applied": True}
-    output_started = time.perf_counter(); _write_solution(output, obs_rows, physical_rows, ifu_rows, exposure_rows, _history_rows(stages), metadata); _solution_csvs(output_dir, obs_rows, physical_rows, ifu_rows, exposure_rows); _write_csv(output_dir / "m101_bayes_error_model_diagnostic.csv", error_model_rows); _plot_outputs(output_dir, store, evidences, obs_rows, physical_rows, ifu_rows, exposure_rows, stages, posterior, z_grid, band_contrast, split_alpha_diagnostic, error_model_rows, pgood_matched_gallery, args.data_error_scale_on, args.data_error_scale_off, args.model_fraction_on, args.model_fraction_off, args.error_floor, args.error_floor_factor); _plot_error_model_diagnostic(output_dir, error_model_plot_data, error_model_rows); print("solution/CSV/plots: %.3f s" % (time.perf_counter() - output_started))
+    metadata = {"schema_version": "m101_bayesian_calibration_v1", "created_utc": datetime.now(timezone.utc).isoformat(), "script": str(Path(__file__).resolve()), "git_commit": _git_commit(), "measurement_identity": _h5_identity(store.path), "evidence_cache": _h5_identity(args.evidence_cache), "config": config, "likelihood_error_model": "band-scaled statistical error plus fractional fixed-source predictor uncertainty", "data_error_scale_ON": args.data_error_scale_on, "data_error_scale_OFF": args.data_error_scale_off, "model_fraction_ON": args.model_fraction_on, "model_fraction_OFF": args.model_fraction_off, "source_reference_definition": "band_scale * external_prediction; independent of z", "compact_mask_qa": store.compact_mask_qa, "compact_mask_identity": config["compact_mask_identity"], "compact_mask_semantics": "external-imaging ON/OFF union; if either band effective fiber position intersects the mask, both bands of that physical fiber are excluded", "compact_mask_basis": "external imaging morphology only; no VIRUS residual or Bayesian quantity used", "global_priors": {"gamma_sigma": args.gamma_sigma, "ifu_sigma": args.ifu_sigma, "eta_sigma": args.eta_sigma}, "variance_method": posterior.variance_method, "order_independence_max_abs_difference": order_error, "synthetic_validation": run_synthetic_validation(), "virus_synthetic_products": virus_synthetic_products, "contrast_definition": "scipy.linalg.helmert(full=False), iota sums zero per exposure and eta sums zero within each physical IFU", "additive_posterior_conditioning": "alpha is conditional on the hierarchy posterior mean z; local marginal moments remain in the evidence cache", "band_contrast": band_contrast, "split_alpha_diagnostic": split_alpha_diagnostic, "information_precision_qa": information_precision_qa, "qa_pre": pre_qa, "qa_post": post_qa, "no_production_calibration_applied": True}
+    metadata.update({"measurement_schema": args.measurement_schema, "additive_model": args.additive_model,
+                     "p_fixed_zero": bool(args.additive_model == "alpha-only"),
+                     "p_prior": ("fixed zero" if args.additive_model == "alpha-only" else {"distribution": "Normal(0,p_sigma)", "p_sigma": args.p_sigma}),
+                     "null_error_scale": args.null_error_scale,
+                     "delta_p_band_fixed_zero": bool(store.is_v2),
+                     "v2_likelihood": ("source Dcorr = exp(z) X + alpha H; null Dcorr_null = alpha H_null; additive R+cU+dV subtracted before exp(z); QR sky absent"
+                                        if store.is_v2 and args.additive_structure is not None else
+                                        "source D' = exp(z) X + p + alpha H; null D'_null = p + alpha H_null; QR sky absent"
+                                        if store.is_v2 else "legacy v1 likelihood"),
+                     "exposure_common_centering": store.centering if store.is_v2 else None,
+                     "additive_structure": (store.additive_structure.identity
+                                            if store.additive_structure is not None else None),
+                     "additive_structure_mode": ("production_pre_alpha_subtraction"
+                                                  if store.additive_structure is not None else "legacy_v2_blank_centering" if store.is_v2 else "legacy_v1"),
+                     "no_qr_sky_in_likelihood": bool(store.is_v2),
+                     "null_residual_rows": len(null_residual_rows),
+                     "null_exposure_summary": null_exposure_summary,
+                     "no_residual_sky_subtraction": True,
+                     "no_null_band_centering_in_measurement_product": True})
+    output_started = time.perf_counter(); _write_solution(output, obs_rows, physical_rows, ifu_rows, exposure_rows, _history_rows(stages), metadata); _solution_csvs(output_dir, obs_rows, physical_rows, ifu_rows, exposure_rows); _write_csv(output_dir / "m101_bayes_error_model_diagnostic.csv", error_model_rows); _plot_outputs(output_dir, store, evidences, obs_rows, physical_rows, ifu_rows, exposure_rows, stages, posterior, z_grid, band_contrast, split_alpha_diagnostic, error_model_rows, pgood_matched_gallery, args.data_error_scale_on, args.data_error_scale_off, args.model_fraction_on, args.model_fraction_off, args.error_floor, args.error_floor_factor); _plot_error_model_diagnostic(output_dir, error_model_plot_data, error_model_rows); _write_csv(output_dir / "m101_bayes_null_residuals.csv", null_residual_rows); _write_csv(output_dir / "m101_bayes_null_exposure_summary.csv", null_exposure_summary); null_qa_figures = _plot_null_diagnostics(output_dir, null_residual_rows); print("solution/CSV/plots: %.3f s" % (time.perf_counter() - output_started))
     p_values = np.asarray([e.p_good for e in evidences]); info_values = np.asarray([e.I_m for e in evidences]); eta5 = sum(row["P_abs_eta_gt_5pct"] > .95 for row in physical_rows); eta10 = sum(row["P_abs_eta_gt_10pct"] > .95 for row in physical_rows)
     gamma_values = np.asarray([row["gamma_mean"] for row in exposure_rows]); alpha_values = np.asarray([row["alpha_mean"] for row in obs_rows]);
     summary = {"measurement_h5": str(store.path), "output": str(output), "amplifier_observations": len(evidences), "physical_ifus": len(ifu_rows), "persistent_physical_amplifiers": len(physical_rows), "exposures": len(exposure_rows), "evidence_cache": str(Path(args.evidence_cache).resolve()), "likelihood_error_model": "band-scaled statistical error plus fractional fixed-source predictor uncertainty", "data_error_scale_ON": args.data_error_scale_on, "data_error_scale_OFF": args.data_error_scale_off, "model_fraction_ON": args.model_fraction_on, "model_fraction_OFF": args.model_fraction_off, "source_reference_definition": "band_scale * external_prediction; independent of z", "compact_mask_qa": store.compact_mask_qa, "compact_mask_identity": config["compact_mask_identity"], "compact_mask_semantics": "external-imaging ON/OFF union; if either band effective fiber position intersects the mask, both bands of that physical fiber are excluded", "compact_mask_basis": "external imaging morphology only; no VIRUS residual or Bayesian quantity used", "compact_mask_qa_figure": str(output_dir / "m101_bayes_compact_mask_qa.png") if store.compact_mask_qa.get("enabled", False) else None, "virus_synthetic_products": virus_synthetic_products, "only_scientific_likelihood_change": "sigma_data -> sigma_eff", "median_I_m": float(np.median(info_values)), "I_m_range": [float(np.min(info_values)), float(np.max(info_values))], "median_p_good": float(np.median(p_values)), "p_good_lt_0.5": int(np.sum(p_values < .5)), "p_good_lt_0.1": int(np.sum(p_values < .1)), "gamma_range": [float(np.min(gamma_values)), float(np.max(gamma_values))], "eta_P_gt_5pct_gt_0.95": int(eta5), "eta_P_gt_10pct_gt_0.95": int(eta10), "median_eta_sigma": float(np.median([r["eta_sigma"] for r in physical_rows])), "median_p": float(np.median([r["p_mean"] for r in obs_rows])), "median_alpha": float(np.median(alpha_values)), "alpha_range": [float(np.min(alpha_values)), float(np.max(alpha_values))], "grid_edge_flags": int(sum(e.grid_edge_flag for e in evidences)), "strong_split_preferences": int(sum(e.split_minus_joint_log_evidence > 5 for e in evidences)), "fitted_delta_z_band": band_contrast["delta_z_band"], "fitted_delta_p_band": band_contrast["delta_p_band"], "p_good_matched_gallery": pgood_matched_gallery, "information_precision_qa": information_precision_qa, "order_independence_max_abs_difference": order_error, "synthetic_validation": metadata["synthetic_validation"], "band_contrast": band_contrast, "split_alpha_diagnostic": split_alpha_diagnostic, "error_model_diagnostic": error_model_diagnostic, "qa_pre": pre_qa, "qa_post": post_qa, "no_production_calibration_applied": True, "total_runtime_seconds": time.perf_counter() - started}
+    summary.update({"measurement_schema": args.measurement_schema, "additive_model": args.additive_model,
+                    "p_fixed_zero": bool(args.additive_model == "alpha-only"), "p_sigma": args.p_sigma,
+                    "null_error_scale": args.null_error_scale, "null_residual_rows": len(null_residual_rows),
+                    "null_qa_figures": null_qa_figures, "null_exposure_summary": null_exposure_summary,
+                    "N_null_equations": int(sum(np.sum(e.n_null) for e in evidences)),
+                    "N_source_equations": int(sum(np.sum(e.n_valid) for e in evidences)),
+                    "null_source_equation_ratio": float(sum(np.sum(e.n_null) for e in evidences) / max(sum(np.sum(e.n_valid) for e in evidences), 1))})
     (output_dir / "m101_bayes_summary.json").write_text(json.dumps(summary, indent=2, default=str)); print(json.dumps(summary, indent=2, default=str)); print("NO production files modified; no calibration correction was applied to measurements.")
 
 
