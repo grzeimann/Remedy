@@ -33,7 +33,8 @@ import m101_compact_mask as compact_mask
 import m101_external_measurements as external_measurements
 from m101_calibration_utils import (
     ALL_BANDS, BANDS, collapse, contrast_basis, file_identity, json_ready,
-    residual_summary, robust_location, small_file_hash,
+    residual_summary, robust_location, robust_location_scatter, robust_scatter,
+    small_file_hash,
 )
 from m101_native_data import ExposureData, WAVE, load as load_native_data
 
@@ -47,21 +48,6 @@ MAX_DENSE_NORMAL_PARAMETERS = 1024
 
 def _progress(started, message):
     print("[fit +%.1fs] %s" % (time.perf_counter() - started, message), flush=True)
-
-
-def _sparse_zero_sum_basis(n):
-    """Return effect coding for the zero-sum IFU subspace."""
-    if n < 1:
-        raise ValueError("the zero-sum IFU basis requires at least one IFU")
-    basis = np.zeros((n, n - 1), dtype=float)
-    if n > 1:
-        basis[:-1, :] = np.eye(n - 1)
-        basis[-1, :] = -1.0
-    return basis
-
-
-class Model3BlockStructureError(ValueError):
-    """The Model 3 q columns do not have the required block structure."""
 
 
 def focal_plot_filename(exposure_key):
@@ -172,13 +158,12 @@ def estimate_initial_skies(data: list[ExposureData], minimum_finite_fraction: fl
         selected = item.blank_valid
         if not np.any(selected):
             raise ValueError("%s exposure %d has no valid external blank fibers" % item.key)
-        sky = robust_location(item.total[selected], axis=0)
+        sky, scatter = robust_location_scatter(item.total[selected], axis=0)
         skies[item.key] = np.asarray(sky, dtype=float)
         records[str(item.key)] = {
             "N_blank": int(np.sum(selected)),
             "minimum_finite_fraction": float(minimum_finite_fraction),
-            "sky": sky, "robust_scatter": None,
-            "robust_scatter_computed": False,
+            "sky": sky, "robust_scatter": scatter,
         }
         if progress is not None:
             progress("initial sky: exposure %d/%d (%s e%d) done in %.3fs; blank-valid=%d"
@@ -215,7 +200,7 @@ def _supported_q_groups(data):
 
 def make_layout(data: list[ExposureData], mode: str) -> ParameterLayout:
     ifus = _supported_ifus(data)
-    ifu_basis = _sparse_zero_sum_basis(len(ifus))
+    ifu_basis = contrast_basis(len(ifus))
     ifu_columns = {}
     names = []
     cursor = 0
@@ -385,120 +370,11 @@ def build_design(data, skies, responses, fq, mode, timings=None, progress=None):
         raise ValueError("no finite blank calibration equations")
     assembly_started = time.perf_counter()
     matrix = sparse.vstack(matrix_blocks, format="csr")
-    if timings is not None:
-        timings["%s_equations" % mode] = int(matrix.shape[0])
-        timings["%s_parameters" % mode] = int(matrix.shape[1])
-        timings["%s_matrix_nnz" % mode] = int(matrix.nnz)
-        timings["%s_average_design_nonzeros_per_equation" % mode] = (
-            float(matrix.nnz) / matrix.shape[0])
     if progress is not None:
-        progress("%s design: exposure blocks assembled into CSR in %.3fs; "
-                 "%d equations x %d parameters, nnz=%d, average nnz/equation=%.3f"
-                 % (mode, time.perf_counter() - assembly_started, matrix.shape[0],
-                    matrix.shape[1], matrix.nnz, float(matrix.nnz) / matrix.shape[0]))
+        progress("%s design: exposure blocks assembled into CSR in %.3fs"
+                 % (mode, time.perf_counter() - assembly_started))
     return (layout, matrix, np.concatenate(target_blocks),
             np.concatenate(sigma_blocks), sky_bands)
-
-
-def _solve_generic_normal(normal, rhs, matrix, target, weights):
-    """Keep the existing generic normal-equation solve as a guarded fallback."""
-    solver_name = "spsolve"
-    solver_rank = None
-    if normal.shape[0] <= MAX_DENSE_NORMAL_PARAMETERS:
-        solver_name = "lstsq_dense"
-        params, _, solver_rank, _ = np.linalg.lstsq(
-            normal.toarray(), rhs, rcond=1e-12)
-        params = np.asarray(params, dtype=float)
-    else:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", MatrixRankWarning)
-            try:
-                params = np.asarray(spsolve(normal, rhs), dtype=float)
-            except (MatrixRankWarning, RuntimeError, ValueError):
-                solver_name = "lsmr_fallback"
-                weighted_matrix = matrix.multiply(weights[:, None]).tocsr()
-                params = np.asarray(lsmr(weighted_matrix, target * weights,
-                                         atol=1e-12, btol=1e-12)[0], dtype=float)
-    if not np.all(np.isfinite(params)):
-        solver_name = "lsmr_fallback"
-        weighted_matrix = matrix.multiply(weights[:, None]).tocsr()
-        params = np.asarray(lsmr(weighted_matrix, target * weights,
-                                 atol=1e-12, btol=1e-12)[0], dtype=float)
-    return params, solver_name, solver_rank
-
-
-def _solve_model3_block_normal(normal, rhs, layout):
-    """Solve Model 3 by eliminating its one-q-column-per-row block."""
-    partition_started = time.perf_counter()
-    if normal.shape != (layout.size, layout.size) or rhs.size != layout.size:
-        raise Model3BlockStructureError(
-            "Model 3 normal system shape does not match its parameter layout")
-    q_columns = sorted(layout.q_columns.values())
-    if not q_columns:
-        raise Model3BlockStructureError("Model 3 has no q columns")
-    q_start = q_columns[0]
-    expected_q_columns = list(range(q_start, layout.size))
-    if q_columns != expected_q_columns:
-        raise Model3BlockStructureError(
-            "Model 3 q columns are not a final contiguous block")
-
-    q_block = normal[q_start:, q_start:].tocoo()
-    q_diagonal = np.asarray(normal.diagonal()[q_start:], dtype=float)
-    off_diagonal = q_block.row != q_block.col
-    max_off_diagonal = (float(np.max(np.abs(q_block.data[off_diagonal])))
-                        if np.any(off_diagonal) else 0.0)
-    q_scale = (float(np.max(np.abs(q_diagonal)))
-               if q_diagonal.size else 0.0)
-    structural_tolerance = max(1e-12 * max(1.0, q_scale), 1e-14)
-    if max_off_diagonal > structural_tolerance:
-        raise Model3BlockStructureError(
-            "Model 3 q-q normal block is not diagonal: max off-diagonal "
-            "%.6g exceeds tolerance %.6g" %
-            (max_off_diagonal, structural_tolerance))
-    if np.any(q_diagonal < -structural_tolerance):
-        raise Model3BlockStructureError(
-            "Model 3 q-q normal block has a materially negative diagonal")
-    constrained = q_diagonal > structural_tolerance
-    A = normal[:q_start, :q_start].toarray()
-    C = normal[:q_start, q_start:].toarray()
-    b_beta = np.asarray(rhs[:q_start], dtype=float)
-    b_alpha = np.asarray(rhs[q_start:], dtype=float)
-    partition_seconds = time.perf_counter() - partition_started
-
-    schur_started = time.perf_counter()
-    inverse_d = np.zeros_like(q_diagonal)
-    inverse_d[constrained] = 1.0 / q_diagonal[constrained]
-    C_constrained = C[:, constrained]
-    if np.any(constrained):
-        S = A - (C_constrained * inverse_d[constrained]) @ C_constrained.T
-        r = b_beta - (C_constrained * inverse_d[constrained]) @ b_alpha[constrained]
-    else:
-        S = A
-        r = b_beta
-    schur_seconds = time.perf_counter() - schur_started
-
-    beta_started = time.perf_counter()
-    beta, _, beta_rank, _ = np.linalg.lstsq(S, r, rcond=1e-12)
-    beta = np.asarray(beta, dtype=float)
-    beta_seconds = time.perf_counter() - beta_started
-
-    alpha_started = time.perf_counter()
-    alpha = np.zeros(len(q_diagonal), dtype=float)
-    if np.any(constrained):
-        alpha[constrained] = inverse_d[constrained] * (
-            b_alpha[constrained] - C_constrained.T @ beta)
-    alpha_seconds = time.perf_counter() - alpha_started
-    return np.concatenate((beta, alpha)), {
-        "model3_block_partition_seconds": partition_seconds,
-        "model3_schur_build_seconds": schur_seconds,
-        "model3_beta_solve_seconds": beta_seconds,
-        "model3_alpha_recovery_seconds": alpha_seconds,
-        "model3_q_start": int(q_start),
-        "model3_q_block_size": int(len(q_diagonal)),
-        "model3_q_block_off_diagonal_max": max_off_diagonal,
-        "model3_q_block_diagonal": True,
-        "model3_beta_rank": int(beta_rank),
-    }
 
 
 def fit_active_model(data, skies, responses, fq, mode, timings=None, progress=None):
@@ -540,32 +416,29 @@ def fit_active_model(data, skies, responses, fq, mode, timings=None, progress=No
         if progress is not None:
             progress("%s IRLS %d/6: RHS ready in %.3fs; solving normal system"
                      % (mode, iteration + 1, rhs_seconds))
+        solver_name = "spsolve"
+        solver_rank = None
         linear_solve_started = time.perf_counter()
-        block_timings = {}
-        if mode == "model3":
-            try:
-                params, block_timings = _solve_model3_block_normal(
-                    normal, rhs, layout)
-                solver_name = "model3_block_schur_lstsq"
-                solver_rank = block_timings["model3_beta_rank"]
-            except Model3BlockStructureError as error:
-                # This path preserves an exact generic solve if the measured
-                # matrix does not satisfy the one-q-column-per-row contract.
-                if progress is not None:
-                    progress("model3 block solve guarded fallback: %s" % error)
-                params, solver_name, solver_rank = _solve_generic_normal(
-                    normal, rhs, matrix, target, weights)
-                solver_name = "model3_%s_fallback" % solver_name
+        if layout.size <= MAX_DENSE_NORMAL_PARAMETERS:
+            solver_name = "lstsq_dense"
+            params, _, solver_rank, _ = np.linalg.lstsq(
+                normal.toarray(), rhs, rcond=1e-12)
+            params = np.asarray(params, dtype=float)
         else:
-            params, solver_name, solver_rank = _solve_generic_normal(
-                normal, rhs, matrix, target, weights)
-        if mode == "model3" and block_timings and timings is not None:
-            for key, value in block_timings.items():
-                if key.endswith("_seconds"):
-                    timings.setdefault(key, 0.0)
-                    timings[key] += value
-                else:
-                    timings[key] = value
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", MatrixRankWarning)
+                try:
+                    params = np.asarray(spsolve(normal, rhs), dtype=float)
+                except (MatrixRankWarning, RuntimeError, ValueError):
+                    solver_name = "lsmr_fallback"
+                    weighted_matrix = matrix.multiply(weights[:, None]).tocsr()
+                    params = np.asarray(lsmr(weighted_matrix, target * weights,
+                                             atol=1e-12, btol=1e-12)[0], dtype=float)
+        if not np.all(np.isfinite(params)):
+            solver_name = "lsmr_fallback"
+            weighted_matrix = matrix.multiply(weights[:, None]).tocsr()
+            params = np.asarray(lsmr(weighted_matrix, target * weights,
+                                     atol=1e-12, btol=1e-12)[0], dtype=float)
         if not np.all(np.isfinite(params)):
             raise RuntimeError("sparse weighted solve returned non-finite parameters")
         linear_solve_seconds = time.perf_counter() - linear_solve_started
@@ -585,20 +458,16 @@ def fit_active_model(data, skies, responses, fq, mode, timings=None, progress=No
         if progress is not None:
             progress("%s IRLS %d/6: complete in %.3fs; clipped=%d"
                      % (mode, iteration + 1, time.perf_counter() - iteration_started, clipped))
-        iteration_timing = {
+        iteration_timings.append({
             "iteration": int(iteration + 1), "solver": solver_name,
             "solver_rank": (int(solver_rank) if solver_rank is not None else None),
-            "row_weight_seconds": weighted_seconds,
             "weighted_design_seconds": weighted_seconds,
             "normal_matrix_seconds": normal_seconds,
             "rhs_seconds": rhs_seconds,
             "linear_solve_seconds": linear_solve_seconds,
             "residual_reweight_seconds": time.perf_counter() - reweight_started,
             "total_seconds": time.perf_counter() - iteration_started,
-        }
-        iteration_timing.update({key: value for key, value in block_timings.items()
-                                 if key.endswith("_seconds")})
-        iteration_timings.append(iteration_timing)
+        })
     if timings is not None:
         timings["%s_irls_solve_seconds" % mode] = time.perf_counter() - solve_started
         timings["%s_irls_iterations" % mode] = iteration_timings
@@ -655,8 +524,9 @@ def update_skies(data, skies, model, fq, responses, timings=None, timing_key=Non
                         if delta.size else np.nan,
                         "fractional_sky_change": float(np.sqrt(np.mean(delta ** 2)) / denominator)
                         if delta.size else np.nan,
-                        "blank_robust_rms": None,
-                        "blank_robust_rms_computed": False})
+                        "blank_robust_rms": float(validated_m101.robust_scale(
+                            (corrected[:, finite] - new_sky[finite]).ravel()))
+                        if finite.any() else np.nan})
         skies[item.key] = new_sky
         if progress is not None:
             progress("%s: exposure %d/%d sky update done in %.3fs"

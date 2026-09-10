@@ -13,6 +13,7 @@ def _excluded(**overrides):
 
 def test_half_open_date_interval_and_legacy_slot_amp_matching():
     assert _excluded(date=20200521, ifuslot=30)
+    assert _excluded(date=20200521, ifuslot=30, purpose="cube")
     assert not _excluded(date=20200522, ifuslot=30)
     assert not _excluded(date=20200521, ifuslot=31, amp="RU")
     assert _excluded(date=20200525, ifuslot=39, amp="LL")
@@ -20,6 +21,9 @@ def test_half_open_date_interval_and_legacy_slot_amp_matching():
 
 def test_full_physical_amplifier_identity_is_required():
     assert _excluded(date=None, specid=309, ifuslot=46, ifuid=5, amp="RL")
+    for h5 in ("20200521_0000019.h5", "/other/path/20200528_0000015.h5"):
+        assert _excluded(date=None, h5=h5, specid=309, ifuslot=46,
+                        ifuid=5, amp="RL")
     assert not _excluded(date=None, specid=309, ifuslot=46, ifuid=6, amp="RL")
     assert not _excluded(date=None, specid=309, ifuslot=47, ifuid=5, amp="RL")
     assert _excluded(date=None, specid=402, ifuslot=77, ifuid=61, amp="RL")
@@ -77,3 +81,35 @@ def test_legacy_registry_matches_previous_masked_rows_on_representative_dates():
             for slot, amp in zip(slots, amps)
         ])
         np.testing.assert_array_equal(new, old)
+
+
+def test_exact_h5_physical_exclusion_matches_only_that_h5():
+    record = {"h5": "20200528_0000015.h5", "specid": 123,
+              "ifuslot": 46, "ifuid": 5, "amp": "RL",
+              "scope": "fit_and_cube", "reason": "malformed H5",
+              "source": "test"}
+    HARDWARE_EXCLUSIONS.append(record)
+    try:
+        values = {"date": None, "specid": 123, "ifuslot": 46,
+                  "ifuid": 5, "amp": "RL", "purpose": "fit"}
+        assert hardware_excluded(**values, h5="/data/20200528_0000015.h5")
+        assert not hardware_excluded(**values, h5="20200529_0000001.h5")
+        assert not hardware_excluded(**values)
+        assert "malformed H5" in exclusion_reason(
+            **values, h5="20200528_0000015.h5")
+    finally:
+        HARDWARE_EXCLUSIONS.remove(record)
+
+
+def test_exact_h5_exclusion_scope_respects_fit_and_cube():
+    record = {"h5": "scope-test.h5", "specid": 123,
+              "ifuslot": 46, "ifuid": 5, "amp": "RL",
+              "scope": "fit_only", "reason": "fit test", "source": "test"}
+    HARDWARE_EXCLUSIONS.append(record)
+    try:
+        values = {"date": None, "h5": "scope-test.h5", "specid": 123,
+                  "ifuslot": 46, "ifuid": 5, "amp": "RL"}
+        assert hardware_excluded(**values, purpose="fit")
+        assert not hardware_excluded(**values, purpose="cube")
+    finally:
+        HARDWARE_EXCLUSIONS.remove(record)

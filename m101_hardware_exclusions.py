@@ -2,7 +2,8 @@
 
 Date/slot/amplifier records preserve the historical cube ``mask_dict`` with
 half-open date intervals.  Persistent records use the complete physical
-amplifier identity ``(SPECID, IFUSLOT, IFUID, AMP)``.
+amplifier identity ``(SPECID, IFUSLOT, IFUID, AMP)``.  Exact-H5 records add
+the H5 basename to that identity for a reduction-specific failure.
 
 The eventual cube builder must call ``hardware_excluded(..., purpose="cube")``
 and use this registry as its single source of truth.  Diagnostic residual
@@ -12,6 +13,7 @@ outliers are deliberately not added here automatically.
 from __future__ import annotations
 
 from datetime import date, datetime
+from pathlib import Path
 
 
 _LEGACY_MASKS = {
@@ -68,6 +70,33 @@ HARDWARE_EXCLUSIONS = _legacy_records() + [
         "reason": "persistent malformed extracted spectra; likely upstream reduction/wavelength failure",
         "source": "M101 persistent amplifier residual QA",
     },
+    {
+        "specid": 412,
+        "ifuslot": 13,
+        "ifuid": 43,
+        "amp": "RL",
+        "scope": "fit_and_cube",
+        "reason": "persistent malformed amplifier behavior in full 19-H5 M101 residual QA; likely upstream hardware/reduction/calibration failure",
+        "source": "M101 full 19-H5 amplifier residual QA",
+    },
+    {
+        "specid": 12,
+        "ifuslot": 106,
+        "ifuid": 33,
+        "amp": "LL",
+        "scope": "fit_and_cube",
+        "reason": "persistent malformed amplifier behavior in full 19-H5 M101 residual QA; likely upstream hardware/reduction/calibration failure",
+        "source": "M101 full 19-H5 amplifier residual QA",
+    },
+    {
+        "specid": 12,
+        "ifuslot": 106,
+        "ifuid": 33,
+        "amp": "LU",
+        "scope": "fit_and_cube",
+        "reason": "persistent malformed amplifier behavior in full 19-H5 M101 residual QA; likely upstream hardware/reduction/calibration failure",
+        "source": "M101 full 19-H5 amplifier residual QA",
+    },
 ]
 
 
@@ -84,11 +113,18 @@ def _date_number(value):
     return int(value)
 
 
-def _matches(record, *, date_number, specid, ifuslot, ifuid, amp, purpose):
+def _matches(record, *, date_number, h5, specid, ifuslot, ifuid, amp, purpose):
     if record["scope"] == "fit_only" and purpose != "fit":
         return False
     if record["scope"] == "fit_and_cube" and purpose not in {"fit", "cube"}:
         return False
+    if "h5" in record:
+        return (h5 is not None
+                and Path(str(h5)).name == record["h5"]
+                and int(specid) == record["specid"]
+                and int(ifuslot) == record["ifuslot"]
+                and int(ifuid) == record["ifuid"]
+                and str(amp).upper() == record["amp"])
     if "start" in record:
         return (date_number is not None and record["start"] <= date_number < record["stop"]
                 and int(ifuslot) == record["ifuslot"]
@@ -99,25 +135,25 @@ def _matches(record, *, date_number, specid, ifuslot, ifuid, amp, purpose):
             and str(amp).upper() == record["amp"])
 
 
-def _matching_records(*, date, specid, ifuslot, ifuid, amp, purpose):
+def _matching_records(*, date, h5, specid, ifuslot, ifuid, amp, purpose):
     date_number = _date_number(date)
     if purpose not in {"fit", "cube"}:
         raise ValueError("purpose must be 'fit' or 'cube'")
     return [record for record in HARDWARE_EXCLUSIONS
-            if _matches(record, date_number=date_number, specid=specid,
+            if _matches(record, date_number=date_number, h5=h5, specid=specid,
                         ifuslot=ifuslot, ifuid=ifuid, amp=amp,
                         purpose=purpose)]
 
 
-def hardware_excluded(*, date, specid, ifuslot, ifuid, amp, purpose):
+def hardware_excluded(*, date, specid, ifuslot, ifuid, amp, purpose, h5=None):
     """Return whether an amplifier is excluded for ``fit`` or ``cube``."""
-    return bool(_matching_records(date=date, specid=specid, ifuslot=ifuslot,
+    return bool(_matching_records(date=date, h5=h5, specid=specid, ifuslot=ifuslot,
                                   ifuid=ifuid, amp=amp, purpose=purpose))
 
 
-def exclusion_reason(*, date, specid, ifuslot, ifuid, amp, purpose):
+def exclusion_reason(*, date, specid, ifuslot, ifuid, amp, purpose, h5=None):
     """Return compact reason/provenance text for all matching exclusions."""
-    records = _matching_records(date=date, specid=specid, ifuslot=ifuslot,
+    records = _matching_records(date=date, h5=h5, specid=specid, ifuslot=ifuslot,
                                 ifuid=ifuid, amp=amp, purpose=purpose)
     if not records:
         return None

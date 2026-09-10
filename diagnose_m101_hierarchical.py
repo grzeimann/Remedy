@@ -29,6 +29,7 @@ modifies a production cube builder and never writes an H5 file.
 
 from argparse import ArgumentParser
 import csv
+from functools import lru_cache
 from pathlib import Path
 import warnings
 
@@ -188,16 +189,23 @@ def raw_work_basis(survey_row):
     gratio = millum * guider_throughput / 5e5
     if not np.isfinite(gratio) or gratio == 0.0:
         raise ValueError("invalid Survey guider ratio")
+    standard = _standard_throughput()
+    mult = (6.626e-27 * (3e18 / DEF_WAVE) / 360.0 / 5e5 / 0.92 * 5)
+    mult *= 1e29 * DEF_WAVE**2 / 2.99792e18
+    final_norm = 1e-29 * 2.99792e18 / DEF_WAVE**2 * 1e17
+    return mult * (360.0 / exptime) / standard / gratio * final_norm
+
+
+@lru_cache(maxsize=1)
+def _standard_throughput():
+    """Read the static throughput table once per process."""
     table = Table.read(Path(__file__).resolve().parent / "CALS" / "throughput.txt",
                        format="ascii.fixed_width_two_line")
     standard = np.asarray(table["throughput"], dtype=float)
     if standard.size != DEF_WAVE.size or not np.allclose(
             np.asarray(table["wavelength"], dtype=float), DEF_WAVE):
         raise ValueError("CALS/throughput.txt does not match VIRUS grid")
-    mult = (6.626e-27 * (3e18 / DEF_WAVE) / 360.0 / 5e5 / 0.92 * 5)
-    mult *= 1e29 * DEF_WAVE**2 / 2.99792e18
-    final_norm = 1e-29 * 2.99792e18 / DEF_WAVE**2 * 1e17
-    return mult * (360.0 / exptime) / standard / gratio * final_norm
+    return standard
 
 
 def weighted_scalar(values, response):

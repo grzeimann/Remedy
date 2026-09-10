@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import time
 
 import numpy as np
 import tables
@@ -12,7 +13,9 @@ import diagnose_m101_hierarchical as validated_m101
 import build_m101_measurements as validated_measurements
 from m101_hardware_exclusions import hardware_excluded
 
-from m101_calibration_utils import BANDS, collapse, collapse_error, sufficient_native_spectrum
+from m101_calibration_utils import (
+    BANDS, collapse_many, collapse_error_many, sufficient_native_spectrum,
+)
 
 
 WAVE = np.asarray(validated_m101.DEF_WAVE, dtype=float)
@@ -102,6 +105,28 @@ def _physical_arrays(info, groups, labels):
     return ifu, amp, j, q
 
 
+def _grouped_nanmean(values, inverse, size):
+    values = np.asarray(values, dtype=float)
+    finite = np.isfinite(values)
+    totals = np.bincount(inverse, weights=np.where(finite, values, 0.0),
+                         minlength=size)
+    counts = np.bincount(inverse, weights=finite.astype(float), minlength=size)
+    return np.divide(totals, counts, out=np.full(size, np.nan), where=counts > 0)
+
+
+def _exposure_coordinates(ifu, ra, dec, blank_valid):
+    """Compute IFU centers with one grouping pass instead of one mask per IFU."""
+    unique_ifus, inverse = np.unique(ifu, axis=0, return_inverse=True)
+    ra_centers = _grouped_nanmean(ra, inverse, unique_ifus.shape[0])
+    dec_centers = _grouped_nanmean(dec, inverse, unique_ifus.shape[0])
+    supported = np.zeros(unique_ifus.shape[0], dtype=bool)
+    np.logical_or.at(supported, inverse, blank_valid)
+    center_mask = supported if np.any(supported) else np.ones(supported.shape, dtype=bool)
+    ra0 = float(np.nanmedian(ra_centers[center_mask]))
+    dec0 = float(np.nanmedian(dec_centers[center_mask]))
+    return ra0, dec0
+
+
 def _band_responses(on_filter, off_filter):
     null_responses, null_provenance = validated_measurements._validate_sky_null_responses()
     responses = [np.asarray(response, dtype=float) for response in null_responses]
@@ -128,82 +153,132 @@ def construct_total_spectra(spectrum, error, skyspectrum, offset):
     return total, total_error
 
 
+def _emit_progress(progress, message):
+    if progress is not None:
+        progress(message)
+
+
 def load(h5_paths, blank_by_h5, on_filter_path, off_filter_path,
-         minimum_finite_fraction=0.8):
+         minimum_finite_fraction=0.8, timings=None, include_band_errors=True,
+         collapse_band_indices=None, include_native_errors=True, progress=None):
+    load_started = time.perf_counter()
+    filter_started = time.perf_counter()
+    _emit_progress(progress, "loading ON/OFF filters and validated null responses")
     on_filter = validated_m101.read_filter(on_filter_path)
     off_filter = validated_m101.read_filter(off_filter_path)
     responses, null_provenance = _band_responses(on_filter, off_filter)
+    collapse_band_indices = (tuple(range(len(responses))) if collapse_band_indices is None
+                             else tuple(collapse_band_indices))
+    if any(index < 0 or index >= len(responses) for index in collapse_band_indices):
+        raise ValueError("collapse_band_indices contains an invalid band index")
+    if timings is not None:
+        timings["native_filter_setup_seconds"] = time.perf_counter() - filter_started
     output = []
-    for path in discover_h5(h5_paths, development=True):
+    h5_shared_timings = []
+    h5_total_timings = []
+    exposure_timings = []
+    paths = discover_h5(h5_paths, development=True)
+    _emit_progress(progress, "accepted %d H5 files; beginning native reconstruction" % len(paths))
+    for path_index, path in enumerate(paths, 1):
+        h5_started = time.perf_counter()
+        _emit_progress(progress, "H5 %d/%d: opening %s" % (path_index, len(paths), path.name))
         with tables.open_file(path, mode="r") as h5:
+            shared_started = time.perf_counter()
             if not {"Info", "Fibers", "Survey"}.issubset(h5.root._v_children):
                 raise ValueError("%s lacks Info, Fibers, or Survey" % path)
             info, fibers = h5.root.Info, h5.root.Fibers
+            _emit_progress(progress, "H5 %d/%d: opened; reading Info/Survey metadata (%d rows)"
+                           % (path_index, len(paths), info.nrows))
+            metadata_started = time.perf_counter()
             groups, labels = validated_m101.build_groups(info)
             surveys = _survey_by_exposure(h5)
             ra = np.asarray(info.cols.ra[:], dtype=float)
             dec = np.asarray(info.cols.dec[:], dtype=float)
+            metadata_seconds = time.perf_counter() - metadata_started
+            physical_started = time.perf_counter()
             ifu_all, amp_all, j_all, q_all = _physical_arrays(info, groups, labels)
+            physical_seconds = time.perf_counter() - physical_started
             blank = np.asarray(blank_by_h5[path.name], dtype=bool)
             if blank.shape != (info.nrows,):
                 raise ValueError("blank mask does not match %s" % path)
-            date_bad_all = np.asarray([
-                hardware_excluded(
-                    date=path.name.split("_")[0], specid=-1,
-                    ifuslot=ifu[1], ifuid=-1, amp=amplifier, purpose="fit")
-                for ifu, amplifier in zip(ifu_all, amp_all)
-            ], dtype=bool)
-            persistent_bad_all = np.asarray([
-                hardware_excluded(
-                    date=None, specid=ifu[0], ifuslot=ifu[1], ifuid=ifu[2],
-                    amp=amplifier, purpose="fit")
-                for ifu, amplifier in zip(ifu_all, amp_all)
-            ], dtype=bool)
+            masks_started = time.perf_counter()
+            date_cache = {}
+            persistent_cache = {}
+            date_bad_values, persistent_bad_values = [], []
+            date_name = path.name.split("_")[0]
+            for ifu, amplifier in zip(ifu_all, amp_all):
+                date_key = (date_name, int(ifu[1]), str(amplifier))
+                if date_key not in date_cache:
+                    date_cache[date_key] = hardware_excluded(
+                        date=date_name, specid=-1, ifuslot=ifu[1], ifuid=-1,
+                        amp=amplifier, purpose="fit")
+                date_bad_values.append(date_cache[date_key])
+                persistent_key = (int(ifu[0]), int(ifu[1]), int(ifu[2]), str(amplifier))
+                if persistent_key not in persistent_cache:
+                    persistent_cache[persistent_key] = hardware_excluded(
+                        date=None, specid=ifu[0], ifuslot=ifu[1], ifuid=ifu[2],
+                        amp=amplifier, purpose="fit", h5=path)
+                persistent_bad_values.append(persistent_cache[persistent_key])
+            date_bad_all = np.asarray(date_bad_values, dtype=bool)
+            persistent_bad_all = np.asarray(persistent_bad_values, dtype=bool)
             hardware_bad_all = date_bad_all | persistent_bad_all
+            mask_seconds = time.perf_counter() - masks_started
+            shared_seconds = time.perf_counter() - shared_started
+            _emit_progress(progress, "H5 %d/%d: metadata/physical labels/masks done in %.3fs "
+                           "(metadata=%.3fs, physical=%.3fs, masks=%.3fs)"
+                           % (path_index, len(paths), shared_seconds,
+                              metadata_seconds, physical_seconds, mask_seconds))
+            if timings is not None:
+                h5_shared_timings.append({"H5": path.name,
+                                          "seconds": shared_seconds,
+                                          "metadata_seconds": metadata_seconds,
+                                          "physical_arrays_seconds": physical_seconds,
+                                          "hardware_masks_seconds": mask_seconds})
             for exposure in (1, 2, 3):
+                exposure_started = time.perf_counter()
                 indices = np.flatnonzero(labels == exposure)
                 survey = surveys[exposure]
+                _emit_progress(progress, "H5 %d/%d %s exposure %d/3: reading spectrum/error/skyspectrum (%d fibers)"
+                               % (path_index, len(paths), path.name, exposure, indices.size))
+                read_started = time.perf_counter()
+                spectrum_e = np.asarray(fibers.read_coordinates(indices, field="spectrum"), dtype=float)
+                error_e = (np.asarray(fibers.read_coordinates(indices, field="error"), dtype=float)
+                           if include_native_errors else np.zeros_like(spectrum_e))
+                skyspectrum_e = np.asarray(fibers.read_coordinates(indices, field="skyspectrum"), dtype=float)
                 total_e, error_e = construct_total_spectra(
-                    np.asarray(fibers.read_coordinates(indices, field="spectrum"), dtype=float),
-                    np.asarray(fibers.read_coordinates(indices, field="error"), dtype=float),
-                    np.asarray(fibers.read_coordinates(indices, field="skyspectrum"), dtype=float),
-                    survey["offset"])
+                    spectrum_e, error_e, skyspectrum_e, survey["offset"])
+                read_seconds = time.perf_counter() - read_started
+                support_started = time.perf_counter()
                 finite_native = sufficient_native_spectrum(total_e, minimum_finite_fraction)
                 date_bad = date_bad_all[indices]
                 blank_e = blank[indices]
                 persistent_bad = persistent_bad_all[indices]
                 hardware_bad = hardware_bad_all[indices]
                 blank_valid = blank_e & ~hardware_bad & finite_native
-                band_values = []
-                band_errors = []
-                fractions = []
-                for response in responses:
-                    value, fraction = collapse(total_e, response)
-                    band_error, _ = collapse_error(error_e, response)
-                    band_values.append(value)
-                    band_errors.append(band_error)
-                    fractions.append(fraction)
-                band_total = np.column_stack(band_values)
-                band_error = np.column_stack(band_errors)
-                response_fraction = np.column_stack(fractions)
+                support_seconds = time.perf_counter() - support_started
+                collapse_started = time.perf_counter()
+                band_total = np.full((indices.size, len(responses)), np.nan, dtype=float)
+                band_error = np.full((indices.size, len(responses)), np.nan, dtype=float)
+                response_fraction = np.full((indices.size, len(responses)), np.nan, dtype=float)
+                selected_responses = responses[list(collapse_band_indices)]
+                values, fractions = collapse_many(total_e, selected_responses)
+                band_total[:, list(collapse_band_indices)] = values
+                response_fraction[:, list(collapse_band_indices)] = fractions
+                if include_band_errors:
+                    band_errors, _ = collapse_error_many(error_e, selected_responses)
+                    band_error[:, list(collapse_band_indices)] = band_errors
+                collapse_seconds = time.perf_counter() - collapse_started
+                coordinates_started = time.perf_counter()
                 raw_basis = validated_m101.raw_work_basis(survey)
                 K = np.asarray([validated_m101.weighted_scalar(raw_basis, response)
                                 for response in responses], dtype=float)
                 # The IFU center and plane origin follow the existing M101
                 # illumination convention: median valid IFU center per exposure.
-                centers = {}
-                for ifu_key in sorted(set(map(tuple, ifu_all[indices]))):
-                    selected = indices[np.all(ifu_all[indices] == np.asarray(ifu_key), axis=1)]
-                    centers[ifu_key] = (float(np.nanmean(ra[selected])),
-                                        float(np.nanmean(dec[selected])))
-                supported_centers = [centers[key] for key in centers
-                                     if np.any(blank_valid[np.all(ifu_all[indices] == np.asarray(key), axis=1)])]
-                if not supported_centers:
-                    supported_centers = list(centers.values())
-                ra0 = float(np.nanmedian([item[0] for item in supported_centers]))
-                dec0 = float(np.nanmedian([item[1] for item in supported_centers]))
+                ra0, dec0 = _exposure_coordinates(
+                    ifu_all[indices], ra[indices], dec[indices], blank_valid)
                 x_arcmin = (ra[indices] - ra0) * np.cos(np.deg2rad(dec0)) * 60.0
                 y_arcmin = (dec[indices] - dec0) * 60.0
+                coordinates_seconds = time.perf_counter() - coordinates_started
                 output.append(ExposureData(
                     h5_name=path.name, h5_path=str(path), exposure=exposure,
                     key=(path.name, exposure), survey=survey,
@@ -217,6 +292,33 @@ def load(h5_paths, blank_by_h5, on_filter_path, off_filter_path,
                     date_mask_bad=date_bad, blank_valid=blank_valid,
                     persistent_hardware_bad=persistent_bad,
                     hardware_bad=hardware_bad))
+                if timings is not None:
+                    exposure_timings.append({
+                        "H5": path.name, "exposure": int(exposure),
+                        "rows": int(indices.size),
+                        "supported_blank_fibers": int(np.sum(blank_valid)),
+                        "read_reconstruct_seconds": read_seconds,
+                        "support_mask_seconds": support_seconds,
+                        "band_collapse_seconds": collapse_seconds,
+                        "coordinates_support_seconds": coordinates_seconds,
+                        "total_seconds": time.perf_counter() - exposure_started,
+                    })
+                _emit_progress(progress, "H5 %d/%d %s exposure %d/3: done in %.3fs "
+                               "(read=%.3fs, collapse=%.3fs, coords=%.3fs; blank-valid=%d)"
+                               % (path_index, len(paths), path.name, exposure,
+                                  time.perf_counter() - exposure_started, read_seconds,
+                                  collapse_seconds, coordinates_seconds, int(np.sum(blank_valid))))
+        if timings is not None:
+            h5_total_timings.append({"H5": path.name,
+                                     "seconds": time.perf_counter() - h5_started})
+        _emit_progress(progress, "H5 %d/%d %s: complete in %.3fs"
+                       % (path_index, len(paths), path.name,
+                          time.perf_counter() - h5_started))
+    if timings is not None:
+        timings["native_h5_shared_seconds"] = h5_shared_timings
+        timings["native_h5_total_seconds"] = h5_total_timings
+        timings["native_per_exposure"] = exposure_timings
+        timings["native_load_total_seconds"] = time.perf_counter() - load_started
     return output, {"responses": responses, "null_provenance": null_provenance,
                     "wave": WAVE, "band_order": ALL_BANDS,
                     "hardware_exclusions": {

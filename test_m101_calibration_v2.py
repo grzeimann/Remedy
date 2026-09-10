@@ -1,8 +1,15 @@
 import numpy as np
 
-from fit_m101_calibration_v2 import focal_plot_filename, focal_plot_label, make_layout, support_report
+from fit_m101_calibration_v2 import (
+    _aggregate_amplifier_qa, _aggregate_persistent_qa,
+    fit_active_model, focal_plot_filename, focal_plot_label, make_layout,
+    support_report,
+)
 from build_m101_external_compact_mask import run_synthetic_validation
-from m101_calibration_utils import collapse, collapse_error, contrast_basis, contrast_values
+from m101_calibration_utils import (
+    collapse, collapse_error, collapse_error_many, collapse_many,
+    contrast_basis, contrast_values,
+)
 from m101_external_measurements import source_comparison_validity
 from m101_native_data import ExposureData, construct_total_spectra
 
@@ -49,6 +56,30 @@ def test_band_collapse_and_error_delegate_to_validated_builder():
     np.testing.assert_allclose(actual_error[1], expected_error[1], equal_nan=True)
 
 
+def test_batched_band_collapse_matches_scalar_calls():
+    values = np.asarray([[1.0, 2.0, np.nan, 4.0],
+                         [2.0, np.nan, 6.0, 8.0],
+                         [np.nan, 3.0, 5.0, 7.0]])
+    errors = np.asarray([[2.0, 4.0, 8.0, 16.0],
+                         [1.0, np.nan, 3.0, 4.0],
+                         [np.nan, 2.0, 5.0, 7.0]])
+    responses = np.asarray([[1.0, 2.0, 0.0, 1.0],
+                            [2.0, 1.0, 1.0, 0.0],
+                            [0.5, 0.0, 2.0, 1.0]])
+    values_many = collapse_many(values, responses, block_size=2)
+    errors_many = collapse_error_many(errors, responses, block_size=2)
+    values_scalar = tuple(np.column_stack([collapse(values, response)[i]
+                                           for response in responses])
+                          for i in range(2))
+    errors_scalar = tuple(np.column_stack([collapse_error(errors, response)[i]
+                                           for response in responses])
+                          for i in range(2))
+    for actual, expected in zip(values_many, values_scalar):
+        np.testing.assert_allclose(actual, expected, equal_nan=True)
+    for actual, expected in zip(errors_many, errors_scalar):
+        np.testing.assert_allclose(actual, expected, equal_nan=True)
+
+
 def test_contrasts_and_illumination_are_identifiable():
     basis = contrast_basis(4)
     values = contrast_values(np.asarray([0.2, -0.1, 0.4]), basis)
@@ -58,6 +89,16 @@ def test_contrasts_and_illumination_are_identifiable():
     assert len(layout.plane_columns) == 1
     assert all(name.startswith(("p_IFU_", "ax_", "ay_")) for name in layout.names)
     assert not any(name.startswith("illumination_intercept") for name in layout.names)
+
+
+def test_small_normal_system_uses_rank_aware_dense_solve():
+    item = _tiny_exposure()
+    timings = {}
+    fit_active_model([item], {item.key: np.ones(4)}, np.ones((7, 4)),
+                     np.ones(112), "model2", timings=timings)
+    assert {row["solver"] for row in timings["model2_irls_iterations"]} == {"lstsq_dense"}
+    assert all(row["solver_rank"] is not None
+               for row in timings["model2_irls_iterations"])
 
 
 def test_exposure_identity_and_missing_support_are_explicit():
@@ -94,3 +135,31 @@ def test_validated_compact_mask_lookup_synthetic_case():
     result = run_synthetic_validation()
     assert result["status"] == "PASS"
     assert result["vectorized_lookup"] is True
+
+
+def test_amplifier_qa_uses_h5_as_the_independent_unit():
+    records = []
+    flags3 = []
+    flags5 = []
+    for h5, n3, n5 in (("a.h5", 2, 2), ("b.h5", 0, 0)):
+        for exposure in (1, 2, 3):
+            records.append({"h5": h5, "exposure": exposure,
+                            "SPECID": 1, "IFUSLOT": 2, "IFUID": 3,
+                            "AMP": "LL", "support_status": "supported"})
+            flags3.append(exposure <= n3)
+            flags5.append(exposure <= n5)
+    h5_rows = _aggregate_amplifier_qa(records, np.asarray(flags3),
+                                       np.asarray(flags5))
+    assert h5_rows[0]["supported_exposures"] == 3
+    assert h5_rows[0]["outlier3_exposures"] == 2
+    assert h5_rows[0]["outlier5_exposures"] == 2
+    assert h5_rows[0]["h5_outlier_3mad"]
+    assert h5_rows[0]["h5_outlier_5mad"]
+    assert not h5_rows[1]["h5_outlier_3mad"]
+
+    # One strong H5 plus a nominal independent H5 is H5-specific, while two
+    # H5-level 3-MAD failures without two 5-MAD failures remain weak.
+    h5_rows[1]["h5_outlier_5mad"] = False
+    persistent = _aggregate_persistent_qa(h5_rows)
+    assert persistent[0]["N_outlier_H5_5mad"] == 1
+    assert persistent[0]["candidate_label"] == "h5_specific_candidate"
