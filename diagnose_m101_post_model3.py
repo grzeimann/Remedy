@@ -857,6 +857,16 @@ def build_source_rows(data, external, mask_data, mask_wcs, model, skies, fq,
     for row in rows:
         row["raw_center"] = centers[row["band"]]
         row["normalized_ratio"] = row["raw_robust_ratio"] / centers[row["band"]]
+        # Measurement diagnostics only.  These fields do not alter the
+        # existing ratio definition or represent a proposed correction.
+        normalized_ratio = row["normalized_ratio"]
+        row["delta"] = (normalized_ratio - 1.0
+                         if np.isfinite(normalized_ratio) else np.nan)
+        row["delta_percent"] = (100.0 * row["delta"]
+                                 if np.isfinite(row["delta"]) else np.nan)
+        row["log_ratio"] = (float(np.log(normalized_ratio))
+                             if np.isfinite(normalized_ratio) and normalized_ratio > 0
+                             else np.nan)
     if return_source_masks:
         return rows, centers, by_exposure, fiber_ratios, source_masks_by_item
     return rows, centers, by_exposure, fiber_ratios
@@ -1576,8 +1586,586 @@ def ratio_summary(values, center):
     }
 
 
+SOURCE_ACCEPTANCE_LEVELS = (1., 2., 3., 5., 10.)
+SOURCE_PAIR_ORDER = ("LL-LU", "LL-RL", "LL-RU", "LU-RL", "LU-RU", "RL-RU")
+SOURCE_PERSISTENT_MIN_OBSERVATIONS = 2
+TOPOLOGY_MODE_ORDER = ("C", "LR", "UD", "I")
+TOPOLOGY_DIFFERENTIAL_MODES = ("LR", "UD", "I")
+TOPOLOGY_MATRIX = np.asarray([
+    (1., 1., 1., 1.),
+    (-1., -1., 1., 1.),
+    (-1., 1., -1., 1.),
+    (1., -1., -1., 1.),
+], dtype=float) / 4.
+TOPOLOGY_MIN_IFU_PREDICTIONS = 3
+TOPOLOGY_MIN_H5_MEASUREMENTS = 3
+
+
+def _source_diagnostic_metadata():
+    """Metadata shared by the new products; these products never calibrate data."""
+    return {
+        "diagnostic_only": True,
+        "calibration_model_fitted": False,
+        "calibration_correction_applied": False,
+        "model3_modified": False,
+        "source_selection_modified": False,
+        "external_cache_modified": False,
+        "outliers_sigma_clipped": False,
+        "description": "Derived ON/OFF external source-stitching measurement diagnostics",
+    }
+
+
+def _write_diagnostic_json(path, payload):
+    payload = {"metadata": _source_diagnostic_metadata(), **payload}
+    Path(path).write_text(json.dumps(json_ready(payload), indent=2, sort_keys=True))
+
+
+def _percent_from_log(value):
+    with np.errstate(over="ignore", invalid="ignore"):
+        result = 100. * np.expm1(float(value))
+    return float(result) if np.isfinite(result) else np.nan
+
+
+def _acceptance_statistics(normalized_values):
+    """Summarize every finite normalized ratio without clipping or re-centering."""
+    values = _finite_values(normalized_values)
+    if not values.size:
+        return {
+            "N": 0, "median_normalized_ratio": np.nan, "median_delta_percent": np.nan,
+            "robust_scatter_delta_percent": np.nan, "p16_delta_percent": np.nan,
+            "p84_delta_percent": np.nan, "median_abs_deviation_percent": np.nan,
+            "p90_abs_deviation_percent": np.nan, "p95_abs_deviation_percent": np.nan,
+            "fraction_within_1pct": np.nan, "fraction_within_2pct": np.nan,
+            "fraction_within_3pct": np.nan, "fraction_within_5pct": np.nan,
+            "fraction_within_10pct": np.nan, "N_beyond_5pct": 0, "N_beyond_10pct": 0,
+        }
+    delta_percent = 100. * (values - 1.)
+    absolute = np.abs(delta_percent)
+    return {
+        "N": int(values.size),
+        "median_normalized_ratio": float(np.median(values)),
+        "median_delta_percent": float(np.median(delta_percent)),
+        "robust_scatter_delta_percent": float(robust_scatter(delta_percent)),
+        "p16_delta_percent": float(np.percentile(delta_percent, 16)),
+        "p84_delta_percent": float(np.percentile(delta_percent, 84)),
+        "median_abs_deviation_percent": float(np.median(absolute)),
+        "p90_abs_deviation_percent": float(np.percentile(absolute, 90)),
+        "p95_abs_deviation_percent": float(np.percentile(absolute, 95)),
+        "fraction_within_1pct": float(np.mean(absolute <= 1.)),
+        "fraction_within_2pct": float(np.mean(absolute <= 2.)),
+        "fraction_within_3pct": float(np.mean(absolute <= 3.)),
+        "fraction_within_5pct": float(np.mean(absolute <= 5.)),
+        "fraction_within_10pct": float(np.mean(absolute <= 10.)),
+        "N_beyond_5pct": int(np.sum(absolute > 5.)),
+        "N_beyond_10pct": int(np.sum(absolute > 10.)),
+    }
+
+
+def _percent_summary(values):
+    """Summarize signed percent mismatches using the project's robust machinery."""
+    values = _finite_values(values)
+    if not values.size:
+        return {
+            "N": 0, "robust_center_percent": np.nan, "robust_scatter_percent": np.nan,
+            "fraction_within_1pct": np.nan, "fraction_within_2pct": np.nan,
+            "fraction_within_3pct": np.nan, "fraction_within_5pct": np.nan,
+            "p95_abs_deviation_percent": np.nan,
+        }
+    absolute = np.abs(values)
+    return {
+        "N": int(values.size),
+        "robust_center_percent": float(robust_location(values)),
+        "robust_scatter_percent": float(robust_scatter(values)),
+        "fraction_within_1pct": float(np.mean(absolute <= 1.)),
+        "fraction_within_2pct": float(np.mean(absolute <= 2.)),
+        "fraction_within_3pct": float(np.mean(absolute <= 3.)),
+        "fraction_within_5pct": float(np.mean(absolute <= 5.)),
+        "p95_abs_deviation_percent": float(np.percentile(absolute, 95)),
+    }
+
+
+def _source_group_record(band, group_type, group_key, group_rows, **identity):
+    values = [row["normalized_ratio"] for row in group_rows]
+    return {
+        "band": band, "group_type": group_type, "group_key": group_key,
+        "AMP": identity.get("AMP", ""), "exposure": identity.get("exposure", ""),
+        "H5": identity.get("H5", ""), "SPECID": identity.get("SPECID", ""),
+        "IFUSLOT": identity.get("IFUSLOT", ""), "IFUID": identity.get("IFUID", ""),
+        **_acceptance_statistics(values),
+    }
+
+
+def _source_acceptance_rows(rows):
+    """Build the requested ON/OFF strata from the complete finite row population."""
+    output = []
+    for band in SOURCE_BANDS:
+        band_rows = [row for row in rows
+                     if row["band"] == band and np.isfinite(row["normalized_ratio"])]
+
+        def add(group_type, group_key, group_rows, **identity):
+            if group_rows:
+                output.append(_source_group_record(
+                    band, group_type, group_key, group_rows, **identity))
+
+        add("all", "all", band_rows)
+        for amp in AMP_ORDER:
+            add("AMP", amp, [row for row in band_rows if row["AMP"] == amp], AMP=amp)
+        for exposure in (1, 2, 3):
+            add("exposure", "e%d" % exposure,
+                [row for row in band_rows if row["exposure"] == exposure],
+                exposure=exposure)
+        for h5 in sorted({row["H5"] for row in band_rows}):
+            add("H5", h5, [row for row in band_rows if row["H5"] == h5], H5=h5)
+        for key, group_rows in sorted(
+                _group_rows(band_rows, lambda row: (row["H5"], row["exposure"])),
+                key=lambda pair: str(pair[0])):
+            add("H5/exposure", "%s/e%d" % key, group_rows,
+                H5=key[0], exposure=key[1])
+        for key, group_rows in sorted(
+                _group_rows(band_rows, lambda row: (row["SPECID"], row["IFUSLOT"],
+                                                    row["IFUID"], row["AMP"])),
+                key=lambda pair: str(pair[0])):
+            add("persistent_physical_amplifier", "/".join(map(str, key)), group_rows,
+                SPECID=key[0], IFUSLOT=key[1], IFUID=key[2], AMP=key[3])
+    return output
+
+
+def _group_rows(rows, key_function):
+    grouped = {}
+    for row in rows:
+        grouped.setdefault(key_function(row), []).append(row)
+    return grouped.items()
+
+
+def _source_observation_key(row):
+    return (row["H5"], row["exposure"], row["SPECID"], row["IFUSLOT"], row["IFUID"])
+
+
+def _aligned_source_rows(rows):
+    finite_rows = [row for row in rows if np.isfinite(row["normalized_ratio"])]
+    keys = sorted({_source_observation_key(row) for row in finite_rows}, key=str)
+    index_by_key = {key: index for index, key in enumerate(keys)}
+    mapping = [{"aligned_index": index, "H5": key[0], "exposure": key[1],
+                "SPECID": key[2], "IFUSLOT": key[3], "IFUID": key[4]}
+               for index, key in enumerate(keys)]
+    aligned_rows = []
+    for row in finite_rows:
+        aligned_rows.append({
+            "aligned_index": index_by_key[_source_observation_key(row)],
+            "band": row["band"], "AMP": row["AMP"],
+            "normalized_ratio": row["normalized_ratio"],
+        })
+    return mapping, aligned_rows
+
+
+def _common_mode_rows(rows):
+    grouped = {}
+    for row in rows:
+        if np.isfinite(row["log_ratio"]):
+            grouped.setdefault((_source_observation_key(row) + (row["band"],)), []).append(row)
+    output = []
+    for key, group_rows in sorted(grouped.items(), key=lambda pair: str(pair[0])):
+        common_mode = robust_location([row["log_ratio"] for row in group_rows])
+        for row in group_rows:
+            residual_log = row["log_ratio"] - common_mode
+            output.append({
+                "H5": row["H5"], "exposure": row["exposure"],
+                "SPECID": row["SPECID"], "IFUSLOT": row["IFUSLOT"],
+                "IFUID": row["IFUID"], "AMP": row["AMP"], "band": row["band"],
+                "N_supported_amplifiers": len(group_rows),
+                "log_ratio": row["log_ratio"], "common_mode_log": common_mode,
+                "raw_delta_percent": row["delta_percent"],
+                "common_mode_removed_log_residual": residual_log,
+                "common_mode_removed_delta_percent": _percent_from_log(residual_log),
+            })
+    return output
+
+
+def _leave_one_amplifier_out_rows(rows):
+    grouped = {}
+    for row in rows:
+        if np.isfinite(row["log_ratio"]):
+            grouped.setdefault((_source_observation_key(row) + (row["band"],)), []).append(row)
+    output = []
+    for key, group_rows in sorted(grouped.items(), key=lambda pair: str(pair[0])):
+        for row in group_rows:
+            other_logs = [other["log_ratio"] for other in group_rows if other is not row]
+            if len(other_logs) < 2:
+                continue
+            loo_common_mode = robust_location(other_logs)
+            residual_log = row["log_ratio"] - loo_common_mode
+            output.append({
+                "H5": row["H5"], "exposure": row["exposure"],
+                "SPECID": row["SPECID"], "IFUSLOT": row["IFUSLOT"],
+                "IFUID": row["IFUID"], "AMP": row["AMP"], "band": row["band"],
+                "N_other_supported_amplifiers": len(other_logs),
+                "log_ratio": row["log_ratio"],
+                "loo_common_mode_log": loo_common_mode,
+                "loo_residual_log": residual_log,
+                "loo_residual_percent": _percent_from_log(residual_log),
+            })
+    return output
+
+
+def _pairwise_source_rows(rows):
+    grouped = {}
+    for row in rows:
+        if np.isfinite(row["log_ratio"]):
+            grouped.setdefault((_source_observation_key(row) + (row["band"],)), []).append(row)
+    output = []
+    for key, group_rows in sorted(grouped.items(), key=lambda pair: str(pair[0])):
+        by_amp = {row["AMP"]: row for row in group_rows}
+        for pair in SOURCE_PAIR_ORDER:
+            amp_a, amp_b = pair.split("-")
+            if amp_a not in by_amp or amp_b not in by_amp:
+                continue
+            left, right = by_amp[amp_a], by_amp[amp_b]
+            d_log = left["log_ratio"] - right["log_ratio"]
+            output.append({
+                "H5": key[0], "exposure": key[1], "SPECID": key[2],
+                "IFUSLOT": key[3], "IFUID": key[4], "band": key[5],
+                "pair": pair, "AMP_a": amp_a, "AMP_b": amp_b,
+                "log_ratio_a": left["log_ratio"], "log_ratio_b": right["log_ratio"],
+                "d_ab_log": d_log, "fractional_mismatch_percent": _percent_from_log(d_log),
+            })
+    return output
+
+
+def _pairwise_source_summary(pair_rows):
+    output = []
+    for band in SOURCE_BANDS:
+        for pair in SOURCE_PAIR_ORDER:
+            subset = [row for row in pair_rows
+                      if row["band"] == band and row["pair"] == pair]
+            percent = [row["fractional_mismatch_percent"] for row in subset]
+            logs = [row["d_ab_log"] for row in subset]
+            output.append({
+                "band": band, "pair": pair, **_percent_summary(percent),
+                "robust_center_log": (float(robust_location(logs)) if _finite_values(logs).size else np.nan),
+                "robust_scatter_log": (float(robust_scatter(logs)) if _finite_values(logs).size else np.nan),
+            })
+    return output
+
+
+def _common_mode_summary(common_rows):
+    output = []
+    for metric, field, minimum_amplifiers in (
+            ("within_observation_common_mode_removed", "common_mode_removed_delta_percent", 2),):
+        for band in SOURCE_BANDS:
+            subset = [row for row in common_rows
+                      if row["band"] == band and
+                      row["N_supported_amplifiers"] >= minimum_amplifiers]
+            output.append({"metric": metric, "group_type": "all", "band": band,
+                           **_percent_summary([row[field] for row in subset])})
+            for amp in AMP_ORDER:
+                amp_subset = [row for row in subset if row["AMP"] == amp]
+                if amp_subset:
+                    output.append({"metric": metric, "group_type": "AMP", "band": band,
+                                   "AMP": amp,
+                                   **_percent_summary([row[field] for row in amp_subset])})
+    return output
+
+
+def _leave_one_amplifier_out_summary(loo_rows):
+    output = []
+    for band in SOURCE_BANDS:
+        subset = [row for row in loo_rows if row["band"] == band]
+        output.append({"metric": "leave_one_amplifier_out", "group_type": "all",
+                       "band": band,
+                       **_percent_summary([row["loo_residual_percent"] for row in subset])})
+        for amp in AMP_ORDER:
+            amp_subset = [row for row in subset if row["AMP"] == amp]
+            if amp_subset:
+                output.append({"metric": "leave_one_amplifier_out", "group_type": "AMP",
+                               "band": band, "AMP": amp,
+                               **_percent_summary([row["loo_residual_percent"] for row in amp_subset])})
+    return output
+
+
+def _persistent_source_rows(rows):
+    grouped = {}
+    for row in rows:
+        if np.isfinite(row["normalized_ratio"]):
+            key = (row["SPECID"], row["IFUSLOT"], row["IFUID"], row["AMP"], row["band"])
+            grouped.setdefault(key, []).append(row)
+    persistent_keys = [key for key, group_rows in grouped.items()
+                       if len(group_rows) >= SOURCE_PERSISTENT_MIN_OBSERVATIONS]
+    identities = sorted({key[:4] for key in persistent_keys}, key=str)
+    identity_index = {key: index for index, key in enumerate(identities)}
+    output = []
+    for key, group_rows in sorted(grouped.items(), key=lambda pair: str(pair[0])):
+        if len(group_rows) < SOURCE_PERSISTENT_MIN_OBSERVATIONS:
+            continue
+        stats = _acceptance_statistics([row["normalized_ratio"] for row in group_rows])
+        output.append({
+            "physical_amplifier_index": identity_index[key[:4]],
+            "SPECID": key[0], "IFUSLOT": key[1], "IFUID": key[2], "AMP": key[3],
+            "band": key[4], "N_observations": len(group_rows),
+            "median_normalized_ratio": stats["median_normalized_ratio"],
+            "median_percent_offset": stats["median_delta_percent"],
+            "temporal_robust_scatter_percent": stats["robust_scatter_delta_percent"],
+            "p95_abs_deviation_percent": stats["p95_abs_deviation_percent"],
+            "fraction_within_1pct": stats["fraction_within_1pct"],
+            "fraction_within_2pct": stats["fraction_within_2pct"],
+            "fraction_within_3pct": stats["fraction_within_3pct"],
+            "fraction_within_5pct": stats["fraction_within_5pct"],
+        })
+    return output
+
+
+def _support_source_rows(rows):
+    output = []
+    for band in SOURCE_BANDS:
+        band_rows = [row for row in rows
+                     if row["band"] == band and np.isfinite(row["normalized_ratio"])]
+        for threshold in (10, 20, 30, 50):
+            subset = [row for row in band_rows
+                      if row["N_source_measurements"] >= threshold]
+            if not subset:
+                continue
+            output.append({
+                "band": band, "support_metric": "N_source_measurements",
+                "support_bin": "N_source_measurements >= %d" % threshold,
+                "minimum_N_source_measurements": threshold,
+                **_acceptance_statistics([row["normalized_ratio"] for row in subset]),
+            })
+    return output
+
+
+def _source_outliers(rows):
+    output = []
+    base_fields = ["H5", "exposure", "SPECID", "IFUSLOT", "IFUID", "AMP", "band",
+                   "N_source_measurements", "raw_robust_ratio", "normalized_ratio",
+                   "delta", "delta_percent", "log_ratio", "zero_intercept_slope",
+                   "slope_residual_robust_rms", "robust_scatter", "slope_minus_ratio",
+                   "ratio_uncertainty", "x_arcmin", "y_arcmin", "source_threshold",
+                   "source_reference_method"]
+    for row in rows:
+        if not np.isfinite(row["delta_percent"]):
+            continue
+        absolute = abs(row["delta_percent"])
+        if absolute <= 5.:
+            continue
+        severity = ">25%" if absolute > 25. else ">10%" if absolute > 10. else ">5%"
+        output.append({field: row.get(field, "") for field in base_fields} |
+                      {"abs_delta_percent": absolute, "severity": severity})
+    return sorted(output, key=lambda row: (-row["abs_delta_percent"],
+                                           str(row["H5"]), row["exposure"],
+                                           str(row["AMP"]), str(row["band"])))
+
+
+def _paired_source_rows(rows):
+    paired = {}
+    for row in rows:
+        paired.setdefault((_source_observation_key(row) + (row["AMP"],)), {})[row["band"]] = row
+    output = []
+    for key, bands in sorted(paired.items(), key=lambda pair: str(pair[0])):
+        if "ON" not in bands or "OFF" not in bands:
+            continue
+        on, off = bands["ON"], bands["OFF"]
+        if not np.isfinite(on["log_ratio"]) or not np.isfinite(off["log_ratio"]):
+            continue
+        gray_log = .5 * (on["log_ratio"] + off["log_ratio"])
+        color_log = on["log_ratio"] - off["log_ratio"]
+        output.append({
+            "H5": key[0], "exposure": key[1], "SPECID": key[2],
+            "IFUSLOT": key[3], "IFUID": key[4], "AMP": key[5],
+            "ON_normalized_ratio": on["normalized_ratio"],
+            "OFF_normalized_ratio": off["normalized_ratio"],
+            "gray_log": gray_log, "gray_percent": _percent_from_log(gray_log),
+            "color_log": color_log, "color_percent": _percent_from_log(color_log),
+        })
+    return output
+
+
+def _paired_source_summary(paired_rows):
+    output = []
+    for metric, log_field, percent_field in (
+            ("gray", "gray_log", "gray_percent"),
+            ("color", "color_log", "color_percent")):
+        values = [row[percent_field] for row in paired_rows]
+        logs = [row[log_field] for row in paired_rows]
+        output.append({"metric": metric, **_percent_summary(values),
+                       "robust_center_log": (float(robust_location(logs))
+                                              if _finite_values(logs).size else np.nan),
+                       "robust_scatter_log": (float(robust_scatter(logs))
+                                               if _finite_values(logs).size else np.nan)})
+    return output
+
+
+def build_source_stitching_diagnostics(rows):
+    """Build diagnostic-only products from existing source measurement rows."""
+    acceptance_rows = _source_acceptance_rows(rows)
+    mapping_rows, aligned_rows = _aligned_source_rows(rows)
+    pair_rows = _pairwise_source_rows(rows)
+    common_rows = _common_mode_rows(rows)
+    loo_rows = _leave_one_amplifier_out_rows(rows)
+    persistent_rows = _persistent_source_rows(rows)
+    support_rows = _support_source_rows(rows)
+    outlier_rows = _source_outliers(rows)
+    paired_rows = _paired_source_rows(rows)
+    assessment_rows = []
+    for band in SOURCE_BANDS:
+        raw = [row["delta_percent"] for row in rows
+               if row["band"] == band and np.isfinite(row["delta_percent"])]
+        common = [row["common_mode_removed_delta_percent"] for row in common_rows
+                  if row["band"] == band and row["N_supported_amplifiers"] >= 2]
+        loo = [row["loo_residual_percent"] for row in loo_rows if row["band"] == band]
+        for label, values in (("%s raw" % band, raw),
+                              ("%s within-observation common-mode removed" % band, common),
+                              ("%s leave-one-amplifier-out residual" % band, loo)):
+            assessment_rows.append({"assessment_row": label, "band": band,
+                                    **_percent_summary(values)})
+    return {
+        "source_rows": rows,
+        "acceptance_rows": acceptance_rows,
+        "aligned_mapping_rows": mapping_rows,
+        "aligned_rows": aligned_rows,
+        "pair_rows": pair_rows,
+        "pair_summary_rows": _pairwise_source_summary(pair_rows),
+        "common_rows": common_rows,
+        "common_summary_rows": _common_mode_summary(common_rows),
+        "loo_rows": loo_rows,
+        "loo_summary_rows": _leave_one_amplifier_out_summary(loo_rows),
+        "persistent_rows": persistent_rows,
+        "support_rows": support_rows,
+        "outlier_rows": outlier_rows,
+        "paired_rows": paired_rows,
+        "paired_summary_rows": _paired_source_summary(paired_rows),
+        "assessment_rows": assessment_rows,
+    }
+
+
+def write_expanded_source_products(output_dir, diagnostics):
+    """Write new source-stitching acceptance products beside legacy products."""
+    output_dir = Path(output_dir)
+    diagnostic_row_fields = [
+        "H5", "exposure", "SPECID", "IFUSLOT", "IFUID", "AMP", "band",
+        "N_source_measurements", "raw_robust_ratio", "normalized_ratio", "delta",
+        "delta_percent", "log_ratio", "zero_intercept_slope", "slope_residual_robust_rms",
+        "robust_scatter", "slope_minus_ratio", "ratio_uncertainty", "x_arcmin", "y_arcmin",
+        "source_threshold", "source_reference_method"]
+    _write_rows(output_dir / "m101_external_source_stitching_diagnostic_rows.csv",
+                diagnostics["source_rows"], diagnostic_row_fields)
+    acceptance_fields = [
+        "band", "group_type", "group_key", "AMP", "exposure", "H5", "SPECID",
+        "IFUSLOT", "IFUID", "N", "median_normalized_ratio", "median_delta_percent",
+        "robust_scatter_delta_percent", "p16_delta_percent", "p84_delta_percent",
+        "median_abs_deviation_percent", "p90_abs_deviation_percent",
+        "p95_abs_deviation_percent", "fraction_within_1pct", "fraction_within_2pct",
+        "fraction_within_3pct", "fraction_within_5pct", "fraction_within_10pct",
+        "N_beyond_5pct", "N_beyond_10pct"]
+    _write_rows(output_dir / "m101_external_source_stitching_acceptance_diagnostics.csv",
+                diagnostics["acceptance_rows"], acceptance_fields)
+    _write_diagnostic_json(
+        output_dir / "m101_external_source_stitching_acceptance_diagnostics.json",
+        {"group_statistics": diagnostics["acceptance_rows"]})
+
+    _write_rows(output_dir / "m101_external_stitching_aligned_index.csv",
+                diagnostics["aligned_mapping_rows"],
+                ["aligned_index", "H5", "exposure", "SPECID", "IFUSLOT", "IFUID"])
+
+    pair_fields = ["band", "pair", "N", "robust_center_percent", "robust_scatter_percent",
+                   "robust_center_log", "robust_scatter_log", "fraction_within_1pct",
+                   "fraction_within_2pct", "fraction_within_3pct", "fraction_within_5pct",
+                   "p95_abs_deviation_percent"]
+    _write_rows(output_dir / "m101_external_source_stitching_pairwise_amplifier.csv",
+                diagnostics["pair_summary_rows"], pair_fields)
+    _write_diagnostic_json(
+        output_dir / "m101_external_source_stitching_pairwise_amplifier.json",
+        {"pair_statistics": diagnostics["pair_summary_rows"]})
+    _write_rows(output_dir / "m101_external_source_stitching_pairwise_amplifier_rows.csv",
+                diagnostics["pair_rows"],
+                ["H5", "exposure", "SPECID", "IFUSLOT", "IFUID", "band", "pair",
+                 "AMP_a", "AMP_b", "log_ratio_a", "log_ratio_b", "d_ab_log",
+                 "fractional_mismatch_percent"])
+
+    common_fields = ["H5", "exposure", "SPECID", "IFUSLOT", "IFUID", "AMP", "band",
+                     "N_supported_amplifiers", "log_ratio", "common_mode_log",
+                     "raw_delta_percent", "common_mode_removed_log_residual",
+                     "common_mode_removed_delta_percent"]
+    _write_rows(output_dir / "m101_external_source_stitching_common_mode_rows.csv",
+                diagnostics["common_rows"], common_fields)
+    _write_rows(output_dir / "m101_external_source_stitching_common_mode_summary.csv",
+                diagnostics["common_summary_rows"],
+                ["metric", "group_type", "band", "AMP", "N", "robust_center_percent",
+                 "robust_scatter_percent", "fraction_within_1pct", "fraction_within_2pct",
+                 "fraction_within_3pct", "fraction_within_5pct", "p95_abs_deviation_percent"])
+    _write_diagnostic_json(
+        output_dir / "m101_external_source_stitching_common_mode_summary.json",
+        {"summary": diagnostics["common_summary_rows"],
+         "row_diagnostics": diagnostics["common_rows"]})
+
+    loo_fields = ["H5", "exposure", "SPECID", "IFUSLOT", "IFUID", "AMP", "band", "N_other_supported_amplifiers",
+                  "log_ratio", "loo_common_mode_log", "loo_residual_log", "loo_residual_percent"]
+    _write_rows(output_dir / "m101_external_source_stitching_leave_one_amplifier_out_rows.csv",
+                diagnostics["loo_rows"], loo_fields)
+    _write_rows(output_dir / "m101_external_source_stitching_leave_one_amplifier_out.csv",
+                diagnostics["loo_summary_rows"],
+                ["metric", "group_type", "band", "AMP", "N", "robust_center_percent",
+                 "robust_scatter_percent", "fraction_within_1pct", "fraction_within_2pct",
+                 "fraction_within_3pct", "fraction_within_5pct", "p95_abs_deviation_percent"])
+    _write_diagnostic_json(
+        output_dir / "m101_external_source_stitching_leave_one_amplifier_out.json",
+        {"summary": diagnostics["loo_summary_rows"], "row_diagnostics": diagnostics["loo_rows"]})
+
+    persistent_fields = ["physical_amplifier_index", "SPECID", "IFUSLOT", "IFUID", "AMP", "band",
+                         "N_observations", "median_normalized_ratio", "median_percent_offset",
+                         "temporal_robust_scatter_percent", "p95_abs_deviation_percent",
+                         "fraction_within_1pct", "fraction_within_2pct", "fraction_within_3pct",
+                         "fraction_within_5pct"]
+    _write_rows(output_dir / "m101_external_source_stitching_persistent_amplifiers.csv",
+                diagnostics["persistent_rows"], persistent_fields)
+
+    _write_rows(output_dir / "m101_external_source_stitching_support_bins.csv",
+                diagnostics["support_rows"],
+                ["band", "support_metric", "support_bin", "minimum_N_source_measurements", "N",
+                 "median_normalized_ratio", "median_delta_percent", "robust_scatter_delta_percent",
+                 "p16_delta_percent", "p84_delta_percent", "median_abs_deviation_percent",
+                 "p90_abs_deviation_percent", "p95_abs_deviation_percent", "fraction_within_1pct",
+                 "fraction_within_2pct", "fraction_within_3pct", "fraction_within_5pct",
+                 "fraction_within_10pct", "N_beyond_5pct", "N_beyond_10pct"])
+    _write_diagnostic_json(output_dir / "m101_external_source_stitching_support_bins.json",
+                           {"support_bins": diagnostics["support_rows"]})
+
+    outlier_fields = ["H5", "exposure", "SPECID", "IFUSLOT", "IFUID", "AMP", "band",
+                      "N_source_measurements", "raw_robust_ratio", "normalized_ratio", "delta",
+                      "delta_percent", "log_ratio", "abs_delta_percent", "severity",
+                      "zero_intercept_slope", "slope_residual_robust_rms", "robust_scatter",
+                      "slope_minus_ratio", "ratio_uncertainty", "x_arcmin", "y_arcmin",
+                      "source_threshold", "source_reference_method"]
+    _write_rows(output_dir / "m101_external_source_stitching_outliers.csv",
+                diagnostics["outlier_rows"], outlier_fields)
+
+    paired_fields = ["H5", "exposure", "SPECID", "IFUSLOT", "IFUID", "AMP",
+                     "ON_normalized_ratio", "OFF_normalized_ratio", "gray_log", "gray_percent",
+                     "color_log", "color_percent"]
+    _write_rows(output_dir / "m101_external_source_stitching_on_off_pair_rows.csv",
+                diagnostics["paired_rows"], paired_fields)
+    _write_rows(output_dir / "m101_external_source_stitching_on_off_pair_summary.csv",
+                diagnostics["paired_summary_rows"],
+                ["metric", "N", "robust_center_percent", "robust_scatter_percent",
+                 "robust_center_log", "robust_scatter_log", "fraction_within_1pct",
+                 "fraction_within_2pct", "fraction_within_3pct", "fraction_within_5pct",
+                 "p95_abs_deviation_percent"])
+    _write_diagnostic_json(
+        output_dir / "m101_external_source_stitching_on_off_pair_summary.json",
+        {"summary": diagnostics["paired_summary_rows"],
+         "row_diagnostics": diagnostics["paired_rows"]})
+
+    assessment_fields = ["assessment_row", "band", "N", "robust_center_percent",
+                         "robust_scatter_percent", "fraction_within_1pct", "fraction_within_2pct",
+                         "fraction_within_3pct", "fraction_within_5pct", "p95_abs_deviation_percent"]
+    _write_rows(output_dir / "m101_external_source_stitching_assessment.csv",
+                diagnostics["assessment_rows"], assessment_fields)
+    _write_diagnostic_json(
+        output_dir / "m101_external_source_stitching_assessment.json",
+        {"assessment": diagnostics["assessment_rows"]})
+
+
 def write_source_products(output_dir, rows, centers, by_exposure, fiber_ratios,
-                          amplifier_weighted_centers=None, timings=None):
+                          amplifier_weighted_centers=None, timings=None,
+                          expanded_diagnostics=None):
     if amplifier_weighted_centers is None:
         amplifier_weighted_centers = centers.copy()
     fields = ["H5", "exposure", "SPECID", "IFUSLOT", "IFUID", "AMP", "band",
@@ -1588,6 +2176,9 @@ def write_source_products(output_dir, rows, centers, by_exposure, fiber_ratios,
               "source_threshold", "source_reference_method"]
     stage_started = time.perf_counter()
     _write_rows(output_dir / "m101_external_stitching_amplifiers.csv", rows, fields)
+    if expanded_diagnostics is None:
+        expanded_diagnostics = build_source_stitching_diagnostics(rows)
+    write_expanded_source_products(output_dir, expanded_diagnostics)
     if timings is not None:
         timings["source_write_csv_seconds"] = time.perf_counter() - stage_started
     summary = {"fiber_weighted_centers": centers,
@@ -1632,7 +2223,1390 @@ def write_source_products(output_dir, rows, centers, by_exposure, fiber_ratios,
     return summary
 
 
-def plot_source_products(output_dir, rows, centers, amplifier_weighted_centers=None, timings=None):
+def _add_source_precision_guides(axis):
+    for level, color, alpha in ((5., "tab:red", .035), (3., "tab:orange", .045),
+                                (2., "tab:green", .055), (1., "tab:blue", .07)):
+        axis.axhspan(1. - level / 100., 1. + level / 100., color=color, alpha=alpha,
+                     zorder=0)
+        axis.axhline(1. - level / 100., color=color, lw=.55, alpha=.8)
+        axis.axhline(1. + level / 100., color=color, lw=.55, alpha=.8)
+    axis.axhline(1., color="k", lw=.8)
+
+
+def _plot_signed_ecdf(axis, values, label, color):
+    values = np.sort(_finite_values(values))
+    if not values.size:
+        return
+    axis.plot(values, (np.arange(values.size) + 1.) / values.size,
+              color=color, lw=1.2, label=label)
+
+
+def _plot_expanded_source_products(output_dir, rows, diagnostics):
+    """Render new precision and redundancy plots; all are measurement QA only."""
+    output_dir = Path(output_dir)
+    markers = {"LL": "o", "LU": "s", "RL": "^", "RU": "D"}
+    colors = {"ON": "tab:blue", "OFF": "tab:orange"}
+
+    # The legacy plot above intentionally retains its historical per-AMP x indexing.
+    # This precision view retains that product's data but makes the acceptance scale visible.
+    for band in SOURCE_BANDS:
+        values = [row for row in rows
+                  if row["band"] == band and np.isfinite(row["normalized_ratio"])]
+        fig, axis = plt.subplots(figsize=(14, 5))
+        _add_source_precision_guides(axis)
+        for amp in AMP_ORDER:
+            group = [row for row in values if row["AMP"] == amp]
+            axis.scatter(np.arange(len(group)), [row["normalized_ratio"] for row in group],
+                         marker=markers[amp], s=14, alpha=.65, label=amp)
+        axis.set_ylim(.90, 1.10)
+        axis.set(xlabel="per-amplifier observation index (legacy grouping)",
+                 ylabel="normalized O/X", title="%s amplifier source stitching precision view" % band)
+        axis.legend(); axis.grid(alpha=.2)
+        fig.tight_layout()
+        fig.savefig(output_dir / ("m101_external_stitching_%s_ratios_precision.png" % band.lower()), dpi=140)
+        plt.close(fig)
+
+    # Shared coordinates make the four amplifier symbols refer to the same IFU observation.
+    mapping = diagnostics["aligned_mapping_rows"]
+    for band in SOURCE_BANDS:
+        fig, axis = plt.subplots(figsize=(14, 5))
+        _add_source_precision_guides(axis)
+        for amp, offset in zip(AMP_ORDER, (-.18, -.06, .06, .18)):
+            subset = [row for row in diagnostics["aligned_rows"]
+                      if row["band"] == band and row["AMP"] == amp]
+            axis.scatter([row["aligned_index"] + offset for row in subset],
+                         [row["normalized_ratio"] for row in subset],
+                         marker=markers[amp], s=14, alpha=.65, label=amp)
+        axis.set_ylim(.90, 1.10)
+        axis.set(xlabel="aligned observation index: H5 / exposure / physical IFU",
+                 ylabel="normalized O/X", title="%s aligned amplifier source stitching" % band)
+        axis.legend(); axis.grid(alpha=.2)
+        if len(mapping) <= 35:
+            axis.set_xticks([row["aligned_index"] for row in mapping])
+            axis.set_xticklabels(["%s/e%d/%d-%d-%d" %
+                                  (Path(row["H5"]).stem, row["exposure"], row["SPECID"],
+                                   row["IFUSLOT"], row["IFUID"])
+                                  for row in mapping], rotation=75, ha="right", fontsize=6)
+        fig.tight_layout()
+        fig.savefig(output_dir / ("m101_external_stitching_%s_aligned_ratios.png" % band.lower()), dpi=140)
+        plt.close(fig)
+
+    # Pairwise residuals are signed A-B mismatches.  Symmetric-log y scaling keeps
+    # catastrophic points visible while retaining the central 1--5 percent region.
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharey=True, squeeze=False)
+    for axis, band in zip(axes.flat, SOURCE_BANDS):
+        for pair_index, pair in enumerate(SOURCE_PAIR_ORDER):
+            values = [row["fractional_mismatch_percent"] for row in diagnostics["pair_rows"]
+                      if row["band"] == band and row["pair"] == pair]
+            if values:
+                jitter = np.linspace(-.16, .16, len(values)) if len(values) > 1 else np.array([0.])
+                axis.scatter(pair_index + jitter, values, s=7, alpha=.38)
+        for level, color in ((1., "tab:blue"), (2., "tab:green"),
+                             (3., "tab:orange"), (5., "tab:red")):
+            axis.axhline(level, color=color, lw=.5, alpha=.65)
+            axis.axhline(-level, color=color, lw=.5, alpha=.65)
+        axis.axhline(0., color="k", lw=.7)
+        axis.set_title("%s" % band); axis.set_xticks(range(len(SOURCE_PAIR_ORDER)))
+        axis.set_xticklabels(SOURCE_PAIR_ORDER, rotation=45, ha="right")
+        axis.set_xlabel("amplifier pair (A-B)"); axis.grid(alpha=.18)
+        axis.set_yscale("symlog", linthresh=5.)
+    axes[0, 0].set_ylabel("within-observation mismatch [%]")
+    fig.suptitle("Pairwise amplifier agreement; no outlier clipping")
+    fig.tight_layout(); fig.savefig(output_dir / "m101_external_source_stitching_pairwise_amplifier.png", dpi=140)
+    plt.close(fig)
+
+    # Raw, common-mode-removed, and LOO distributions use the same signed percent scale.
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8), squeeze=False)
+    for row_index, band in enumerate(SOURCE_BANDS):
+        axis = axes[row_index, 0]
+        raw = [row["delta_percent"] for row in rows if row["band"] == band]
+        common = [row["common_mode_removed_delta_percent"] for row in diagnostics["common_rows"]
+                  if row["band"] == band and row["N_supported_amplifiers"] >= 2]
+        _plot_signed_ecdf(axis, raw, "raw", "0.25")
+        _plot_signed_ecdf(axis, common, "common-mode removed", "tab:blue")
+        axis.set_title("%s" % band); axis.set_ylabel("ECDF"); axis.grid(alpha=.18)
+        axis.set_xscale("symlog", linthresh=5.); axis.legend(fontsize=8)
+        axis = axes[row_index, 1]
+        loo = [row["loo_residual_percent"] for row in diagnostics["loo_rows"]
+               if row["band"] == band]
+        _plot_signed_ecdf(axis, raw, "raw", "0.25")
+        _plot_signed_ecdf(axis, loo, "leave-one-out", "tab:orange")
+        axis.set_title("%s" % band); axis.grid(alpha=.18)
+        axis.set_xscale("symlog", linthresh=5.); axis.legend(fontsize=8)
+    axes[0, 0].set_xlabel("signed residual [%]"); axes[1, 0].set_xlabel("signed residual [%]")
+    axes[0, 1].set_xlabel("signed residual [%]"); axes[1, 1].set_xlabel("signed residual [%]")
+    fig.suptitle("Common-mode and leave-one-amplifier-out residual distributions")
+    fig.tight_layout(); fig.savefig(output_dir / "m101_external_source_stitching_common_mode_loo.png", dpi=140)
+    plt.close(fig)
+
+    # Persistent identities use one deterministic x index shared by the two bands.
+    persistent = diagnostics["persistent_rows"]
+    identities = sorted({(row["SPECID"], row["IFUSLOT"], row["IFUID"], row["AMP"])
+                         for row in persistent}, key=str)
+    identity_index = {key: index for index, key in enumerate(identities)}
+    for metric, ylabel, filename, field in (
+            ("median_percent_offset", "median offset [%]",
+             "m101_external_source_stitching_persistent_amplifier_offsets.png",
+             "median_percent_offset"),
+            ("temporal_robust_scatter_percent", "temporal robust scatter [%]",
+             "m101_external_source_stitching_persistent_amplifier_scatter.png",
+             "temporal_robust_scatter_percent")):
+        fig, axes = plt.subplots(2, 1, figsize=(14, 8), sharex=True, squeeze=False)
+        for axis, band in zip(axes.flat, SOURCE_BANDS):
+            subset = [row for row in persistent if row["band"] == band]
+            axis.scatter([identity_index[(row["SPECID"], row["IFUSLOT"], row["IFUID"], row["AMP"])
+                           ] for row in subset], [row[field] for row in subset],
+                         s=12, alpha=.7, color=colors[band])
+            axis.axhline(0., color="k", lw=.7); axis.set_title(band)
+            axis.set_ylabel(ylabel); axis.grid(alpha=.18)
+        axes[-1, 0].set_xlabel("persistent physical amplifier index (see persistent CSV)")
+        if len(identities) <= 35:
+            axes[-1, 0].set_xticks(range(len(identities)))
+            axes[-1, 0].set_xticklabels(["%d/%d/%d/%s" % key for key in identities],
+                                         rotation=75, ha="right", fontsize=6)
+        fig.suptitle("Persistent physical amplifier %s" % metric)
+        fig.tight_layout(); fig.savefig(output_dir / filename, dpi=140); plt.close(fig)
+
+    # Support relationships are descriptive strata, never selection cuts.
+    support_specs = (
+        ("N_source_measurements", "N source measurements", "m101_external_source_stitching_support_vs_N_source_measurements.png"),
+        ("ratio_uncertainty", "ratio uncertainty", "m101_external_source_stitching_support_vs_ratio_uncertainty.png"),
+        ("robust_scatter", "robust scatter", "m101_external_source_stitching_support_vs_robust_scatter.png"),
+        ("abs_slope_minus_ratio", "abs(slope - ratio)", "m101_external_source_stitching_support_vs_abs_slope_minus_ratio.png"),
+    )
+    for field, xlabel, filename in support_specs:
+        fig, axis = plt.subplots(figsize=(7, 5))
+        for band, color in colors.items():
+            subset = []
+            for row in rows:
+                if row["band"] != band or not np.isfinite(row["delta_percent"]):
+                    continue
+                value = row["slope_minus_ratio"] if field == "abs_slope_minus_ratio" else row[field]
+                if np.isfinite(value):
+                    plot_value = abs(value) if field == "abs_slope_minus_ratio" else value
+                    subset.append((plot_value, abs(row["delta_percent"])))
+            if subset:
+                axis.scatter([item[0] for item in subset], [item[1] for item in subset],
+                             s=9, alpha=.35, color=color, label=band)
+        axis.set(xlabel=xlabel, ylabel="absolute deviation from unity [%]")
+        axis.grid(alpha=.18); axis.legend(); fig.tight_layout()
+        fig.savefig(output_dir / filename, dpi=140); plt.close(fig)
+
+    # ON/OFF gray and color components are plotted as signed percent mismatches.
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), squeeze=False)
+    for axis, field, title in zip(axes.flat, ("gray_percent", "color_percent"),
+                                  ("gray/common mode", "color/ON-OFF disagreement")):
+        values = [row[field] for row in diagnostics["paired_rows"]]
+        _plot_signed_ecdf(axis, values, title, "tab:purple")
+        axis.axvline(0., color="k", lw=.7); axis.set_xlabel("percent mismatch")
+        axis.set_ylabel("ECDF"); axis.set_title(title); axis.set_xscale("symlog", linthresh=5.)
+        axis.grid(alpha=.18); axis.legend()
+    fig.suptitle("Paired ON/OFF source-stitching components")
+    fig.tight_layout(); fig.savefig(output_dir / "m101_external_source_stitching_on_off_gray_color.png", dpi=140)
+    plt.close(fig)
+
+
+def _assert_topology_transform_correctness():
+    """Check the descriptive 2x2 transform against its specified inverse."""
+    sample = np.asarray((.37, -.12, .08, .41), dtype=float)
+    modes = TOPOLOGY_MATRIX @ sample
+    reconstructed = np.asarray((
+        modes[0] - modes[1] - modes[2] + modes[3],
+        modes[0] - modes[1] + modes[2] - modes[3],
+        modes[0] + modes[1] - modes[2] - modes[3],
+        modes[0] + modes[1] + modes[2] + modes[3],
+    ))
+    assert np.allclose(reconstructed, sample, rtol=0., atol=1e-14)
+
+
+def _topology_mode_values(log_values):
+    values = np.asarray(log_values, dtype=float)
+    transformed = TOPOLOGY_MATRIX @ values
+    return dict(zip(TOPOLOGY_MODE_ORDER, transformed))
+
+
+def _topology_inverse_modes(modes):
+    return np.asarray((
+        modes["C"] - modes["LR"] - modes["UD"] + modes["I"],
+        modes["C"] - modes["LR"] + modes["UD"] - modes["I"],
+        modes["C"] + modes["LR"] - modes["UD"] - modes["I"],
+        modes["C"] + modes["LR"] + modes["UD"] + modes["I"],
+    ), dtype=float)
+
+
+def _source_row_log_ratio(row):
+    value = row.get("log_ratio", np.nan)
+    if np.isfinite(value):
+        return float(value)
+    ratio = row.get("normalized_ratio", np.nan)
+    return float(np.log(ratio)) if np.isfinite(ratio) and ratio > 0 else np.nan
+
+
+def _topology_mode_stats(values):
+    values = _finite_values(values)
+    if not values.size:
+        return {
+            "N": 0, "robust_center_log": np.nan, "robust_scatter_log": np.nan,
+            "p16_log": np.nan, "p50_log": np.nan, "p84_log": np.nan,
+            "p95_abs_amplitude_log": np.nan,
+            "robust_center_percent_approx": np.nan,
+            "robust_scatter_percent_approx": np.nan, "p16_percent_approx": np.nan,
+            "p50_percent_approx": np.nan, "p84_percent_approx": np.nan,
+            "p95_abs_amplitude_percent_approx": np.nan,
+        }
+    percent = 100. * values
+    return {
+        "N": int(values.size),
+        "robust_center_log": float(robust_location(values)),
+        "robust_scatter_log": float(robust_scatter(values)),
+        "p16_log": float(np.percentile(values, 16)),
+        "p50_log": float(np.percentile(values, 50)),
+        "p84_log": float(np.percentile(values, 84)),
+        "p95_abs_amplitude_log": float(np.percentile(np.abs(values), 95)),
+        "robust_center_percent_approx": float(robust_location(percent)),
+        "robust_scatter_percent_approx": float(robust_scatter(percent)),
+        "p16_percent_approx": float(np.percentile(percent, 16)),
+        "p50_percent_approx": float(np.percentile(percent, 50)),
+        "p84_percent_approx": float(np.percentile(percent, 84)),
+        "p95_abs_amplitude_percent_approx": float(np.percentile(np.abs(percent), 95)),
+    }
+
+
+def _topology_mode_rows(source_rows):
+    """Make complete four-amplifier observations from existing source rows."""
+    grouped = {}
+    for row in source_rows:
+        grouped.setdefault((_source_observation_key(row) + (row["band"],)), []).append(row)
+    output = []
+    for key, group_rows in sorted(grouped.items(), key=lambda pair: str(pair[0])):
+        by_amp = {row["AMP"]: row for row in group_rows}
+        if any(amp not in by_amp for amp in AMP_ORDER):
+            continue
+        logs = np.asarray([_source_row_log_ratio(by_amp[amp]) for amp in AMP_ORDER], dtype=float)
+        if not np.all(np.isfinite(logs)):
+            continue
+        modes = _topology_mode_values(logs)
+        record = {
+            "H5": key[0], "exposure": key[1], "SPECID": key[2],
+            "IFUSLOT": key[3], "IFUID": key[4], "band": key[5],
+            "N_complete_amplifiers": 4,
+        }
+        for amp, value, amp_row in zip(AMP_ORDER, logs, [by_amp[amp] for amp in AMP_ORDER]):
+            record["log_%s" % amp] = value
+            record["normalized_ratio_%s" % amp] = amp_row["normalized_ratio"]
+            record["N_source_measurements_%s" % amp] = amp_row["N_source_measurements"]
+            record["robust_scatter_%s" % amp] = amp_row["robust_scatter"]
+            record["ratio_uncertainty_%s" % amp] = amp_row["ratio_uncertainty"]
+            slope_minus_ratio = amp_row["slope_minus_ratio"]
+            record["slope_minus_ratio_%s" % amp] = slope_minus_ratio
+            record["abs_slope_minus_ratio_%s" % amp] = abs(slope_minus_ratio)
+            record["x_arcmin_%s" % amp] = amp_row["x_arcmin"]
+            record["y_arcmin_%s" % amp] = amp_row["y_arcmin"]
+        for mode in TOPOLOGY_MODE_ORDER:
+            record["%s_log" % mode] = modes[mode]
+            record["%s_percent_approx" % mode] = 100. * modes[mode]
+        output.append(record)
+    return output
+
+
+def _topology_mode_summary_rows(mode_rows):
+    output = []
+    for band in SOURCE_BANDS:
+        subset = [row for row in mode_rows if row["band"] == band]
+        for mode in TOPOLOGY_MODE_ORDER:
+            output.append({"band": band, "mode": mode,
+                           **_topology_mode_stats([row["%s_log" % mode] for row in subset])})
+    return output
+
+
+def _topology_covariance(mode_rows):
+    """Return raw and explicitly 1--99 percentile winsorized covariance QA."""
+    summary_rows = []
+    matrices = {}
+    for band in SOURCE_BANDS:
+        subset = [row for row in mode_rows if row["band"] == band]
+        logs = np.asarray([[row["log_%s" % amp] for amp in AMP_ORDER] for row in subset], dtype=float)
+        matrices[band] = {}
+        for treatment in ("raw", "winsorized_1_99_percentile"):
+            if treatment == "raw":
+                treated = logs
+            elif logs.size:
+                lower, upper = np.percentile(logs, (1., 99.), axis=0)
+                treated = np.clip(logs, lower, upper)
+            else:
+                treated = logs
+            mode_values = treated @ TOPOLOGY_MATRIX.T if treated.size else np.empty((0, 4))
+            covariance = (np.cov(mode_values, rowvar=False, ddof=1)
+                          if mode_values.shape[0] >= 2 else np.full((4, 4), np.nan))
+            variance = np.diag(covariance) if mode_values.shape[0] >= 2 else np.full(4, np.nan)
+            total = float(np.nansum(variance)) if np.any(np.isfinite(variance)) else np.nan
+            matrices[band][treatment] = covariance.tolist()
+            for index, mode in enumerate(TOPOLOGY_MODE_ORDER):
+                summary_rows.append({
+                    "band": band, "treatment": treatment, "mode": mode,
+                    "N_unmodified": len(subset), "N_covariance": mode_values.shape[0],
+                    "variance_log2": variance[index],
+                    "fraction_total_four_amplifier_variance":
+                        variance[index] / total if np.isfinite(total) and total > 0 else np.nan,
+                })
+    return summary_rows, matrices
+
+
+def _rank_values(values):
+    values = np.asarray(values, dtype=float)
+    order = np.argsort(values, kind="mergesort")
+    sorted_values = values[order]
+    ranks = np.empty(values.size, dtype=float)
+    start = 0
+    while start < values.size:
+        stop = start + 1
+        while stop < values.size and sorted_values[stop] == sorted_values[start]:
+            stop += 1
+        ranks[order[start:stop]] = .5 * (start + stop - 1) + 1.
+        start = stop
+    return ranks
+
+
+def _spearman(left, right):
+    left, right = _finite_pair(left, right)
+    if left.size < 3:
+        return np.nan
+    return _correlation(_rank_values(left), _rank_values(right))
+
+
+def _topology_repeatability(mode_rows):
+    grouped = {}
+    for row in mode_rows:
+        grouped.setdefault((row["H5"], row["SPECID"], row["IFUSLOT"], row["IFUID"], row["band"]), []).append(row)
+    pair_names = ((1, 2, "e1-e2"), (1, 3, "e1-e3"), (2, 3, "e2-e3"))
+    detail = []
+    for key, group_rows in sorted(grouped.items(), key=lambda pair: str(pair[0])):
+        by_exposure = {row["exposure"]: row for row in group_rows}
+        for first, second, pair_name in pair_names:
+            if first not in by_exposure or second not in by_exposure:
+                continue
+            for mode in TOPOLOGY_DIFFERENTIAL_MODES:
+                left = by_exposure[first]["%s_log" % mode]
+                right = by_exposure[second]["%s_log" % mode]
+                detail.append({
+                    "H5": key[0], "SPECID": key[1], "IFUSLOT": key[2], "IFUID": key[3],
+                    "band": key[4], "exposure_pair": pair_name, "mode": mode,
+                    "first_value_log": left, "second_value_log": right,
+                    "difference_log": right - left,
+                })
+    summary = []
+    for band in SOURCE_BANDS:
+        for pair_name in ("e1-e2", "e1-e3", "e2-e3"):
+            for mode in TOPOLOGY_DIFFERENTIAL_MODES:
+                subset = [row for row in detail if row["band"] == band and
+                          row["exposure_pair"] == pair_name and row["mode"] == mode]
+                left = [row["first_value_log"] for row in subset]
+                right = [row["second_value_log"] for row in subset]
+                difference = [row["difference_log"] for row in subset]
+                summary.append({
+                    "band": band, "exposure_pair": pair_name, "mode": mode,
+                    "N_matched_physical_IFUs": len(subset),
+                    "pearson_correlation": _correlation(left, right),
+                    "spearman_correlation": _spearman(left, right),
+                    "robust_scatter_difference_log": (float(robust_scatter(difference))
+                                                       if _finite_values(difference).size else np.nan),
+                    "median_difference_log": (float(np.median(difference))
+                                               if _finite_values(difference).size else np.nan),
+                    "p95_abs_difference_log": (float(np.percentile(np.abs(difference), 95))
+                                                if _finite_values(difference).size else np.nan),
+                    "robust_scatter_difference_percent_approx": (float(100. * robust_scatter(difference))
+                                                                   if _finite_values(difference).size else np.nan),
+                    "median_difference_percent_approx": (float(100. * np.median(difference))
+                                                          if _finite_values(difference).size else np.nan),
+                    "p95_abs_difference_percent_approx": (float(100. * np.percentile(np.abs(difference), 95))
+                                                           if _finite_values(difference).size else np.nan),
+                })
+    return detail, summary
+
+
+def _topology_quality_aggregate(target_row, predictor_rows):
+    involved = [target_row] + list(predictor_rows)
+    result = {}
+    n_values = _finite_values([row["N_source_measurements"] for row in predictor_rows])
+    result["predictor_min_N_source_measurements"] = (int(np.min(n_values)) if n_values.size else np.nan)
+    for field in ("robust_scatter", "ratio_uncertainty", "abs_slope_minus_ratio"):
+        values = _finite_values([row.get(field, abs(row["slope_minus_ratio"]))
+                                 if field == "abs_slope_minus_ratio" else row.get(field, np.nan)
+                                 for row in predictor_rows])
+        result["predictor_median_%s" % field] = (float(np.median(values)) if values.size else np.nan)
+        result["predictor_max_%s" % field] = (float(np.max(values)) if values.size else np.nan)
+        all_values = _finite_values([row.get(field, abs(row["slope_minus_ratio"]))
+                                     if field == "abs_slope_minus_ratio" else row.get(field, np.nan)
+                                     for row in involved])
+        result["quality_max_%s" % field] = (float(np.max(all_values)) if all_values.size else np.nan)
+    return result
+
+
+def _topology_residual_stats(values):
+    values = _finite_values(values)
+    if not values.size:
+        return {
+            "N": 0, "robust_center_percent": np.nan, "robust_scatter_percent": np.nan,
+            "fraction_within_1pct": np.nan, "fraction_within_2pct": np.nan,
+            "fraction_within_3pct": np.nan, "fraction_within_5pct": np.nan,
+            "fraction_within_10pct": np.nan, "p90_abs_residual_percent": np.nan,
+            "p95_abs_residual_percent": np.nan, "maximum_abs_residual_percent": np.nan,
+        }
+    absolute = np.abs(values)
+    return {
+        "N": int(values.size),
+        "robust_center_percent": float(robust_location(values)),
+        "robust_scatter_percent": float(robust_scatter(values)),
+        "fraction_within_1pct": float(np.mean(absolute <= 1.)),
+        "fraction_within_2pct": float(np.mean(absolute <= 2.)),
+        "fraction_within_3pct": float(np.mean(absolute <= 3.)),
+        "fraction_within_5pct": float(np.mean(absolute <= 5.)),
+        "fraction_within_10pct": float(np.mean(absolute <= 10.)),
+        "p90_abs_residual_percent": float(np.percentile(absolute, 90)),
+        "p95_abs_residual_percent": float(np.percentile(absolute, 95)),
+        "maximum_abs_residual_percent": float(np.max(absolute)),
+    }
+
+
+def _topology_prediction_rows(mode_rows):
+    """Predict a held-out exposure from the other two exposures in log topology space."""
+    grouped = {}
+    for row in mode_rows:
+        grouped.setdefault((row["H5"], row["SPECID"], row["IFUSLOT"], row["IFUID"], row["band"]), []).append(row)
+    output = []
+    for key, group_rows in sorted(grouped.items(), key=lambda pair: str(pair[0])):
+        by_exposure = {row["exposure"]: row for row in group_rows}
+        if any(exposure not in by_exposure for exposure in (1, 2, 3)):
+            continue
+        for heldout_exposure in (1, 2, 3):
+            predictor_exposures = [exposure for exposure in (1, 2, 3)
+                                   if exposure != heldout_exposure]
+            predictors = [by_exposure[exposure] for exposure in predictor_exposures]
+            target = by_exposure[heldout_exposure]
+            predicted_modes = {
+                mode: float(np.mean([row["%s_log" % mode] for row in predictors]))
+                for mode in TOPOLOGY_DIFFERENTIAL_MODES}
+            target_modes = {mode: target["%s_log" % mode] for mode in TOPOLOGY_MODE_ORDER}
+            target_logs = np.asarray([target["log_%s" % amp] for amp in AMP_ORDER], dtype=float)
+            observed_differential = target_logs - target_modes["C"]
+            zero_prediction = {mode: 0. for mode in TOPOLOGY_DIFFERENTIAL_MODES}
+            model_modes = {
+                "LR_only": {"C": 0., "LR": predicted_modes["LR"], "UD": 0., "I": 0.},
+                "LR_UD": {"C": 0., "LR": predicted_modes["LR"], "UD": predicted_modes["UD"], "I": 0.},
+                "LR_UD_I": {"C": 0., **predicted_modes},
+            }
+            predicted_logs = {name: _topology_inverse_modes(modes)
+                              for name, modes in model_modes.items()}
+            predictor_source_rows = []
+            for predictor in predictors:
+                predictor_source_rows.extend(
+                    {"N_source_measurements": predictor["N_source_measurements_%s" % amp],
+                     "robust_scatter": predictor["robust_scatter_%s" % amp],
+                     "ratio_uncertainty": predictor["ratio_uncertainty_%s" % amp],
+                     "slope_minus_ratio": predictor["slope_minus_ratio_%s" % amp]}
+                    for amp in AMP_ORDER)
+            for amp_index, amp in enumerate(AMP_ORDER):
+                target_source = {
+                    "N_source_measurements": target["N_source_measurements_%s" % amp],
+                    "robust_scatter": target["robust_scatter_%s" % amp],
+                    "ratio_uncertainty": target["ratio_uncertainty_%s" % amp],
+                    "slope_minus_ratio": target["slope_minus_ratio_%s" % amp],
+                }
+                target_source["abs_slope_minus_ratio"] = abs(target_source["slope_minus_ratio"])
+                quality = _topology_quality_aggregate(target_source, predictor_source_rows)
+                other_logs = [target["log_%s" % other_amp]
+                              for other_amp in AMP_ORDER if other_amp != amp]
+                same_loo_log = target_logs[amp_index] - robust_location(other_logs)
+                record = {
+                    "H5": key[0], "heldout_exposure": heldout_exposure,
+                    "predictor_exposure_a": predictor_exposures[0],
+                    "predictor_exposure_b": predictor_exposures[1],
+                    "SPECID": key[1], "IFUSLOT": key[2], "IFUID": key[3],
+                    "AMP": amp, "band": key[4],
+                    "observed_normalized_ratio": target["normalized_ratio_%s" % amp],
+                    "observed_log_ratio": target_logs[amp_index],
+                    "observed_common_mode_C_log": target_modes["C"],
+                    "observed_differential_log_ratio": observed_differential[amp_index],
+                    "predicted_C_log": 0.,
+                    "heldout_C_log": target_modes["C"], "heldout_LR_log": target_modes["LR"],
+                    "heldout_UD_log": target_modes["UD"], "heldout_I_log": target_modes["I"],
+                    "zero_prediction_residual_log": observed_differential[amp_index],
+                    "zero_prediction_residual_percent": _percent_from_log(observed_differential[amp_index]),
+                    "same_observation_loo_residual_log": same_loo_log,
+                    "same_observation_loo_residual_percent": _percent_from_log(same_loo_log),
+                    "N_source_measurements": target_source["N_source_measurements"],
+                    "robust_scatter": target_source["robust_scatter"],
+                    "ratio_uncertainty": target_source["ratio_uncertainty"],
+                    "slope_minus_ratio": target_source["slope_minus_ratio"],
+                    "abs_slope_minus_ratio": target_source["abs_slope_minus_ratio"],
+                    "x_arcmin": target["x_arcmin_%s" % amp],
+                    "y_arcmin": target["y_arcmin_%s" % amp],
+                    **quality,
+                }
+                for exposure in (1, 2, 3):
+                    source = by_exposure[exposure]
+                    for mode in TOPOLOGY_DIFFERENTIAL_MODES:
+                        record["predictor_e%d_%s_log" % (exposure, mode)] = (
+                            source["%s_log" % mode] if exposure in predictor_exposures else np.nan)
+                for name, logs in predicted_logs.items():
+                    residual_log = observed_differential[amp_index] - logs[amp_index]
+                    record["predicted_%s_differential_log_ratio" % name] = logs[amp_index]
+                    record["%s_residual_log" % name] = residual_log
+                    record["%s_residual_percent" % name] = _percent_from_log(residual_log)
+                output.append(record)
+    return output
+
+
+def _topology_summary_rows(prediction_rows, residual_field, model_name, include_ifu=True):
+    output = []
+    for band in SOURCE_BANDS:
+        band_rows = [row for row in prediction_rows if row["band"] == band]
+        denominator = len(band_rows)
+
+        def add(group_type, group_key, subset, **identity):
+            if not subset:
+                return
+            output.append({
+                "model": model_name, "band": band, "group_type": group_type,
+                "group_key": group_key, "heldout_exposure": identity.get("heldout_exposure", ""),
+                "AMP": identity.get("AMP", ""), "SPECID": identity.get("SPECID", ""),
+                "IFUSLOT": identity.get("IFUSLOT", ""), "IFUID": identity.get("IFUID", ""),
+                "retained_fraction": float(len(subset) / denominator) if denominator else np.nan,
+                **_topology_residual_stats([row[residual_field] for row in subset]),
+            })
+
+        add("all", "all", band_rows)
+        for exposure in (1, 2, 3):
+            add("heldout_exposure", "e%d" % exposure,
+                [row for row in band_rows if row["heldout_exposure"] == exposure],
+                heldout_exposure=exposure)
+        for amp in AMP_ORDER:
+            add("AMP", amp, [row for row in band_rows if row["AMP"] == amp], AMP=amp)
+        if include_ifu:
+            for key, subset in sorted(
+                    _group_rows(band_rows, lambda row: (row["SPECID"], row["IFUSLOT"], row["IFUID"])),
+                    key=lambda pair: str(pair[0])):
+                if len(subset) >= TOPOLOGY_MIN_IFU_PREDICTIONS:
+                    add("physical_IFU", "/".join(map(str, key)), subset,
+                        SPECID=key[0], IFUSLOT=key[1], IFUID=key[2])
+    return output
+
+
+def _topology_band_pooling_rows(mode_rows):
+    grouped = {}
+    for row in mode_rows:
+        grouped.setdefault((row["H5"], row["SPECID"], row["IFUSLOT"], row["IFUID"]), []).append(row)
+    output = []
+    for key, group_rows in sorted(grouped.items(), key=lambda pair: str(pair[0])):
+        by_band_exposure = {(row["band"], row["exposure"]): row for row in group_rows}
+        for target_band, other_band in (("ON", "OFF"), ("OFF", "ON")):
+            if any((target_band, exposure) not in by_band_exposure for exposure in (1, 2, 3)):
+                continue
+            for heldout_exposure in (1, 2, 3):
+                predictor_exposures = [exposure for exposure in (1, 2, 3)
+                                       if exposure != heldout_exposure]
+                target = by_band_exposure[(target_band, heldout_exposure)]
+                same_predictors = [by_band_exposure[(target_band, exposure)]
+                                   for exposure in predictor_exposures]
+                pooled_predictors = []
+                for exposure in predictor_exposures:
+                    if (other_band, exposure) not in by_band_exposure:
+                        break
+                    pooled_predictors.append(by_band_exposure[(target_band, exposure)])
+                    pooled_predictors.append(by_band_exposure[(other_band, exposure)])
+                if len(pooled_predictors) != 4:
+                    continue
+                target_logs = np.asarray([target["log_%s" % amp] for amp in AMP_ORDER])
+                target_differential = target_logs - target["C_log"]
+                same_modes = {mode: float(np.mean([row["%s_log" % mode] for row in same_predictors]))
+                              for mode in TOPOLOGY_DIFFERENTIAL_MODES}
+                pooled_modes = {mode: float(np.mean([row["%s_log" % mode] for row in pooled_predictors]))
+                                for mode in TOPOLOGY_DIFFERENTIAL_MODES}
+                same_logs = _topology_inverse_modes({"C": 0., **same_modes})
+                pooled_logs = _topology_inverse_modes({"C": 0., **pooled_modes})
+                for amp_index, amp in enumerate(AMP_ORDER):
+                    output.append({
+                        "H5": key[0], "heldout_exposure": heldout_exposure,
+                        "predictor_exposure_a": predictor_exposures[0],
+                        "predictor_exposure_b": predictor_exposures[1],
+                        "SPECID": key[1], "IFUSLOT": key[2], "IFUID": key[3],
+                        "AMP": amp, "target_band": target_band,
+                        "same_band_residual_percent": _percent_from_log(
+                            target_differential[amp_index] - same_logs[amp_index]),
+                        "pooled_on_off_residual_percent": _percent_from_log(
+                            target_differential[amp_index] - pooled_logs[amp_index]),
+                    })
+    return output
+
+
+def _topology_on_off_rows(mode_rows):
+    grouped = {}
+    for row in mode_rows:
+        grouped.setdefault(_source_observation_key(row), {})[row["band"]] = row
+    output = []
+    for key, bands in sorted(grouped.items(), key=lambda pair: str(pair[0])):
+        if "ON" not in bands or "OFF" not in bands:
+            continue
+        record = {"H5": key[0], "exposure": key[1], "SPECID": key[2],
+                  "IFUSLOT": key[3], "IFUID": key[4]}
+        for mode in TOPOLOGY_DIFFERENTIAL_MODES:
+            on = bands["ON"]["%s_log" % mode]
+            off = bands["OFF"]["%s_log" % mode]
+            record["%s_ON_log" % mode] = on
+            record["%s_OFF_log" % mode] = off
+            record["%s_difference_log" % mode] = on - off
+        output.append(record)
+    return output
+
+
+def _topology_on_off_summary(on_off_rows):
+    output = []
+    for mode in TOPOLOGY_DIFFERENTIAL_MODES:
+        differences = [row["%s_difference_log" % mode] for row in on_off_rows]
+        output.append({
+            "mode": mode, "N": len(_finite_values(differences)),
+            "correlation": _correlation([row["%s_ON_log" % mode] for row in on_off_rows],
+                                         [row["%s_OFF_log" % mode] for row in on_off_rows]),
+            "robust_ON_minus_OFF_difference_log": (float(robust_location(differences))
+                                                    if _finite_values(differences).size else np.nan),
+            "p95_abs_ON_minus_OFF_difference_log": (float(np.percentile(np.abs(differences), 95))
+                                                     if _finite_values(differences).size else np.nan),
+            "robust_ON_minus_OFF_difference_percent_approx": (float(100. * robust_location(differences))
+                                                               if _finite_values(differences).size else np.nan),
+            "p95_abs_ON_minus_OFF_difference_percent_approx": (float(100. * np.percentile(np.abs(differences), 95))
+                                                                if _finite_values(differences).size else np.nan),
+        })
+    return output
+
+
+def _persistent_topology_rows(mode_rows):
+    h5_groups = {}
+    for row in mode_rows:
+        h5_groups.setdefault((row["SPECID"], row["IFUSLOT"], row["IFUID"], row["band"], row["H5"]), []).append(row)
+    h5_rows = []
+    for key, rows in sorted(h5_groups.items(), key=lambda pair: str(pair[0])):
+        h5_rows.append({
+            "SPECID": key[0], "IFUSLOT": key[1], "IFUID": key[2], "band": key[3], "H5": key[4],
+            "N_complete_exposures": len(rows),
+            **{"%s_log" % mode: float(robust_location([row["%s_log" % mode] for row in rows]))
+               for mode in TOPOLOGY_DIFFERENTIAL_MODES},
+        })
+    persistent = []
+    for key, rows in sorted(_group_rows(
+            h5_rows, lambda row: (row["SPECID"], row["IFUSLOT"], row["IFUID"], row["band"])),
+            key=lambda pair: str(pair[0])):
+        if len(rows) < SOURCE_PERSISTENT_MIN_OBSERVATIONS:
+            continue
+        record = {"SPECID": key[0], "IFUSLOT": key[1], "IFUID": key[2], "band": key[3],
+                  "N_H5": len(rows)}
+        for mode in TOPOLOGY_DIFFERENTIAL_MODES:
+            values = [row["%s_log" % mode] for row in rows]
+            record["median_%s_log" % mode] = float(np.median(values))
+            record["scatter_%s_log" % mode] = float(robust_scatter(values))
+            record["median_%s_percent_approx" % mode] = 100. * record["median_%s_log" % mode]
+            record["scatter_%s_percent_approx" % mode] = 100. * record["scatter_%s_log" % mode]
+        persistent.append(record)
+
+    loo = []
+    for key, rows in sorted(_group_rows(
+            h5_rows, lambda row: (row["SPECID"], row["IFUSLOT"], row["IFUID"], row["band"])),
+            key=lambda pair: str(pair[0])):
+        if len(rows) < TOPOLOGY_MIN_H5_MEASUREMENTS:
+            continue
+        for heldout in rows:
+            predictors = [row for row in rows if row is not heldout]
+            predicted_modes = {mode: float(robust_location([row["%s_log" % mode] for row in predictors]))
+                               for mode in TOPOLOGY_DIFFERENTIAL_MODES}
+            for mode in TOPOLOGY_DIFFERENTIAL_MODES:
+                loo.append({"SPECID": key[0], "IFUSLOT": key[1], "IFUID": key[2], "band": key[3],
+                            "heldout_H5": heldout["H5"], "mode": mode,
+                            "N_predictor_H5": len(predictors),
+                            "observed_mode_log": heldout["%s_log" % mode],
+                            "predicted_mode_log": predicted_modes[mode],
+                            "residual_log": heldout["%s_log" % mode] - predicted_modes[mode],
+                            "residual_percent_approx": 100. * (heldout["%s_log" % mode] - predicted_modes[mode])})
+            predicted = {"C": 0., **predicted_modes}
+            predicted_logs = _topology_inverse_modes(predicted)
+            for exposure_row in [row for row in mode_rows
+                                 if row["H5"] == heldout["H5"] and row["SPECID"] == key[0]
+                                 and row["IFUSLOT"] == key[1] and row["IFUID"] == key[2]
+                                 and row["band"] == key[3]]:
+                observed = np.asarray([exposure_row["log_%s" % amp] for amp in AMP_ORDER]) - exposure_row["C_log"]
+                for amp_index, amp in enumerate(AMP_ORDER):
+                    residual = observed[amp_index] - predicted_logs[amp_index]
+                    loo.append({"SPECID": key[0], "IFUSLOT": key[1], "IFUID": key[2], "band": key[3],
+                                "heldout_H5": heldout["H5"], "heldout_exposure": exposure_row["exposure"],
+                                "AMP": amp, "N_predictor_H5": len(predictors),
+                                "observed_differential_log_ratio": observed[amp_index],
+                                "predicted_differential_log_ratio": predicted_logs[amp_index],
+                                "residual_log": residual, "residual_percent": _percent_from_log(residual)})
+    return h5_rows, persistent, loo
+
+
+def _topology_quality_strata(prediction_rows):
+    output = []
+    for band in SOURCE_BANDS:
+        eligible = [row for row in prediction_rows
+                    if row["band"] == band and np.isfinite(row["LR_UD_I_residual_percent"])]
+        for metric, field, thresholds in (
+                ("robust_scatter", "quality_max_robust_scatter", (None, .05, .08, .10, .15)),
+                ("ratio_uncertainty", "quality_max_ratio_uncertainty", (None, .005, .01, .02, .05))):
+            for threshold in thresholds:
+                if threshold is None:
+                    subset = [row for row in eligible if np.isfinite(row[field])]
+                    label = "all finite"
+                else:
+                    subset = [row for row in eligible if np.isfinite(row[field]) and row[field] <= threshold]
+                    label = "%s <= %.3g" % (metric, threshold)
+                if not subset:
+                    continue
+                output.append({
+                    "band": band, "quality_metric": metric, "threshold": threshold,
+                    "threshold_label": label, "N_eligible": len(eligible),
+                    "retained_fraction": float(len(subset) / len(eligible)) if eligible else np.nan,
+                    **_topology_residual_stats([row["LR_UD_I_residual_percent"] for row in subset]),
+                })
+    return output
+
+
+def _topology_failures(prediction_rows):
+    output = []
+    for row in prediction_rows:
+        if not np.isfinite(row["LR_UD_I_residual_percent"]):
+            continue
+        absolute = abs(row["LR_UD_I_residual_percent"])
+        if absolute <= 5.:
+            continue
+        severity = ">25%" if absolute > 25. else ">10%" if absolute > 10. else ">5%"
+        output.append({**row, "abs_residual_percent": absolute, "severity": severity})
+    return sorted(output, key=lambda row: (-row["abs_residual_percent"], str(row["H5"]),
+                                           row["heldout_exposure"], str(row["AMP"]), str(row["band"])))
+
+
+def _topology_decision_rows(prediction_rows, h5_loo_rows):
+    output = []
+    for band in SOURCE_BANDS:
+        eligible = [row for row in prediction_rows if row["band"] == band]
+        denominator = len(eligible)
+        methods = (
+            ("raw differential / no prediction", "zero_prediction_residual_percent", eligible),
+            ("same-observation amplifier LOO", "same_observation_loo_residual_percent", eligible),
+            ("leave-one-exposure-out LR only", "LR_only_residual_percent", eligible),
+            ("leave-one-exposure-out LR+UD", "LR_UD_residual_percent", eligible),
+            ("leave-one-exposure-out LR+UD+I", "LR_UD_I_residual_percent", eligible),
+            ("leave-one-exposure-out LR+UD+I, robust_scatter <= 0.05",
+             "LR_UD_I_residual_percent", [row for row in eligible
+                                            if np.isfinite(row["quality_max_robust_scatter"]) and
+                                            row["quality_max_robust_scatter"] <= .05]),
+            ("leave-one-exposure-out LR+UD+I, robust_scatter <= 0.08",
+             "LR_UD_I_residual_percent", [row for row in eligible
+                                            if np.isfinite(row["quality_max_robust_scatter"]) and
+                                            row["quality_max_robust_scatter"] <= .08]),
+            ("leave-one-exposure-out LR+UD+I, robust_scatter <= 0.10",
+             "LR_UD_I_residual_percent", [row for row in eligible
+                                            if np.isfinite(row["quality_max_robust_scatter"]) and
+                                            row["quality_max_robust_scatter"] <= .10]),
+            ("leave-one-exposure-out LR+UD+I, robust_scatter <= 0.15",
+             "LR_UD_I_residual_percent", [row for row in eligible
+                                            if np.isfinite(row["quality_max_robust_scatter"]) and
+                                            row["quality_max_robust_scatter"] <= .15]),
+        )
+        for method, field, subset in methods:
+            stats = _topology_residual_stats([row[field] for row in subset])
+            output.append({"band": band, "method": method,
+                           "retained_fraction": len(subset) / denominator if denominator else np.nan,
+                           **stats})
+        h5_subset = [row for row in h5_loo_rows if row.get("band") == band and "AMP" in row]
+        if h5_subset:
+            stats = _topology_residual_stats([row["residual_percent"] for row in h5_subset])
+            output.append({"band": band, "method": "leave-one-H5-out topology prediction",
+                           "retained_fraction": (len(h5_subset) / denominator
+                                                  if denominator else np.nan), **stats})
+    return output
+
+
+def build_topology_diagnostics(source_rows):
+    """Build the final descriptive topology experiment without fitting or correction."""
+    _assert_topology_transform_correctness()
+    mode_rows = _topology_mode_rows(source_rows)
+    repeatability_rows, repeatability_summary = _topology_repeatability(mode_rows)
+    covariance_rows, covariance_matrices = _topology_covariance(mode_rows)
+    prediction_rows = _topology_prediction_rows(mode_rows)
+    h5_rows, persistent_rows, h5_loo_rows = _persistent_topology_rows(mode_rows)
+    on_off_rows = _topology_on_off_rows(mode_rows)
+    pooling_rows = _topology_band_pooling_rows(mode_rows)
+    return {
+        "mode_rows": mode_rows,
+        "mode_summary_rows": _topology_mode_summary_rows(mode_rows),
+        "repeatability_rows": repeatability_rows,
+        "repeatability_summary_rows": repeatability_summary,
+        "covariance_rows": covariance_rows,
+        "covariance_matrices": covariance_matrices,
+        "prediction_rows": prediction_rows,
+        "prediction_summary_rows": _topology_summary_rows(
+            prediction_rows, "LR_UD_I_residual_percent", "LR+UD+I"),
+        "nested_summary_rows": [
+            row for field, name in (("LR_only_residual_percent", "LR only"),
+                                    ("LR_UD_residual_percent", "LR+UD"),
+                                    ("LR_UD_I_residual_percent", "LR+UD+I"))
+            for row in _topology_summary_rows(prediction_rows, field, name, include_ifu=False)
+            if row["group_type"] == "all"],
+        "on_off_rows": on_off_rows,
+        "on_off_summary_rows": _topology_on_off_summary(on_off_rows),
+        "pooling_rows": pooling_rows,
+        "pooling_summary_rows": [
+            {"target_band": band, "method": method,
+             **_topology_residual_stats([
+                 row["%s_residual_percent" % field] for row in pooling_rows
+                 if row["target_band"] == band])}
+            for band in SOURCE_BANDS for method, field in (
+                ("same_band", "same_band"), ("pooled_ON_OFF", "pooled_on_off"))],
+        "persistent_h5_rows": h5_rows,
+        "persistent_rows": persistent_rows,
+        "h5_loo_rows": h5_loo_rows,
+        "h5_loo_summary_rows": _topology_h5_loo_summary(h5_loo_rows),
+        "quality_strata_rows": _topology_quality_strata(prediction_rows),
+        "failure_rows": _topology_failures(prediction_rows),
+        "decision_rows": _topology_decision_rows(prediction_rows, h5_loo_rows),
+        "transform": {
+            "input_order": AMP_ORDER, "mode_order": TOPOLOGY_MODE_ORDER,
+            "matrix": TOPOLOGY_MATRIX.tolist(),
+            "inverse_verified": True,
+            "percent_mode_definition": "100 * mode_log (approximate amplitude units)",
+            "heldout_residual_definition": "100 * (exp(residual_log) - 1)",
+        },
+    }
+
+
+def _write_topology_json(path, payload):
+    metadata = _source_diagnostic_metadata() | {
+        "experiment": "four-amplifier topology transfer diagnostics",
+        "topology_modes_are_calibration_parameters": False,
+        "common_mode_saved_as_correction": False,
+        "quality_thresholds_are_retrospective_strata": True,
+    }
+    Path(path).write_text(json.dumps(json_ready({"metadata": metadata, **payload}),
+                                      indent=2, sort_keys=True))
+
+
+def _topology_mode_fields():
+    fields = ["H5", "exposure", "SPECID", "IFUSLOT", "IFUID", "band",
+              "N_complete_amplifiers"]
+    for amp in AMP_ORDER:
+        fields += ["log_%s" % amp, "normalized_ratio_%s" % amp,
+                   "N_source_measurements_%s" % amp, "robust_scatter_%s" % amp,
+                   "ratio_uncertainty_%s" % amp, "slope_minus_ratio_%s" % amp,
+                   "abs_slope_minus_ratio_%s" % amp, "x_arcmin_%s" % amp,
+                   "y_arcmin_%s" % amp]
+    for mode in TOPOLOGY_MODE_ORDER:
+        fields += ["%s_log" % mode, "%s_percent_approx" % mode]
+    return fields
+
+
+def _topology_prediction_fields():
+    fields = ["H5", "heldout_exposure", "predictor_exposure_a", "predictor_exposure_b",
+              "SPECID", "IFUSLOT", "IFUID", "AMP", "band", "observed_normalized_ratio",
+              "observed_log_ratio", "observed_common_mode_C_log", "observed_differential_log_ratio",
+              "predicted_C_log", "heldout_C_log", "heldout_LR_log", "heldout_UD_log", "heldout_I_log",
+              "zero_prediction_residual_log", "zero_prediction_residual_percent",
+              "same_observation_loo_residual_log", "same_observation_loo_residual_percent",
+              "N_source_measurements", "robust_scatter", "ratio_uncertainty", "slope_minus_ratio",
+              "abs_slope_minus_ratio", "x_arcmin", "y_arcmin", "predictor_min_N_source_measurements"]
+    for field in ("robust_scatter", "ratio_uncertainty", "abs_slope_minus_ratio"):
+        fields += ["predictor_median_%s" % field, "predictor_max_%s" % field,
+                   "quality_max_%s" % field]
+    for exposure in (1, 2, 3):
+        for mode in TOPOLOGY_DIFFERENTIAL_MODES:
+            fields.append("predictor_e%d_%s_log" % (exposure, mode))
+    for model in ("LR_only", "LR_UD", "LR_UD_I"):
+        fields += ["predicted_%s_differential_log_ratio" % model,
+                   "%s_residual_log" % model, "%s_residual_percent" % model]
+    return fields
+
+
+def _topology_residual_summary_fields():
+    return ["model", "band", "group_type", "group_key", "heldout_exposure", "AMP",
+            "SPECID", "IFUSLOT", "IFUID", "retained_fraction", "N",
+            "robust_center_percent", "robust_scatter_percent", "fraction_within_1pct",
+            "fraction_within_2pct", "fraction_within_3pct", "fraction_within_5pct",
+            "fraction_within_10pct", "p90_abs_residual_percent", "p95_abs_residual_percent",
+            "maximum_abs_residual_percent"]
+
+
+def _topology_h5_loo_summary(h5_loo_rows):
+    amp_rows = [row for row in h5_loo_rows if "AMP" in row and "residual_percent" in row]
+    output = []
+    for band in SOURCE_BANDS:
+        subset = [row for row in amp_rows if row["band"] == band]
+        output.append({"band": band, "group_type": "all", "group_key": "all",
+                       **_topology_residual_stats([row["residual_percent"] for row in subset])})
+    return output
+
+
+def write_topology_products(output_dir, diagnostics):
+    """Write topology transfer products with explicit diagnostic-only metadata."""
+    output_dir = Path(output_dir)
+    _write_rows(output_dir / "m101_external_source_stitching_topology_modes.csv",
+                diagnostics["mode_rows"], _topology_mode_fields())
+    mode_summary_fields = ["band", "mode", "N", "robust_center_log", "robust_scatter_log",
+                           "p16_log", "p50_log", "p84_log", "p95_abs_amplitude_log",
+                           "robust_center_percent_approx", "robust_scatter_percent_approx",
+                           "p16_percent_approx", "p50_percent_approx", "p84_percent_approx",
+                           "p95_abs_amplitude_percent_approx"]
+    _write_rows(output_dir / "m101_external_source_stitching_topology_mode_summary.csv",
+                diagnostics["mode_summary_rows"], mode_summary_fields)
+    _write_rows(output_dir / "m101_external_source_stitching_topology_covariance.csv",
+                diagnostics["covariance_rows"],
+                ["band", "treatment", "mode", "N_unmodified", "N_covariance",
+                 "variance_log2", "fraction_total_four_amplifier_variance"])
+    _write_topology_json(
+        output_dir / "m101_external_source_stitching_topology_summary.json",
+        {"transform": diagnostics["transform"],
+         "mode_summary": diagnostics["mode_summary_rows"],
+         "covariance_decomposition": diagnostics["covariance_rows"],
+         "covariance_matrices": diagnostics["covariance_matrices"],
+         "N_complete_topology_observations": len(diagnostics["mode_rows"])})
+
+    _write_rows(output_dir / "m101_external_source_stitching_topology_repeatability_rows.csv",
+                diagnostics["repeatability_rows"],
+                ["H5", "SPECID", "IFUSLOT", "IFUID", "band", "exposure_pair", "mode",
+                 "first_value_log", "second_value_log", "difference_log"])
+    _write_rows(output_dir / "m101_external_source_stitching_topology_repeatability.csv",
+                diagnostics["repeatability_summary_rows"],
+                ["band", "exposure_pair", "mode", "N_matched_physical_IFUs",
+                 "pearson_correlation", "spearman_correlation", "robust_scatter_difference_log",
+                 "median_difference_log", "p95_abs_difference_log",
+                 "robust_scatter_difference_percent_approx", "median_difference_percent_approx",
+                 "p95_abs_difference_percent_approx"])
+
+    prediction_fields = _topology_prediction_fields()
+    _write_rows(output_dir / "m101_external_source_stitching_leave_one_exposure_out.csv",
+                diagnostics["prediction_rows"], prediction_fields)
+    _write_rows(output_dir / "m101_external_source_stitching_leave_one_exposure_out_summary.csv",
+                diagnostics["prediction_summary_rows"], _topology_residual_summary_fields())
+    _write_topology_json(
+        output_dir / "m101_external_source_stitching_leave_one_exposure_out_summary.json",
+        {"summary": diagnostics["prediction_summary_rows"],
+         "eligible_heldout_amplifier_predictions": len(diagnostics["prediction_rows"]),
+         "prediction_definition": "mean of the two non-held-out exposure modes in log space; C predicted as zero"})
+
+    nested_fields = _topology_residual_summary_fields()
+    _write_rows(output_dir / "m101_external_source_stitching_topology_nested_models.csv",
+                diagnostics["nested_summary_rows"], nested_fields)
+
+    on_off_fields = ["mode", "N", "correlation", "robust_ON_minus_OFF_difference_log",
+                     "p95_abs_ON_minus_OFF_difference_log",
+                     "robust_ON_minus_OFF_difference_percent_approx",
+                     "p95_abs_ON_minus_OFF_difference_percent_approx"]
+    _write_rows(output_dir / "m101_external_source_stitching_topology_on_off.csv",
+                diagnostics["on_off_summary_rows"], on_off_fields)
+    _write_rows(output_dir / "m101_external_source_stitching_topology_on_off_rows.csv",
+                diagnostics["on_off_rows"],
+                ["H5", "exposure", "SPECID", "IFUSLOT", "IFUID"] +
+                [field for mode in TOPOLOGY_DIFFERENTIAL_MODES for field in
+                 ("%s_ON_log" % mode, "%s_OFF_log" % mode, "%s_difference_log" % mode)])
+    _write_rows(output_dir / "m101_external_source_stitching_topology_band_pooling.csv",
+                diagnostics["pooling_summary_rows"],
+                ["target_band", "method", "N", "robust_center_percent", "robust_scatter_percent",
+                 "fraction_within_1pct", "fraction_within_2pct", "fraction_within_3pct",
+                 "fraction_within_5pct", "fraction_within_10pct", "p90_abs_residual_percent",
+                 "p95_abs_residual_percent", "maximum_abs_residual_percent"])
+    _write_rows(output_dir / "m101_external_source_stitching_topology_band_pooling_rows.csv",
+                diagnostics["pooling_rows"],
+                ["H5", "heldout_exposure", "predictor_exposure_a", "predictor_exposure_b",
+                 "SPECID", "IFUSLOT", "IFUID", "AMP", "target_band",
+                 "same_band_residual_percent", "pooled_on_off_residual_percent"])
+    _write_topology_json(
+        output_dir / "m101_external_source_stitching_topology_on_off_summary.json",
+        {"mode_coherence": diagnostics["on_off_summary_rows"],
+         "band_pooling": diagnostics["pooling_summary_rows"]})
+
+    _write_rows(output_dir / "m101_external_source_stitching_topology_quality_strata.csv",
+                diagnostics["quality_strata_rows"],
+                ["band", "quality_metric", "threshold", "threshold_label", "N_eligible",
+                 "retained_fraction", "N", "robust_center_percent", "robust_scatter_percent",
+                 "fraction_within_1pct", "fraction_within_2pct", "fraction_within_3pct",
+                 "fraction_within_5pct", "fraction_within_10pct", "p90_abs_residual_percent",
+                 "p95_abs_residual_percent", "maximum_abs_residual_percent"])
+    _write_topology_json(
+        output_dir / "m101_external_source_stitching_topology_quality_strata.json",
+        {"strata": diagnostics["quality_strata_rows"],
+         "quality_definition": "maximum existing quality value across the held-out amplifier and eight predictor amplifier rows"})
+
+    failure_fields = ["H5", "heldout_exposure", "SPECID", "IFUSLOT", "IFUID", "AMP", "band",
+                      "observed_normalized_ratio", "observed_differential_log_ratio",
+                      "predicted_LR_UD_I_differential_log_ratio", "LR_UD_I_residual_log",
+                      "LR_UD_I_residual_percent", "abs_residual_percent", "severity",
+                      "heldout_LR_log", "heldout_UD_log", "heldout_I_log", "N_source_measurements",
+                      "robust_scatter", "ratio_uncertainty", "slope_minus_ratio", "x_arcmin", "y_arcmin"]
+    for exposure in (1, 2, 3):
+        for mode in TOPOLOGY_DIFFERENTIAL_MODES:
+            failure_fields.append("predictor_e%d_%s_log" % (exposure, mode))
+    failure_fields += ["predictor_exposure_a", "predictor_exposure_b", "predictor_min_N_source_measurements",
+                       "predictor_median_robust_scatter", "predictor_median_ratio_uncertainty",
+                       "predictor_median_abs_slope_minus_ratio"]
+    _write_rows(output_dir / "m101_external_source_stitching_topology_failures.csv",
+                diagnostics["failure_rows"], failure_fields)
+
+    _write_rows(output_dir / "m101_external_source_stitching_persistent_topology.csv",
+                diagnostics["persistent_rows"],
+                ["SPECID", "IFUSLOT", "IFUID", "band", "N_H5"] +
+                [field for mode in TOPOLOGY_DIFFERENTIAL_MODES for field in
+                 ("median_%s_log" % mode, "scatter_%s_log" % mode,
+                  "median_%s_percent_approx" % mode, "scatter_%s_percent_approx" % mode)])
+    _write_rows(output_dir / "m101_external_source_stitching_persistent_topology_h5_rows.csv",
+                diagnostics["persistent_h5_rows"],
+                ["SPECID", "IFUSLOT", "IFUID", "band", "H5", "N_complete_exposures"] +
+                ["%s_log" % mode for mode in TOPOLOGY_DIFFERENTIAL_MODES])
+    h5_mode_rows = [row for row in diagnostics["h5_loo_rows"] if "mode" in row]
+    h5_amp_rows = [row for row in diagnostics["h5_loo_rows"] if "AMP" in row]
+    _write_rows(output_dir / "m101_external_source_stitching_leave_one_h5_out.csv",
+                h5_amp_rows,
+                ["SPECID", "IFUSLOT", "IFUID", "band", "heldout_H5", "heldout_exposure",
+                 "AMP", "N_predictor_H5", "observed_differential_log_ratio",
+                 "predicted_differential_log_ratio", "residual_log", "residual_percent"])
+    _write_rows(output_dir / "m101_external_source_stitching_leave_one_h5_out_modes.csv",
+                h5_mode_rows,
+                ["SPECID", "IFUSLOT", "IFUID", "band", "heldout_H5", "mode", "N_predictor_H5",
+                 "observed_mode_log", "predicted_mode_log", "residual_log", "residual_percent_approx"])
+    _write_rows(output_dir / "m101_external_source_stitching_leave_one_h5_out_summary.csv",
+                diagnostics["h5_loo_summary_rows"],
+                ["band", "group_type", "group_key", "N", "robust_center_percent",
+                 "robust_scatter_percent", "fraction_within_1pct", "fraction_within_2pct",
+                 "fraction_within_3pct", "fraction_within_5pct", "fraction_within_10pct",
+                 "p90_abs_residual_percent", "p95_abs_residual_percent", "maximum_abs_residual_percent"])
+
+    _write_rows(output_dir / "m101_external_source_stitching_final_decision.csv",
+                diagnostics["decision_rows"],
+                ["band", "method", "N", "retained_fraction", "robust_center_percent",
+                 "robust_scatter_percent", "fraction_within_1pct", "fraction_within_2pct",
+                 "fraction_within_3pct", "fraction_within_5pct", "p95_abs_residual_percent"])
+    _write_topology_json(
+        output_dir / "m101_external_source_stitching_final_decision.json",
+        {"decision_table": diagnostics["decision_rows"],
+         "population_note": "Leave-one-H5 retained_fraction is relative to the primary eligible held-out amplifier population; its transfer population is labeled separately."})
+
+
+def _topology_summary_record(diagnostics, band, model, group_type="all"):
+    return next((row for row in diagnostics["prediction_summary_rows"]
+                 if row["band"] == band and row["model"] == model and
+                 row["group_type"] == group_type), None)
+
+
+def _plot_topology_products(output_dir, diagnostics):
+    """Render the final topology experiment plots without clipping main rows."""
+    output_dir = Path(output_dir)
+
+    fig, axes = plt.subplots(2, 4, figsize=(15, 7), squeeze=False)
+    for row_index, band in enumerate(SOURCE_BANDS):
+        mode_rows = [row for row in diagnostics["mode_rows"] if row["band"] == band]
+        for column, mode in enumerate(TOPOLOGY_MODE_ORDER):
+            axis = axes[row_index, column]
+            values = np.sort(_finite_values([row["%s_percent_approx" % mode] for row in mode_rows]))
+            if values.size:
+                axis.step(values, (np.arange(values.size) + 1.) / values.size, where="post")
+            axis.axvline(0., color="k", lw=.6); axis.set_xscale("symlog", linthresh=1.)
+            axis.set_title("%s %s" % (band, mode)); axis.grid(alpha=.18)
+            if row_index == 1:
+                axis.set_xlabel("mode amplitude [%] (100 log amplitude)")
+            if column == 0:
+                axis.set_ylabel("ECDF")
+    fig.suptitle("Four-amplifier topology mode distributions")
+    fig.tight_layout(); fig.savefig(output_dir / "m101_external_source_stitching_topology_mode_distributions.png", dpi=140)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8), squeeze=False)
+    for row_index, band in enumerate(SOURCE_BANDS):
+        for column, treatment in enumerate(("raw", "winsorized_1_99_percentile")):
+            matrix = np.asarray(diagnostics["covariance_matrices"][band][treatment], dtype=float)
+            axis = axes[row_index, column]
+            image = axis.imshow(matrix, cmap="coolwarm", aspect="auto")
+            axis.set_xticks(range(4)); axis.set_xticklabels(TOPOLOGY_MODE_ORDER)
+            axis.set_yticks(range(4)); axis.set_yticklabels(TOPOLOGY_MODE_ORDER)
+            axis.set_title("%s %s covariance" % (band, treatment.replace("_", " ")))
+            fig.colorbar(image, ax=axis, shrink=.8)
+    fig.suptitle("Topology covariance; winsorization is labeled and raw N is retained")
+    fig.tight_layout(); fig.savefig(output_dir / "m101_external_source_stitching_topology_covariance.png", dpi=140)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(2, 3, figsize=(14, 8), squeeze=False)
+    for row_index, band in enumerate(SOURCE_BANDS):
+        for column, mode in enumerate(TOPOLOGY_DIFFERENTIAL_MODES):
+            axis = axes[row_index, column]
+            for pair, color in (("e1-e2", "tab:blue"), ("e1-e3", "tab:orange"), ("e2-e3", "tab:green")):
+                subset = [row for row in diagnostics["repeatability_rows"]
+                          if row["band"] == band and row["mode"] == mode and row["exposure_pair"] == pair]
+                if subset:
+                    axis.scatter([row["first_value_log"] for row in subset],
+                                 [row["second_value_log"] for row in subset],
+                                 s=8, alpha=.35, color=color, label=pair)
+            finite = _finite_values([row["first_value_log"] for row in diagnostics["repeatability_rows"]
+                                     if row["band"] == band and row["mode"] == mode])
+            if finite.size:
+                axis.plot([np.min(finite), np.max(finite)], [np.min(finite), np.max(finite)], "k--", lw=.7)
+            axis.set_title("%s %s" % (band, mode)); axis.set_xscale("symlog", linthresh=.02)
+            axis.set_yscale("symlog", linthresh=.02); axis.grid(alpha=.18)
+            if row_index == 1:
+                axis.set_xlabel("first exposure log mode")
+            if column == 0:
+                axis.set_ylabel("second exposure log mode")
+            if row_index == 0 and column == 2:
+                axis.legend(fontsize=7)
+    fig.suptitle("Exposure-to-exposure differential topology repeatability")
+    fig.tight_layout(); fig.savefig(output_dir / "m101_external_source_stitching_topology_repeatability.png", dpi=140)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), squeeze=False)
+    for axis, band in zip(axes.flat, SOURCE_BANDS):
+        subset = [row for row in diagnostics["prediction_rows"] if row["band"] == band]
+        values = np.sort(_finite_values([abs(row["LR_UD_I_residual_percent"]) for row in subset]))
+        if values.size:
+            axis.step(values, (np.arange(values.size) + 1.) / values.size, where="post", color="tab:blue")
+        for level, color in ((1., "tab:blue"), (2., "tab:green"), (3., "tab:orange"), (5., "tab:red")):
+            axis.axvline(level, color=color, lw=.8, label="%g%%" % level)
+        axis.set_xscale("symlog", linthresh=.5); axis.set_title("%s" % band)
+        axis.set_xlabel("absolute held-out residual [%]"); axis.set_ylabel("ECDF")
+        axis.grid(alpha=.18); axis.legend(fontsize=8)
+    fig.suptitle("Leave-one-exposure-out LR+UD+I residual")
+    fig.tight_layout(); fig.savefig(output_dir / "m101_external_source_stitching_leave_one_exposure_out_ecdf.png", dpi=140)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), squeeze=False)
+    baseline_fields = (("zero_prediction_residual_percent", "no differential prediction", "0.25"),
+                       ("same_observation_loo_residual_percent", "same-observation amplifier LOO", "tab:orange"),
+                       ("LR_UD_I_residual_percent", "leave-one-exposure-out topology", "tab:blue"))
+    for axis, band in zip(axes.flat, SOURCE_BANDS):
+        subset = [row for row in diagnostics["prediction_rows"] if row["band"] == band]
+        for field, label, color in baseline_fields:
+            values = np.sort(_finite_values([abs(row[field]) for row in subset]))
+            if values.size:
+                axis.step(values, (np.arange(values.size) + 1.) / values.size,
+                          where="post", label=label, color=color)
+        axis.set_xscale("symlog", linthresh=.5); axis.set_title(band)
+        axis.set_xlabel("absolute residual [%]"); axis.set_ylabel("ECDF")
+        axis.grid(alpha=.18); axis.legend(fontsize=8)
+    fig.suptitle("Matched eligible population: baseline versus topology prediction")
+    fig.tight_layout(); fig.savefig(output_dir / "m101_external_source_stitching_topology_baseline_comparison.png", dpi=140)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), squeeze=False)
+    for axis, band in zip(axes.flat, SOURCE_BANDS):
+        summaries = [row for row in diagnostics["nested_summary_rows"]
+                     if row["band"] == band and row["group_type"] == "all"]
+        names = ["LR only", "LR+UD", "LR+UD+I"]
+        x = np.arange(len(names)); width = .18
+        for offset, field, label in ((-1.5, "fraction_within_1pct", "≤1%"),
+                                     (-.5, "fraction_within_2pct", "≤2%"),
+                                     (.5, "fraction_within_3pct", "≤3%"),
+                                     (1.5, "fraction_within_5pct", "≤5%")):
+            values = [next((row[field] for row in summaries if row["model"] == name), np.nan)
+                      for name in names]
+            axis.bar(x + offset * width, values, width=width, label=label)
+        axis.set_xticks(x); axis.set_xticklabels(names); axis.set_ylim(0., 1.02)
+        axis.set_title(band); axis.set_ylabel("fraction within threshold")
+        axis.grid(axis="y", alpha=.18); axis.legend(fontsize=8)
+    fig.suptitle("Nested descriptive topology reconstructions")
+    fig.tight_layout(); fig.savefig(output_dir / "m101_external_source_stitching_topology_nested_models.png", dpi=140)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(1, 3, figsize=(14, 5), squeeze=False)
+    subset = diagnostics["on_off_rows"]
+    for axis, mode in zip(axes.flat, TOPOLOGY_DIFFERENTIAL_MODES):
+        if subset:
+            x = [row["%s_ON_log" % mode] for row in subset]
+            y = [row["%s_OFF_log" % mode] for row in subset]
+            axis.scatter(x, y, s=8, alpha=.35)
+            finite = _finite_pair(x, y)[0]
+            if finite.size:
+                lo = min(_finite_values(x).min(), _finite_values(y).min())
+                hi = max(_finite_values(x).max(), _finite_values(y).max())
+                axis.plot([lo, hi], [lo, hi], "k--", lw=.7)
+        axis.set_title(mode); axis.set_xscale("symlog", linthresh=.02)
+        axis.set_yscale("symlog", linthresh=.02); axis.grid(alpha=.18)
+        axis.set_xlabel("ON log mode"); axis.set_ylabel("OFF log mode")
+    fig.suptitle("ON/OFF differential topology coherence")
+    fig.tight_layout(); fig.savefig(output_dir / "m101_external_source_stitching_topology_on_off_coherence.png", dpi=140)
+    plt.close(fig)
+
+    quality = [row for row in diagnostics["quality_strata_rows"] if row["quality_metric"] == "robust_scatter"]
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8), squeeze=False)
+    for axis, field, ylabel in ((axes[0, 0], "p95_abs_residual_percent", "p95 residual [%]"),
+                                (axes[0, 1], "robust_scatter_percent", "robust scatter [%]"),
+                                (axes[1, 0], "fraction_within_2pct", "fraction ≤2%"),
+                                (axes[1, 1], "fraction_within_5pct", "fraction ≤5%")):
+        for band, color in (("ON", "tab:blue"), ("OFF", "tab:orange")):
+            band_quality = sorted([row for row in quality if row["band"] == band],
+                                  key=lambda row: (-1. if row["threshold"] is None else row["threshold"]))
+            x = [row["retained_fraction"] for row in band_quality]
+            y = [row[field] for row in band_quality]
+            axis.plot(x, y, "o-", color=color, label=band)
+        axis.set_xlabel("retained fraction"); axis.set_ylabel(ylabel); axis.grid(alpha=.18)
+        axis.legend(fontsize=8)
+    fig.suptitle("Predefined robust-scatter strata; retrospective diagnostic only")
+    fig.tight_layout(); fig.savefig(output_dir / "m101_external_source_stitching_topology_quality_tradeoff.png", dpi=140)
+    plt.close(fig)
+
+    identities = sorted({(row["SPECID"], row["IFUSLOT"], row["IFUID"])
+                         for row in diagnostics["persistent_rows"]}, key=str)
+    index_by_identity = {key: index for index, key in enumerate(identities)}
+    fig, axes = plt.subplots(2, 3, figsize=(14, 8), squeeze=False)
+    for row_index, band in enumerate(SOURCE_BANDS):
+        for column, mode in enumerate(TOPOLOGY_DIFFERENTIAL_MODES):
+            axis = axes[row_index, column]
+            subset = [row for row in diagnostics["persistent_rows"] if row["band"] == band]
+            axis.scatter([index_by_identity[(row["SPECID"], row["IFUSLOT"], row["IFUID"])] for row in subset],
+                         [row["median_%s_percent_approx" % mode] for row in subset], s=10, alpha=.65)
+            axis.axhline(0., color="k", lw=.6); axis.set_title("%s %s" % (band, mode))
+            axis.set_ylabel("median mode amplitude [%]"); axis.grid(alpha=.18)
+            if row_index == 1:
+                axis.set_xlabel("persistent physical IFU index")
+    fig.suptitle("Persistent physical-IFU topology across H5 observation sets")
+    fig.tight_layout(); fig.savefig(output_dir / "m101_external_source_stitching_persistent_topology.png", dpi=140)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), squeeze=False)
+    for axis, band in zip(axes.flat, SOURCE_BANDS):
+        subset = [row for row in diagnostics["h5_loo_rows"]
+                  if row.get("band") == band and "AMP" in row]
+        values = np.sort(_finite_values([abs(row["residual_percent"]) for row in subset]))
+        if values.size:
+            axis.step(values, (np.arange(values.size) + 1.) / values.size, where="post")
+        for level, color in ((1., "tab:blue"), (2., "tab:green"), (3., "tab:orange"), (5., "tab:red")):
+            axis.axvline(level, color=color, lw=.7)
+        axis.set_xscale("symlog", linthresh=.5); axis.set_title(band)
+        axis.set_xlabel("absolute leave-one-H5 residual [%]"); axis.set_ylabel("ECDF")
+        axis.grid(alpha=.18)
+    fig.suptitle("Leave-one-H5-out topology transfer")
+    fig.tight_layout(); fig.savefig(output_dir / "m101_external_source_stitching_leave_one_h5_out.png", dpi=140)
+    plt.close(fig)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5), squeeze=False)
+    for axis, band in zip(axes.flat, SOURCE_BANDS):
+        subset = [row for row in diagnostics["pooling_summary_rows"] if row["target_band"] == band]
+        names = ["same_band", "pooled_ON_OFF"]
+        x = np.arange(len(names)); width = .18
+        for offset, field, label in ((-1.5, "fraction_within_1pct", "≤1%"),
+                                     (-.5, "fraction_within_2pct", "≤2%"),
+                                     (.5, "fraction_within_3pct", "≤3%"),
+                                     (1.5, "fraction_within_5pct", "≤5%")):
+            values = [next((row[field] for row in subset if row["method"] == name), np.nan)
+                      for name in names]
+            axis.bar(x + offset * width, values, width=width, label=label)
+        axis.set_xticks(x); axis.set_xticklabels(names); axis.set_ylim(0., 1.02)
+        axis.set_title(band); axis.set_ylabel("fraction within threshold")
+        axis.grid(axis="y", alpha=.18); axis.legend(fontsize=8)
+    fig.suptitle("Same-band versus pooled ON/OFF predictor information")
+    fig.tight_layout(); fig.savefig(output_dir / "m101_external_source_stitching_topology_band_pooling.png", dpi=140)
+    plt.close(fig)
+
+
+def _topology_metric_row(diagnostics, band, model, field="robust_scatter_percent"):
+    row = _topology_summary_record(diagnostics, band, model)
+    return row.get(field, np.nan) if row is not None else np.nan
+
+
+def print_topology_terminal_summary(diagnostics):
+    """Print the final topology experiment assessment without proposing calibration."""
+    print("topology transform: inverse verified=%s; complete four-amplifier observations=%d" %
+          (diagnostics["transform"]["inverse_verified"], len(diagnostics["mode_rows"])))
+    print("topology mode amplitudes and exposure repeatability:")
+    for band in SOURCE_BANDS:
+        mode_summary = {row["mode"]: row for row in diagnostics["mode_summary_rows"]
+                        if row["band"] == band}
+        print("  %s modes center/scatter [%%] C=%.4g/%.4g LR=%.4g/%.4g UD=%.4g/%.4g I=%.4g/%.4g" %
+              (band, mode_summary["C"]["robust_center_percent_approx"],
+               mode_summary["C"]["robust_scatter_percent_approx"],
+               mode_summary["LR"]["robust_center_percent_approx"],
+               mode_summary["LR"]["robust_scatter_percent_approx"],
+               mode_summary["UD"]["robust_center_percent_approx"],
+               mode_summary["UD"]["robust_scatter_percent_approx"],
+               mode_summary["I"]["robust_center_percent_approx"],
+               mode_summary["I"]["robust_scatter_percent_approx"]))
+        for mode in TOPOLOGY_DIFFERENTIAL_MODES:
+            repeat = [row for row in diagnostics["repeatability_summary_rows"]
+                      if row["band"] == band and row["mode"] == mode]
+            print("  %s %s repeatability e1-e2/e1-e3/e2-e3 r=%.3g/%.3g/%.3g scatter[%%]=%.4g/%.4g/%.4g" %
+                  (band, mode,
+                   *(row["pearson_correlation"] for row in repeat),
+                   *(row["robust_scatter_difference_percent_approx"] for row in repeat)))
+    for band in SOURCE_BANDS:
+        primary = _topology_metric_row(diagnostics, band, "LR+UD+I")
+        row = _topology_summary_record(diagnostics, band, "LR+UD+I")
+        print("topology leave-one-exposure-out %s: N=%d scatter=%.4g%% <=1/2/3/5%%=%.4f/%.4f/%.4f/%.4f p95=%.4g%%" %
+              (band, row["N"], primary, row["fraction_within_1pct"],
+               row["fraction_within_2pct"], row["fraction_within_3pct"],
+               row["fraction_within_5pct"], row["p95_abs_residual_percent"]))
+    for band in SOURCE_BANDS:
+        quality = sorted([row for row in diagnostics["quality_strata_rows"]
+                          if row["band"] == band and row["quality_metric"] == "robust_scatter"],
+                         key=lambda row: (-1. if row["threshold"] is None else row["threshold"]))
+        print("topology quality strata %s:" % band)
+        for row in quality:
+            print("  %s retained=%.4f scatter=%.4g%% <=2/5%%=%.4f/%.4f p95=%.4g%%" %
+                  (row["threshold_label"], row["retained_fraction"],
+                   row["robust_scatter_percent"], row["fraction_within_2pct"],
+                   row["fraction_within_5pct"], row["p95_abs_residual_percent"]))
+    h5_summary = {row["band"]: row for row in diagnostics["h5_loo_summary_rows"]}
+    for band in SOURCE_BANDS:
+        row = h5_summary.get(band)
+        if row and row["N"]:
+            print("topology leave-one-H5-out %s: N=%d scatter=%.4g%% <=2/5%%=%.4f/%.4f p95=%.4g%%" %
+                  (band, row["N"], row["robust_scatter_percent"],
+                   row["fraction_within_2pct"], row["fraction_within_5pct"],
+                   row["p95_abs_residual_percent"]))
+
+    covariance = {}
+    for band in SOURCE_BANDS:
+        covariance[band] = {row["mode"]: row["fraction_total_four_amplifier_variance"]
+                            for row in diagnostics["covariance_rows"]
+                            if row["band"] == band and row["treatment"] == "winsorized_1_99_percentile"}
+    print("ESTABLISHED")
+    print("  The specified topology transform and inverse reproduce the four log ratios to floating precision.")
+    for band in SOURCE_BANDS:
+        values = covariance.get(band, {})
+        print("  %s winsorized descriptive variance fractions C/LR/UD/I=%.3f/%.3f/%.3f/%.3f." %
+              (band, values.get("C", np.nan), values.get("LR", np.nan),
+               values.get("UD", np.nan), values.get("I", np.nan)))
+        differential_total = sum(values.get(mode, 0.0) for mode in TOPOLOGY_DIFFERENTIAL_MODES)
+        if differential_total > 0:
+            print("  %s differential-mode shares LR/UD/I=%.3f/%.3f/%.3f." %
+                  (band, *(values.get(mode, np.nan) / differential_total
+                            for mode in TOPOLOGY_DIFFERENTIAL_MODES)))
+    print("SUPPORTED")
+    onoff = {row["mode"]: row for row in diagnostics["on_off_summary_rows"]}
+    for band in SOURCE_BANDS:
+        nested = {row["model"]: row for row in diagnostics["nested_summary_rows"]
+                  if row["band"] == band}
+        full = nested.get("LR+UD+I", {})
+        lr = nested.get("LR only", {})
+        print("  %s exposure-transfer full scatter %.4g%%, <=1/2/3/5%% %.4f/%.4f/%.4f/%.4f, p95 %.4g%%." %
+              (band, full.get("robust_scatter_percent", np.nan),
+               full.get("fraction_within_1pct", np.nan), full.get("fraction_within_2pct", np.nan),
+               full.get("fraction_within_3pct", np.nan), full.get("fraction_within_5pct", np.nan),
+               full.get("p95_abs_residual_percent", np.nan)))
+        print("  %s LR-only to full <=5%% fraction %.4f -> %.4f; ON/OFF LR correlation %.4g." %
+              (band, lr.get("fraction_within_5pct", np.nan), full.get("fraction_within_5pct", np.nan),
+               onoff.get("LR", {}).get("correlation", np.nan)))
+        h5 = h5_summary.get(band)
+        if h5 and h5["N"]:
+            print("  %s cross-H5 transfer scatter %.4g%%, <=2/5%% %.4f/%.4f, p95 %.4g%%." %
+                  (band, h5["robust_scatter_percent"], h5["fraction_within_2pct"],
+                   h5["fraction_within_5pct"], h5["p95_abs_residual_percent"]))
+    print("  ON/OFF mode correlations LR/UD/I=%.4g/%.4g/%.4g." %
+          tuple(onoff.get(mode, {}).get("correlation", np.nan)
+                for mode in TOPOLOGY_DIFFERENTIAL_MODES))
+    print("NOT YET ESTABLISHED")
+    print("  The held-out exposure result is approximately 1-2% scatter overall, but its tail and band dependence do not establish a universal production guarantee.")
+    print("  Cross-H5 transfer is weaker than within-set exposure transfer and remains a separate, stronger test.")
+    print("  UD and I improve held-out performance in the measured nested comparison; omitting them is not established as adequate.")
+    print("  The predefined quality strata describe a completeness/precision tradeoff and are not adopted QC cuts.")
+    print("IMPLICATIONS FOR IMPLEMENTATION")
+    print("  Any future calibration design should evaluate persistent physical-IFU topology, observation-set/exposure state,")
+    print("  and measurement support/uncertainty together, while keeping ON/OFF topology state independently testable.")
+
+
+def plot_source_products(output_dir, rows, centers, amplifier_weighted_centers=None, timings=None,
+                         expanded_diagnostics=None):
     if amplifier_weighted_centers is None:
         amplifier_weighted_centers = centers.copy()
     colors = {"ON": "tab:blue", "OFF": "tab:orange"}
@@ -1748,6 +3722,12 @@ def plot_source_products(output_dir, rows, centers, amplifier_weighted_centers=N
     fig.savefig(output_dir / "m101_external_stitching_per_exposure.png", dpi=140); plt.close(fig)
     if timings is not None:
         timings["source_h5_repeatability_plot_seconds"] = time.perf_counter() - stage_started
+    if expanded_diagnostics is None:
+        expanded_diagnostics = build_source_stitching_diagnostics(rows)
+    expanded_started = time.perf_counter()
+    _plot_expanded_source_products(output_dir, rows, expanded_diagnostics)
+    if timings is not None:
+        timings["source_expanded_diagnostic_plot_seconds"] = time.perf_counter() - expanded_started
     return len(joint)
 
 
@@ -1860,16 +3840,20 @@ def main():
         band: robust_location([row["raw_robust_ratio"] for row in source_rows
                                if row["band"] == band])
         for band in SOURCE_BANDS}
+    source_diagnostics = build_source_stitching_diagnostics(source_rows)
     progress("writing source products")
     source_summary = write_source_products(output_dir, source_rows, centers, by_exposure,
-                                           fiber_ratios, amplifier_weighted_centers, timings=timings)
+                                           fiber_ratios, amplifier_weighted_centers, timings=timings,
+                                           expanded_diagnostics=source_diagnostics)
     progress("source tables written; plotting source stitching products")
     joint_count = plot_source_products(output_dir, source_rows, centers,
-                                       amplifier_weighted_centers, timings=timings)
+                                       amplifier_weighted_centers, timings=timings,
+                                       expanded_diagnostics=source_diagnostics)
     timings["source_product_plotting_seconds"] = sum(
         timings.get(key, 0.) for key in ("source_ratio_plot_seconds", "source_histogram_seconds",
                                          "source_on_off_plot_seconds", "source_focal_map_seconds",
-                                         "source_h5_repeatability_plot_seconds"))
+                                         "source_h5_repeatability_plot_seconds",
+                                         "source_expanded_diagnostic_plot_seconds"))
     blank_summary, blank_comparisons = summarize_blank_source_from_aux(
         data, source_masks_by_item, amplifier_h5_rows, auxiliary)
     incident_rows = compute_incident_light_diagnostics(amplifier_h5_rows, auxiliary["incident_exposure"])
@@ -1878,6 +3862,14 @@ def main():
     timings["source_product_writing_seconds"] = timings.get("source_write_csv_seconds", 0.) + timings.get("source_write_json_seconds", 0.)
     progress("source products written in %.3fs" %
              (timings["source_product_writing_seconds"] + timings["source_product_plotting_seconds"]))
+
+    topology_started = time.perf_counter()
+    progress("starting final four-amplifier topology transfer diagnostics")
+    topology_diagnostics = build_topology_diagnostics(source_rows)
+    write_topology_products(output_dir, topology_diagnostics)
+    _plot_topology_products(output_dir, topology_diagnostics)
+    timings["topology_diagnostic_seconds"] = time.perf_counter() - topology_started
+    progress("topology diagnostics written in %.3fs" % timings["topology_diagnostic_seconds"])
 
     ifu_started = time.perf_counter()
     source_ifu_exposure_rows, source_ifu_h5_rows = compute_source_ifu_products(
@@ -1920,6 +3912,43 @@ def main():
                sum(row["band"] == band for row in source_rows)))
     print("ON/OFF raw center ratio=%.8g; paired supported amplifier measurements=%d" %
           (centers["ON"] / centers["OFF"], joint_count))
+    assessment_by_label = {row["assessment_row"]: row
+                           for row in source_diagnostics["assessment_rows"]}
+    for band in SOURCE_BANDS:
+        print("%s source stitching acceptance: raw within 1/2/3/5%%=%.4f/%.4f/%.4f/%.4f; "
+              "common-mode removed=%.4f/%.4f/%.4f/%.4f; leave-one-out=%.4f/%.4f/%.4f/%.4f" %
+              (band,
+               assessment_by_label["%s raw" % band]["fraction_within_1pct"],
+               assessment_by_label["%s raw" % band]["fraction_within_2pct"],
+               assessment_by_label["%s raw" % band]["fraction_within_3pct"],
+               assessment_by_label["%s raw" % band]["fraction_within_5pct"],
+               assessment_by_label["%s within-observation common-mode removed" % band]["fraction_within_1pct"],
+               assessment_by_label["%s within-observation common-mode removed" % band]["fraction_within_2pct"],
+               assessment_by_label["%s within-observation common-mode removed" % band]["fraction_within_3pct"],
+               assessment_by_label["%s within-observation common-mode removed" % band]["fraction_within_5pct"],
+               assessment_by_label["%s leave-one-amplifier-out residual" % band]["fraction_within_1pct"],
+               assessment_by_label["%s leave-one-amplifier-out residual" % band]["fraction_within_2pct"],
+               assessment_by_label["%s leave-one-amplifier-out residual" % band]["fraction_within_3pct"],
+               assessment_by_label["%s leave-one-amplifier-out residual" % band]["fraction_within_5pct"]))
+        for label in ("raw", "within-observation common-mode removed",
+                      "leave-one-amplifier-out residual"):
+            row = assessment_by_label["%s %s" % (band, label)]
+            if label == "raw":
+                values = [item["delta_percent"] for item in source_rows
+                          if item["band"] == band]
+            elif label == "within-observation common-mode removed":
+                values = [item["common_mode_removed_delta_percent"]
+                          for item in source_diagnostics["common_rows"]
+                          if item["band"] == band and item["N_supported_amplifiers"] >= 2]
+            else:
+                values = [item["loo_residual_percent"]
+                          for item in source_diagnostics["loo_rows"]
+                          if item["band"] == band]
+            values = _finite_values(values)
+            absolute = np.abs(values)
+            print("%s %s counts: N=%d >5%%=%d >10%%=%d >25%%=%d" %
+                  (band, label, row["N"], int(np.sum(absolute > 5.)),
+                   int(np.sum(absolute > 10.)), int(np.sum(absolute > 25.))))
     print("blank/source overlap: global ON=%d OFF=%d ANY=%d; H5/exposure records=%d; strict-blank H5 comparisons=%d" %
           (blank_summary["global"]["blank_valid_and_significant_ON"],
            blank_summary["global"]["blank_valid_and_significant_OFF"],
@@ -1975,6 +4004,7 @@ def main():
         null_summary.append((band, _finite_robust_rms(before), _finite_robust_rms(after)))
     print("five null-band held-out RMS before/after: %s" % json.dumps(null_summary))
     print("source safety: %s" % json.dumps(json_ready(summarize_source_safety(amp_loo_source_rows)), sort_keys=True))
+    print_topology_terminal_summary(topology_diagnostics)
     print("outputs: %s" % output_dir)
     print("runtime_seconds: %.3f" % (time.perf_counter() - started))
 
