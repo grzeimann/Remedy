@@ -2809,7 +2809,9 @@ def _run_lsf_measurement(h5files, surname, def_wave, raarray, decarray,
         ARC_BLEND_NOTES[float(REFERENCE_ARC_WAVELENGTHS[j])] for _ in records
         for j in range(len(REFERENCE_ARC_WAVELENGTHS))], dtype="U96")
     sample_path = Path("%s_lsf_samples.fits" % surname)
-    table.write(sample_path, format="fits", overwrite=True)
+    # Older TACC Astropy releases accept overwrite in Table.write but drop it
+    # before calling the FITS writer.  Write the HDU directly for compatibility.
+    fits.table_to_hdu(table).writeto(sample_path, overwrite=True)
 
     spatial_header = _lsf_spatial_header(tp, len(xg), pixel_scale)
     public_line_indices = np.where(ARC_USABLE_FOR_LSF)[0]
