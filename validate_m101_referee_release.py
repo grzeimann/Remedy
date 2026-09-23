@@ -55,9 +55,12 @@ BS_ON_ZEROPOINT = 7.65e-18
 BS_OFF_ZEROPOINT = 7.91e-18
 BS_ABSOLUTE_CALIBRATION_FRACTION = 0.05
 HB_APERTURE_RADIUS_ARCSEC = 6.0
-HB_APERTURE_CHECK_RADII_ARCSEC = (4.0, 8.0)
+HB_APERTURE_STABILITY_RADII_ARCSEC = (4.0, 6.0, 8.0)
 HB_APERTURE_EXTERNAL_SNR_MIN = 10.0
-HB_APERTURE_SUPPORT_MIN = 0.80
+HB_APERTURE_SUPPORT_MIN = 0.95
+HB_APERTURE_MIN_CENTER_SEPARATION_ARCSEC = 12.0
+HB_APERTURE_DETECTION_SMOOTH_ARCSEC = 3.0
+HB_APERTURE_SUBPIXELS = 5
 HB_APERTURE_MATERIAL_FRACTION = 0.05
 DQ_INSUFFICIENT_SUPPORT = np.uint16(1 << 0)
 DQ_VAR_INCOMPLETE = np.uint16(1 << 1)
@@ -646,12 +649,17 @@ def _robust_through_zero_scale(x, y):
         return np.nan, np.zeros_like(good)
     keep = good.copy()
     for _ in range(5):
-        slope = float(np.sum(x[keep] * y[keep]) / np.sum(x[keep] ** 2))
+        denominator = float(np.sum(x[keep] ** 2))
+        if not np.isfinite(denominator) or denominator <= 0:
+            return np.nan, np.zeros_like(good)
+        slope = float(np.sum(x[keep] * y[keep]) / denominator)
         residual = y - slope * x
         scatter = 1.4826 * np.median(np.abs(residual[keep] - np.median(residual[keep])))
         if not np.isfinite(scatter) or scatter <= 0:
             break
         new_keep = good & (np.abs(residual) <= 4.0 * scatter)
+        if new_keep.sum() < 3:
+            break
         if new_keep.sum() == keep.sum():
             break
         keep = new_keep
@@ -711,125 +719,183 @@ def _integrate_cube_filter(sci, dq, wave, sci_scale, filter_wave, response):
     }
 
 
-def _outer_sky_noise(data, support, wcs, radius_arcmin, method=None):
-    yy, xx = np.indices(data.shape, dtype=float)
+def _angular_separation_arcsec(ra, dec, center_ra, center_dec):
+    center_ra = np.asarray(center_ra, dtype=float)
+    center_dec = np.asarray(center_dec, dtype=float)
+    delta_ra = (np.asarray(ra, dtype=float) - center_ra + 180.0) % 360.0 - 180.0
+    return 3600.0 * np.hypot(delta_ra * np.cos(np.deg2rad(center_dec)),
+                              np.asarray(dec, dtype=float) - center_dec)
+
+
+def _fractional_aperture_weights(wcs, shape, ra, dec, radius_arcsec,
+                                 subpixels=HB_APERTURE_SUBPIXELS):
+    """Return fractional pixel weights for a sky-coordinate circular aperture."""
     try:
-        ra, dec = wcs.pixel_to_world_values(xx, yy)
-    except Exception as exc:
-        raise ValueError("could not evaluate common-grid WCS for external noise") from exc
-    radius = np.hypot((ra - M101_RA_DEG) * np.cos(np.deg2rad(M101_DEC_DEG)),
-                      dec - M101_DEC_DEG) * 60.0
-    outer = ((radius >= float(radius_arcmin)) & np.asarray(support, dtype=bool)
-             & np.isfinite(data))
-    values = np.asarray(data[outer], dtype=float)
-    if values.size < 100:
-        raise ValueError("fewer than 100 supported outer-sky pixels for external noise")
+        x0, y0 = wcs.world_to_pixel_values(float(ra), float(dec))
+        scales = np.asarray(proj_plane_pixel_scales(wcs), dtype=float) * 3600.0
+    except Exception:
+        return None
+    if (not np.isfinite(x0) or not np.isfinite(y0) or scales.size != 2 or
+            not np.all(np.isfinite(scales)) or np.any(scales <= 0)):
+        return None
+    half_x = int(np.ceil(float(radius_arcsec) / scales[0])) + 2
+    half_y = int(np.ceil(float(radius_arcsec) / scales[1])) + 2
+    xlo = max(0, int(np.floor(x0)) - half_x)
+    xhi = min(shape[1] - 1, int(np.floor(x0)) + half_x)
+    ylo = max(0, int(np.floor(y0)) - half_y)
+    yhi = min(shape[0] - 1, int(np.floor(y0)) + half_y)
+    if xlo > xhi or ylo > yhi:
+        return None
+    yy, xx = np.mgrid[ylo:yhi + 1, xlo:xhi + 1]
+    yy = yy.ravel()
+    xx = xx.ravel()
+    offsets = (np.arange(int(subpixels), dtype=float) + 0.5) / float(subpixels) - 0.5
+    sample_x = xx[:, None] + offsets[None, :]
+    sample_y = yy[:, None] + offsets[None, :]
+    sample_x = np.broadcast_to(sample_x[:, :, None],
+                               (xx.size, int(subpixels), int(subpixels)))
+    sample_y = np.broadcast_to(sample_y[:, None, :],
+                               (yy.size, int(subpixels), int(subpixels)))
+    try:
+        sample_ra, sample_dec = wcs.pixel_to_world_values(sample_x, sample_y)
+    except Exception:
+        return None
+    separation = _angular_separation_arcsec(sample_ra, sample_dec, ra, dec)
+    weights = np.mean(separation <= float(radius_arcsec), axis=(1, 2))
+    keep = weights > 0
+    if not np.any(keep):
+        return None
+    full_aperture_fraction = (np.pi * float(radius_arcsec) ** 2 /
+                              float(abs(scales[0] * scales[1])))
+    return yy[keep], xx[keep], weights[keep], full_aperture_fraction
+
+
+def _measure_fractional_aperture(image, wcs, shape, ra, dec, radius_arcsec,
+                                 pixel_area, value_scale=1.0, support=None):
+    weights = _fractional_aperture_weights(wcs, shape, ra, dec, radius_arcsec)
+    if weights is None:
+        return None
+    yy, xx, fractions, total_fraction = weights
+    valid = np.isfinite(image[yy, xx])
+    if support is not None:
+        valid &= np.asarray(support[yy, xx], dtype=float) >= HB_APERTURE_SUPPORT_MIN
+    supported_fraction = float(np.clip(np.sum(fractions[valid]) / total_fraction, 0.0, 1.0))
+    flux = float(np.sum(np.where(valid, image[yy, xx], 0.0) * fractions[valid]) * value_scale)
+    return {"flux": flux, "support_fraction": supported_fraction,
+            "area_arcsec2": float(total_fraction * pixel_area),
+            "total_fraction": total_fraction}
+
+
+def _native_bs_grid_check(on, off, on_wcs, off_wcs):
+    if on.shape != off.shape:
+        raise ValueError("Burrell-Schmidt ON and OFF images are not on the same native grid")
+    test_y = np.asarray([0.0, 0.0, on.shape[0] - 1.0, on.shape[0] - 1.0,
+                         0.5 * (on.shape[0] - 1.0)])
+    test_x = np.asarray([0.0, on.shape[1] - 1.0, 0.0, on.shape[1] - 1.0,
+                         0.5 * (on.shape[1] - 1.0)])
+    on_ra, on_dec = on_wcs.pixel_to_world_values(test_x, test_y)
+    off_x, off_y = off_wcs.world_to_pixel_values(on_ra, on_dec)
+    off_ra, off_dec = off_wcs.pixel_to_world_values(off_x, off_y)
+    mismatch = _angular_separation_arcsec(on_ra, on_dec, off_ra, off_dec)
+    if np.any(~np.isfinite(mismatch)) or np.nanmax(mismatch) > 0.01:
+        raise ValueError("Burrell-Schmidt ON and OFF images are not co-registered on a common native grid")
+
+
+def _blank_aperture_noise(bs_difference, on_wcs, off_wcs, radius_arcsec,
+                          outer_radius_arcmin, on_image, off_image,
+                          on_area, off_area):
+    """Estimate 6-arcsec aperture noise from non-overlapping outer-sky apertures."""
+    scales = np.asarray(proj_plane_pixel_scales(on_wcs), dtype=float) * 3600.0
+    step = max(1, int(np.ceil(HB_APERTURE_MIN_CENTER_SEPARATION_ARCSEC /
+                              max(float(np.min(scales)), np.finfo(float).tiny))))
+    radius_guard = float(radius_arcsec) / 60.0
+    values = []
+    centers = []
+    for y in range(0, bs_difference.shape[0], step):
+        for x in range(0, bs_difference.shape[1], step):
+            ra, dec = on_wcs.pixel_to_world_values(float(x), float(y))
+            field_radius = float(_angular_separation_arcsec(ra, dec, M101_RA_DEG, M101_DEC_DEG)) / 60.0
+            if field_radius < float(outer_radius_arcmin) + radius_guard:
+                continue
+            if any(float(_angular_separation_arcsec(ra, dec, old_ra, old_dec)) <
+                   HB_APERTURE_MIN_CENTER_SEPARATION_ARCSEC
+                   for old_ra, old_dec in centers):
+                continue
+            measured_on = _measure_fractional_aperture(
+                on_image, on_wcs, on_image.shape, ra, dec, radius_arcsec,
+                on_area)
+            measured_off = _measure_fractional_aperture(
+                off_image, off_wcs, off_image.shape, ra, dec, radius_arcsec,
+                off_area)
+            if (measured_on is None or measured_off is None or
+                    min(measured_on["support_fraction"], measured_off["support_fraction"]) <
+                    HB_APERTURE_SUPPORT_MIN):
+                continue
+            values.append(float(measured_on["flux"] - measured_off["flux"]))
+            centers.append((float(ra), float(dec)))
+    values = np.asarray(values, dtype=float)
+    if values.size < 8:
+        raise ValueError("fewer than 8 complete blank 6-arcsec apertures for empirical noise")
     center = float(np.median(values))
     scatter = 1.4826 * float(np.median(np.abs(values - center)))
     if not np.isfinite(scatter) or scatter <= 0:
-        raise ValueError("outer-sky external noise estimate is not positive")
+        raise ValueError("blank 6-arcsec aperture scatter is not positive")
     return scatter, {
-        "method": (method or
-                    "1.4826 times the median absolute deviation of sky-subtracted, reprojected BS ON-OFF outer-sky pixels"),
-        "radius_arcmin": float(radius_arcmin),
-        "N_outer_supported_pixels": int(values.size),
-        "outer_median": center,
-        "robust_scatter": scatter,
+        "method": "1.4826 times the median absolute deviation of non-overlapping 6-arcsec BS ON-OFF aperture sums in the established outer blank-sky region",
+        "radius_arcmin": float(outer_radius_arcmin),
+        "N_blank_apertures": int(values.size),
+        "blank_aperture_median_flux": center,
+        "robust_scatter": float(scatter),
+        "center_separation_arcsec": HB_APERTURE_MIN_CENTER_SEPARATION_ARCSEC,
     }
 
 
-def _external_hbeta_noise(common_data, common_support, common_wcs,
-                          native_on, native_off, native_on_wcs, native_off_wcs,
-                          on_area, off_area, radius_arcmin):
-    try:
-        return _outer_sky_noise(common_data, common_support, common_wcs,
-                                radius_arcmin)
-    except ValueError as common_error:
-        on_noise, on_info = _outer_sky_noise(
-            native_on, np.isfinite(native_on), native_on_wcs, radius_arcmin,
-            "1.4826 times the median absolute deviation of native sky-subtracted BS ON outer-sky pixels")
-        off_noise, off_info = _outer_sky_noise(
-            native_off, np.isfinite(native_off), native_off_wcs, radius_arcmin,
-            "1.4826 times the median absolute deviation of native sky-subtracted BS OFF outer-sky pixels")
-        on_sb_noise = on_noise / float(on_area)
-        off_sb_noise = off_noise / float(off_area)
-        combined = float(np.hypot(on_sb_noise, off_sb_noise))
-        if not np.isfinite(combined) or combined <= 0:
-            raise ValueError("native outer-sky external noise estimate is not positive") from common_error
-        return combined, {
-            "method": "quadrature of 1.4826 times the native sky-subtracted BS ON and OFF outer-sky MAD scatters, each divided by its native pixel area",
-            "fallback_reason": str(common_error),
-            "on": on_info,
-            "off": off_info,
-            "on_surface_brightness_noise": float(on_sb_noise),
-            "off_surface_brightness_noise": float(off_sb_noise),
-            "combined_surface_brightness_noise": combined,
-            "radius_arcmin": float(radius_arcmin),
-        }
-
-
-def _circular_offsets(radius_pixels):
-    half = int(np.ceil(float(radius_pixels)))
-    yy, xx = np.mgrid[-half:half + 1, -half:half + 1]
-    keep = (xx ** 2 + yy ** 2) <= float(radius_pixels) ** 2
-    return yy[keep].astype(int), xx[keep].astype(int)
-
-
-def _aperture_indices(y, x, offsets, shape):
-    dy, dx = offsets
-    yy = y + dy
-    xx = x + dx
-    if (np.any(yy < 0) or np.any(yy >= shape[0]) or
-            np.any(xx < 0) or np.any(xx >= shape[1])):
+def _measure_filter_matched_aperture(ra, dec, radius_arcsec,
+                                     on_sky, off_sky, on_wcs, off_wcs,
+                                     virus_on, virus_off, virus_wcs,
+                                     virus_on_support, virus_off_support,
+                                     on_area, off_area, virus_area):
+    bs_on = _measure_fractional_aperture(
+        on_sky, on_wcs, on_sky.shape, ra, dec, radius_arcsec, on_area)
+    bs_off = _measure_fractional_aperture(
+        off_sky, off_wcs, off_sky.shape, ra, dec, radius_arcsec, off_area)
+    virus_on_measure = _measure_fractional_aperture(
+        virus_on, virus_wcs, virus_on.shape, ra, dec, radius_arcsec,
+        virus_area, value_scale=virus_area, support=virus_on_support)
+    virus_off_measure = _measure_fractional_aperture(
+        virus_off, virus_wcs, virus_off.shape, ra, dec, radius_arcsec,
+        virus_area, value_scale=virus_area, support=virus_off_support)
+    measures = (bs_on, bs_off, virus_on_measure, virus_off_measure)
+    if any(measure is None for measure in measures):
         return None
-    return yy, xx
-
-
-def _measure_hbeta_apertures(centers, radius_arcsec, common_pixel_scale,
-                             common_pixel_area, bs_on, bs_off, bs_support,
-                             virus_on, virus_off, virus_on_support,
-                             virus_off_support, hb_line):
-    radius_pixels = float(radius_arcsec) / float(common_pixel_scale)
-    offsets = _circular_offsets(radius_pixels)
-    bs_valid = (np.isfinite(bs_on) & np.isfinite(bs_off)
-                & (bs_support >= HB_APERTURE_SUPPORT_MIN))
-    virus_valid = (np.isfinite(virus_on) & np.isfinite(virus_off)
-                   & (virus_on_support >= HB_APERTURE_SUPPORT_MIN)
-                   & (virus_off_support >= HB_APERTURE_SUPPORT_MIN))
-    line_valid = np.isfinite(hb_line)
-    rows = []
-    for y, x in centers:
-        indices = _aperture_indices(int(y), int(x), offsets, bs_on.shape)
-        if indices is None:
-            continue
-        yy, xx = indices
-        bs_fraction = float(np.mean(bs_valid[yy, xx]))
-        virus_fraction = float(np.mean(virus_valid[yy, xx]))
-        line_fraction = float(np.mean(line_valid[yy, xx]))
-        common = bs_valid[yy, xx] & virus_valid[yy, xx] & line_valid[yy, xx]
-        common_fraction = float(np.mean(common))
-        if min(bs_fraction, virus_fraction, line_fraction, common_fraction) < HB_APERTURE_SUPPORT_MIN:
-            continue
-        area = float(common.sum()) * float(common_pixel_area)
-        if area <= 0:
-            continue
-        def integrate(image):
-            return float(np.sum(image[yy[common], xx[common]]) * common_pixel_area)
-        rows.append({
-            "x_pixel": int(x), "y_pixel": int(y),
-            "BS_ON": integrate(bs_on), "VIRUS_ON": integrate(virus_on),
-            "BS_OFF": integrate(bs_off), "VIRUS_OFF": integrate(virus_off),
-            "BS_ON_MINUS_OFF": integrate(bs_on - bs_off),
-            "VIRUS_ON_MINUS_OFF": integrate(virus_on - virus_off),
-            "VIRUS_HBETA_LINE": integrate(hb_line),
-            "aperture_area_arcsec2": float(offsets[0].size * common_pixel_area),
-            "supported_area_arcsec2": area,
-            "BS_support_fraction": bs_fraction,
-            "VIRUS_support_fraction": virus_fraction,
-            "Hbeta_line_support_fraction": line_fraction,
-            "common_support_fraction": common_fraction,
-        })
-    return rows
+    support = {
+        "support_fraction_BS_ON": float(bs_on["support_fraction"]),
+        "support_fraction_BS_OFF": float(bs_off["support_fraction"]),
+        "support_fraction_VIRUS_ON": float(virus_on_measure["support_fraction"]),
+        "support_fraction_VIRUS_OFF": float(virus_off_measure["support_fraction"]),
+    }
+    support["support_fraction_VIRUS"] = min(
+        support["support_fraction_VIRUS_ON"], support["support_fraction_VIRUS_OFF"])
+    support_ok = min(support.values()) >= HB_APERTURE_SUPPORT_MIN
+    bs_on_flux = bs_on["flux"]
+    bs_off_flux = bs_off["flux"]
+    virus_on_flux = virus_on_measure["flux"]
+    virus_off_flux = virus_off_measure["flux"]
+    bs_difference = bs_on_flux - bs_off_flux
+    virus_difference = virus_on_flux - virus_off_flux
+    return {
+        "RA": float(ra), "Dec": float(dec),
+        "aperture_radius_arcsec": float(radius_arcsec),
+        "BS_ON": float(bs_on_flux), "BS_OFF": float(bs_off_flux),
+        "BS_ON_MINUS_OFF": float(bs_difference),
+        "VIRUS_ON": float(virus_on_flux), "VIRUS_OFF": float(virus_off_flux),
+        "VIRUS_ON_MINUS_OFF": float(virus_difference),
+        "BS_ON_MINUS_OFF_surface_brightness": float(bs_difference /
+                                                      (np.pi * radius_arcsec ** 2)),
+        "aperture_area_arcsec2": float(np.pi * radius_arcsec ** 2),
+        "support_ok": bool(support_ok),
+        **support,
+    }
 
 
 def _hbeta_aperture_comparisons(rows):
@@ -838,8 +904,6 @@ def _hbeta_aperture_comparisons(rows):
         ("VIRUS_OFF_over_BS_OFF", "VIRUS_OFF / BS_OFF", "VIRUS_OFF", "BS_OFF"),
         ("VIRUS_ON_MINUS_OFF_over_BS_ON_MINUS_OFF", "VIRUS_ON_MINUS_OFF / BS_ON_MINUS_OFF",
          "VIRUS_ON_MINUS_OFF", "BS_ON_MINUS_OFF"),
-        ("VIRUS_HBETA_LINE_over_BS_ON_MINUS_OFF", "VIRUS_HBETA_LINE / BS_ON_MINUS_OFF",
-         "VIRUS_HBETA_LINE", "BS_ON_MINUS_OFF"),
     )
     result = {}
     for key, label, numerator_name, denominator_name in definitions:
@@ -859,27 +923,29 @@ def _hbeta_aperture_comparisons(rows):
     return result
 
 
-def _hbeta_surface_brightness_bins(rows):
+def _hbeta_surface_brightness_tertiles(rows):
     if not rows:
-        return [{"quantile_bin": i, "surface_brightness_lower": None,
+        return [{"tertile": i, "surface_brightness_lower": None,
                  "surface_brightness_upper": None, "N": 0, "ratios": {}}
-                for i in range(1, 5)]
+                for i in range(1, 4)]
     surface = np.asarray([row["BS_ON_MINUS_OFF"] / row["aperture_area_arcsec2"]
                           for row in rows], dtype=float)
-    order = np.argsort(surface, kind="mergesort")
+    good = np.isfinite(surface)
+    order = np.argsort(surface[good], kind="mergesort")
+    usable = [row for row, keep in zip(rows, good) if keep]
     bins = []
-    for index, ranks in enumerate(np.array_split(np.arange(order.size), 4), start=1):
+    for index, ranks in enumerate(np.array_split(np.arange(order.size), 3), start=1):
         if ranks.size == 0:
-            bins.append({"quantile_bin": index,
+            bins.append({"tertile": index,
                          "surface_brightness_lower": None,
                          "surface_brightness_upper": None,
                          "N": 0, "ratios": {}})
             continue
         selected = order[ranks]
-        selected_rows = [rows[int(i)] for i in selected]
-        selected_surface = surface[selected]
+        selected_rows = [usable[int(i)] for i in selected]
+        selected_surface = surface[good][selected]
         bins.append({
-            "quantile_bin": index,
+            "tertile": index,
             "surface_brightness_lower": float(np.min(selected_surface)),
             "surface_brightness_upper": float(np.max(selected_surface)),
             "N": int(selected.size),
@@ -888,133 +954,304 @@ def _hbeta_surface_brightness_bins(rows):
     return bins
 
 
-def _hbeta_aperture_validation(sci, dq, wave, sci_scale, celestial,
-                               common_pixel_scale, common_pixel_area,
-                               on_target, off_target, on_fp, off_fp,
-                               on_scale, off_scale, on_area, off_area,
-                               hb_line, filter_paths, outer_radius_arcmin,
-                               native_on_sky, native_off_sky,
-                               native_on_wcs, native_off_wcs):
+def _plot_hbeta_bs_bright_apertures(image, on_scale, candidates, selected, output_dir):
+    finite = np.asarray(image, dtype=float)[np.isfinite(image)]
+    fig, ax = plt.subplots(figsize=(9, 8), constrained_layout=True)
+    if finite.size:
+        vmin, vmax = np.percentile(finite, [1.0, 99.7])
+        if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
+            vmin, vmax = None, None
+    else:
+        vmin, vmax = None, None
+    im = ax.imshow(image, origin="lower", cmap="magma", vmin=vmin, vmax=vmax)
+    selected_pixels = {(row["BS_ON_pixel_x"], row["BS_ON_pixel_y"])
+                       for row in selected}
+    rejected = np.asarray([(x, y) for x, y in candidates
+                           if (x, y) not in selected_pixels])
+    if rejected.size:
+        ax.scatter(rejected[:, 0], rejected[:, 1], s=8, c="white", alpha=.25,
+                   label="rejected candidates")
+    for row in selected:
+        circle = plt.Circle((row["BS_ON_pixel_x"], row["BS_ON_pixel_y"]),
+                            HB_APERTURE_RADIUS_ARCSEC / float(on_scale),
+                            fill=False, color="cyan", lw=1.2)
+        ax.add_patch(circle)
+        ax.plot(row["BS_ON_pixel_x"], row["BS_ON_pixel_y"], "c+")
+    ax.set_title("Burrell-Schmidt BS ON-OFF: accepted 6-arcsec apertures")
+    ax.set_xlabel("native BS pixel x"); ax.set_ylabel("native BS pixel y")
+    if rejected.size or selected:
+        ax.legend(loc="best")
+    fig.colorbar(im, ax=ax, label="BS ON-OFF calibrated flux per native pixel")
+    fig.savefig(output_dir / "hbeta_bs_bright_apertures.png", dpi=160)
+    plt.close(fig)
+
+
+def _plot_hbeta_filter_matched_fluxes(rows, comparisons, output_dir):
+    definitions = (
+        ("VIRUS_ON", "BS_ON", "VIRUS_ON_over_BS_ON", "VIRUS ON vs BS ON"),
+        ("VIRUS_OFF", "BS_OFF", "VIRUS_OFF_over_BS_OFF", "VIRUS OFF vs BS OFF"),
+        ("VIRUS_ON_MINUS_OFF", "BS_ON_MINUS_OFF",
+         "VIRUS_ON_MINUS_OFF_over_BS_ON_MINUS_OFF", "VIRUS ON-OFF vs BS ON-OFF"),
+    )
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.8), constrained_layout=True)
+    for ax, (y_name, x_name, comparison_key, title) in zip(axes, definitions):
+        x = np.asarray([row[x_name] for row in rows], dtype=float)
+        y = np.asarray([row[y_name] for row in rows], dtype=float)
+        good = np.isfinite(x) & np.isfinite(y)
+        ax.scatter(x[good], y[good], s=24, alpha=.75, rasterized=True)
+        if np.any(good):
+            limits = np.asarray([np.min(np.r_[x[good], y[good]]),
+                                 np.max(np.r_[x[good], y[good]])])
+            if limits[1] > limits[0]:
+                pad = .05 * (limits[1] - limits[0])
+                limits += [-pad, pad]
+                grid = np.linspace(*limits, 100)
+                ax.plot(grid, grid, "k--", label="y=x")
+                slope = comparisons[comparison_key]["robust_through_zero_slope"]
+                if slope is not None:
+                    ax.plot(grid, slope * grid, color="tab:red",
+                            label="robust through-zero slope")
+                ax.set_xlim(limits); ax.set_ylim(limits)
+        stats = comparisons[comparison_key]
+        location = stats["robust_location"]
+        ax.set_title("%s\nrobust ratio=%s; N=%d" %
+                     (title, "%.4g" % location if location is not None else "nan",
+                      stats["N"]))
+        ax.set_xlabel("BS integrated aperture flux")
+        ax.set_ylabel("VIRUS integrated aperture flux")
+        ax.grid(alpha=.25); ax.legend(loc="best")
+    fig.savefig(output_dir / "hbeta_filter_matched_aperture_fluxes.png", dpi=160)
+    plt.close(fig)
+
+
+def _plot_hbeta_ratio_vs_surface_brightness(rows, tertiles, output_dir):
+    definitions = (("R_ON", "VIRUS_ON_over_BS_ON", "VIRUS ON / BS ON"),
+                   ("R_OFF", "VIRUS_OFF_over_BS_OFF", "VIRUS OFF / BS OFF"),
+                   ("R_DIFF", "VIRUS_ON_MINUS_OFF_over_BS_ON_MINUS_OFF",
+                    "VIRUS ON-OFF / BS ON-OFF"))
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.8), constrained_layout=True)
+    surface = np.asarray([row["BS_ON_MINUS_OFF_surface_brightness"] for row in rows], dtype=float)
+    for ax, (row_key, comparison_key, title) in zip(axes, definitions):
+        ratio = np.asarray([row[row_key] for row in rows], dtype=float)
+        good = np.isfinite(surface) & (surface > 0) & np.isfinite(ratio)
+        ax.scatter(surface[good], ratio[good], s=24, alpha=.75, rasterized=True,
+                   label="accepted aperture")
+        for tertile in tertiles:
+            stats = tertile["ratios"].get(comparison_key, {})
+            location, p16, p84 = (stats.get(key) for key in ("robust_location", "p16", "p84"))
+            lower, upper = tertile.get("surface_brightness_lower"), tertile.get("surface_brightness_upper")
+            if (location is None or p16 is None or p84 is None or lower is None or
+                    upper is None or lower <= 0 or upper <= 0):
+                continue
+            in_bin = ((surface >= lower) & (surface <= upper) & np.isfinite(surface))
+            x = float(np.median(surface[in_bin])) if np.any(in_bin) else np.sqrt(lower * upper)
+            ax.errorbar(x, location, yerr=[[max(0.0, location - p16)],
+                                            [max(0.0, p84 - location)]],
+                        fmt="D", ms=5, capsize=3, color="tab:red",
+                        label="tertile robust location; p16-p84")
+        ax.axhline(1.0, color="k", ls="--", label="unity")
+        if np.any(good):
+            ax.set_xscale("log")
+        ax.set_title(title); ax.set_xlabel("BS ON-OFF surface brightness")
+        ax.set_ylabel("aperture flux ratio"); ax.grid(alpha=.25)
+        handles, labels = ax.get_legend_handles_labels()
+        if labels:
+            unique = dict(zip(labels, handles))
+            ax.legend(unique.values(), unique.keys(), loc="best")
+    fig.savefig(output_dir / "hbeta_aperture_ratio_vs_surface_brightness.png", dpi=160)
+    plt.close(fig)
+
+
+def _plot_hbeta_aperture_radius_stability(radius_rows, output_dir):
+    definitions = (("VIRUS_ON_over_BS_ON", "VIRUS ON / BS ON"),
+                   ("VIRUS_OFF_over_BS_OFF", "VIRUS OFF / BS OFF"),
+                   ("VIRUS_ON_MINUS_OFF_over_BS_ON_MINUS_OFF", "VIRUS ON-OFF / BS ON-OFF"))
+    fig, ax = plt.subplots(figsize=(8, 5.5), constrained_layout=True)
+    for key, label in definitions:
+        x, y, low, high = [], [], [], []
+        for row in radius_rows:
+            stats = row["comparisons"].get(key, {})
+            if stats.get("robust_location") is None:
+                continue
+            x.append(row["radius_arcsec"]); y.append(stats["robust_location"])
+            low.append(max(0.0, stats["robust_location"] - stats["p16"]))
+            high.append(max(0.0, stats["p84"] - stats["robust_location"]))
+        if x:
+            ax.errorbar(x, y, yerr=np.vstack((low, high)), fmt="o-", capsize=3, label=label)
+    ax.axhline(1.0, color="k", ls="--", label="unity")
+    ax.set_xticks(list(HB_APERTURE_STABILITY_RADII_ARCSEC))
+    ax.set_xlabel("aperture radius (arcsec)"); ax.set_ylabel("robust VIRUS / BS ratio")
+    ax.set_title("Hbeta filter-matched aperture-radius stability")
+    ax.grid(alpha=.25); ax.legend(loc="best")
+    fig.savefig(output_dir / "hbeta_aperture_radius_stability.png", dpi=160)
+    plt.close(fig)
+
+
+def _hbeta_filter_matched_validation(sci, dq, wave, sci_scale, virus_wcs,
+                                     common_pixel_scale, common_pixel_area,
+                                     on_sky, off_sky, on_wcs, off_wcs,
+                                     on_scale, off_scale, on_area, off_area,
+                                     filter_paths, outer_radius_arcmin, output_dir):
     on_filter_path, on_filter_wave, on_response = _read_filter_curve(filter_paths["on"])
     off_filter_path, off_filter_wave, off_response = _read_filter_curve(filter_paths["off"])
     virus_on, virus_on_support, on_integration = _integrate_cube_filter(
         sci, dq, wave, sci_scale, on_filter_wave, on_response)
     virus_off, virus_off_support, off_integration = _integrate_cube_filter(
         sci, dq, wave, sci_scale, off_filter_wave, off_response)
-    virus_on_minus_off = virus_on - virus_off
-    bs_on_minus_off = on_target - off_target
-    bs_support = (np.isfinite(on_target) & np.isfinite(off_target)
-                  & np.isfinite(on_fp) & np.isfinite(off_fp)
-                  & (on_fp >= HB_APERTURE_SUPPORT_MIN)
-                  & (off_fp >= HB_APERTURE_SUPPORT_MIN))
-    external_noise, noise_info = _external_hbeta_noise(
-        bs_on_minus_off, bs_support, celestial, native_on_sky, native_off_sky,
-        native_on_wcs, native_off_wcs, on_area, off_area, outer_radius_arcmin)
-    detection = (bs_support & np.isfinite(bs_on_minus_off)
-                 & (bs_on_minus_off / external_noise >= HB_APERTURE_EXTERNAL_SNR_MIN))
-    peak_values = np.where(detection, bs_on_minus_off, -np.inf)
-    radius_pixels = HB_APERTURE_RADIUS_ARCSEC / float(common_pixel_scale)
-    peak_size = max(3, 2 * int(np.ceil(radius_pixels)) + 1)
-    local_maximum = detection & (peak_values == maximum_filter(
-        peak_values, size=peak_size, mode="constant", cval=-np.inf))
+    _native_bs_grid_check(on_sky, off_sky, on_wcs, off_wcs)
+    bs_difference = on_sky - off_sky
+    detection_sigma = (HB_APERTURE_DETECTION_SMOOTH_ARCSEC / 2.354820045 /
+                       float(on_scale))
+    detection_image = _smooth_nan(bs_difference, detection_sigma)
+    finite_detection = np.isfinite(detection_image)
+    peak_values = np.where(finite_detection, detection_image, -np.inf)
+    peak_size = max(3, 2 * int(np.ceil(HB_APERTURE_RADIUS_ARCSEC / float(on_scale))) + 1)
+    local_maximum = (finite_detection & (detection_image > 0) &
+                     (peak_values == maximum_filter(peak_values, size=peak_size,
+                                                    mode="constant", cval=-np.inf)))
     peak_y, peak_x = np.where(local_maximum)
-    if peak_y.size:
-        order = np.lexsort((peak_x, peak_y, -peak_values[peak_y, peak_x]))
-        candidate_centers = [(int(peak_y[i]), int(peak_x[i])) for i in order]
-    else:
-        candidate_centers = []
+    order = np.lexsort((peak_x, peak_y, -peak_values[peak_y, peak_x])) if peak_y.size else []
+    candidate_world = []
+    for index in order:
+        x, y = int(peak_x[index]), int(peak_y[index])
+        ra, dec = on_wcs.pixel_to_world_values(float(x), float(y))
+        candidate_world.append((float(ra), float(dec), x, y))
 
-    primary_rows = []
-    primary_centers = []
-    for center in candidate_centers:
-        if any((center[0] - previous[0]) ** 2 + (center[1] - previous[1]) ** 2
-               < (2.0 * radius_pixels) ** 2 for previous in primary_centers):
+    blank_noise, noise_info = _blank_aperture_noise(
+        bs_difference, on_wcs, off_wcs, HB_APERTURE_RADIUS_ARCSEC,
+        outer_radius_arcmin, on_sky, off_sky, on_area, off_area)
+    selected_rows = []
+    selected_world = []
+    support_pass = 0
+    nonoverlap_count = 0
+    for ra, dec, x, y in candidate_world:
+        if any(float(_angular_separation_arcsec(ra, dec, old_ra, old_dec)) <
+               HB_APERTURE_MIN_CENTER_SEPARATION_ARCSEC
+               for old_ra, old_dec, _, _ in selected_world):
             continue
-        measured = _measure_hbeta_apertures(
-            [center], HB_APERTURE_RADIUS_ARCSEC, common_pixel_scale,
-            common_pixel_area, on_target, off_target, bs_support,
-            virus_on, virus_off, virus_on_support, virus_off_support, hb_line)
-        if not measured:
+        nonoverlap_count += 1
+        row = _measure_filter_matched_aperture(
+            ra, dec, HB_APERTURE_RADIUS_ARCSEC,
+            on_sky, off_sky, on_wcs, off_wcs, virus_on, virus_off, virus_wcs,
+            virus_on_support, virus_off_support, on_area, off_area,
+            common_pixel_area)
+        if row is None or not row["support_ok"]:
             continue
-        row = measured[0]
-        try:
-            ra, dec = celestial.pixel_to_world_values(row["x_pixel"], row["y_pixel"])
-            row["RA_deg"] = float(ra); row["DEC_deg"] = float(dec)
-        except Exception:
-            row["RA_deg"] = None; row["DEC_deg"] = None
-        row["external_detection_surface_brightness"] = float(bs_on_minus_off[
-            row["y_pixel"], row["x_pixel"]])
-        row["external_detection_SNR"] = row["external_detection_surface_brightness"] / external_noise
-        primary_rows.append(row)
-        primary_centers.append(center)
+        support_pass += 1
+        row["BS_ON_MINUS_OFF_SNR"] = row["BS_ON_MINUS_OFF"] / blank_noise
+        if (not np.isfinite(row["BS_ON_MINUS_OFF_SNR"]) or
+                row["BS_ON_MINUS_OFF_SNR"] < HB_APERTURE_EXTERNAL_SNR_MIN):
+            continue
+        row["region_id"] = int(len(selected_rows) + 1)
+        row["BS_ON_pixel_x"] = x; row["BS_ON_pixel_y"] = y
+        selected_rows.append(row)
+        selected_world.append((ra, dec, x, y))
 
-    primary_comparisons = _hbeta_aperture_comparisons(primary_rows)
-    radius_checks = []
-    primary_locations = {key: value["robust_location"]
-                         for key, value in primary_comparisons.items()}
-    for radius in HB_APERTURE_CHECK_RADII_ARCSEC:
-        check_rows = _measure_hbeta_apertures(
-            primary_centers, radius, common_pixel_scale, common_pixel_area,
-            on_target, off_target, bs_support, virus_on, virus_off,
-            virus_on_support, virus_off_support, hb_line)
-        comparisons = _hbeta_aperture_comparisons(check_rows)
+    for row in selected_rows:
+        row["R_ON"] = (row["VIRUS_ON"] / row["BS_ON"]
+                        if row["BS_ON"] > 0 else np.nan)
+        row["R_OFF"] = (row["VIRUS_OFF"] / row["BS_OFF"]
+                         if row["BS_OFF"] > 0 else np.nan)
+        row["R_DIFF"] = (row["VIRUS_ON_MINUS_OFF"] / row["BS_ON_MINUS_OFF"]
+                          if row["BS_ON_MINUS_OFF"] > 0 else np.nan)
+    primary_comparisons = _hbeta_aperture_comparisons(selected_rows)
+    tertiles = _hbeta_surface_brightness_tertiles(selected_rows)
+    radius_rows = []
+    for radius in HB_APERTURE_STABILITY_RADII_ARCSEC:
+        if radius == HB_APERTURE_RADIUS_ARCSEC:
+            radius_rows_data = selected_rows
+        else:
+            radius_rows_data = []
+            for ra, dec, _, _ in selected_world:
+                row = _measure_filter_matched_aperture(
+                    ra, dec, radius, on_sky, off_sky, on_wcs, off_wcs,
+                    virus_on, virus_off, virus_wcs, virus_on_support,
+                    virus_off_support, on_area, off_area, common_pixel_area)
+                if row is not None and row["support_ok"]:
+                    radius_rows_data.append(row)
+            for row in radius_rows_data:
+                row["R_ON"] = row["VIRUS_ON"] / row["BS_ON"] if row["BS_ON"] > 0 else np.nan
+                row["R_OFF"] = row["VIRUS_OFF"] / row["BS_OFF"] if row["BS_OFF"] > 0 else np.nan
+                row["R_DIFF"] = (row["VIRUS_ON_MINUS_OFF"] / row["BS_ON_MINUS_OFF"]
+                                  if row["BS_ON_MINUS_OFF"] > 0 else np.nan)
         changes = {}
-        for key, value in comparisons.items():
-            baseline = primary_locations.get(key)
-            location = value["robust_location"]
+        radius_comparisons = _hbeta_aperture_comparisons(radius_rows_data)
+        for key, stats in radius_comparisons.items():
+            baseline = primary_comparisons[key].get("robust_location")
+            location = stats.get("robust_location")
             fractional_change = None
             if baseline is not None and location is not None and baseline != 0:
                 fractional_change = float(location / baseline - 1.0)
             changes[key] = {
                 "primary_6arcsec_robust_location": baseline,
-                "check_robust_location": location,
+                "radius_robust_location": location,
                 "fractional_change": fractional_change,
                 "material_change": (abs(fractional_change) > HB_APERTURE_MATERIAL_FRACTION
                                      if fractional_change is not None else None),
             }
-        radius_checks.append({"radius_arcsec": float(radius),
-                              "N_apertures": int(len(check_rows)),
-                              "comparisons": comparisons,
-                              "central_normalization_change": changes})
+        radius_rows.append({"radius_arcsec": float(radius),
+                            "N_valid_apertures": int(len(radius_rows_data)),
+                            "comparisons": radius_comparisons,
+                            "central_normalization_change": changes})
 
-    filter_info = {
-        "on": {"path": str(on_filter_path), **on_integration},
-        "off": {"path": str(off_filter_path), **off_integration},
-        "definition": "each relative response is normalized to peak one and integrated with the calibrated VIRUS SCI over wavelength using the trapezoidal rule",
-    }
+    fields = ["region_id", "RA", "Dec", "aperture_radius_arcsec", "BS_ON", "BS_OFF",
+              "BS_ON_MINUS_OFF", "VIRUS_ON", "VIRUS_OFF", "VIRUS_ON_MINUS_OFF",
+              "R_ON", "R_OFF", "R_DIFF", "BS_ON_MINUS_OFF_SNR",
+              "BS_ON_MINUS_OFF_surface_brightness", "support_fraction_BS_ON",
+              "support_fraction_BS_OFF", "support_fraction_VIRUS"]
+    _write_csv(output_dir / "hbeta_filter_matched_apertures.csv",
+               [{key: row.get(key) for key in fields} for row in selected_rows], fields)
+    _plot_hbeta_bs_bright_apertures(
+        bs_difference, on_scale, [(x, y) for _, _, x, y in candidate_world],
+        selected_rows, output_dir)
+    _plot_hbeta_filter_matched_fluxes(selected_rows, primary_comparisons, output_dir)
+    _plot_hbeta_ratio_vs_surface_brightness(selected_rows, tertiles, output_dir)
+    _plot_hbeta_aperture_radius_stability(radius_rows, output_dir)
     return {
         "status": "authoritative absolute-normalization diagnostic",
-        "comparison_scope": "6-arcsec bright-region apertures; morphology-only pixel comparison remains separate",
+        "comparison_scope": "matched sky-coordinate native-BS/VIRUS apertures; ON and OFF are authoritative absolute-flux comparisons",
+        "absolute_flux_observables": ["VIRUS_ON / BS_ON", "VIRUS_OFF / BS_OFF",
+                                       "VIRUS_ON_MINUS_OFF / BS_ON_MINUS_OFF"],
+        "observable_priority": "ON and OFF are primary; ON-OFF is secondary",
+        "continuum_subtraction_for_synthetic_photometry": False,
+        "source_selection_uses_only_independent_BS": True,
         "surface_brightness_units": "erg s-1 cm-2 arcsec-2",
         "aperture_integrated_flux_units": "erg s-1 cm-2",
         "aperture_radius_arcsec": HB_APERTURE_RADIUS_ARCSEC,
         "aperture_radius_pixels": {
             "BS_ON_native": HB_APERTURE_RADIUS_ARCSEC / float(on_scale),
             "BS_OFF_native": HB_APERTURE_RADIUS_ARCSEC / float(off_scale),
-            "VIRUS_common": radius_pixels,
+            "VIRUS": HB_APERTURE_RADIUS_ARCSEC / float(common_pixel_scale),
         },
         "native_pixel_scales_arcsec": {"BS_ON": float(on_scale), "BS_OFF": float(off_scale),
-                                        "VIRUS_common": float(common_pixel_scale)},
+                                        "VIRUS": float(common_pixel_scale)},
         "native_pixel_areas_arcsec2": {"BS_ON": float(on_area), "BS_OFF": float(off_area),
-                                        "VIRUS_common": float(common_pixel_area)},
-        "external_noise": noise_info,
+                                        "VIRUS": float(common_pixel_area)},
+        "empirical_noise": {**noise_info, "sigma_aperture_flux": float(blank_noise)},
         "bright_region_selection": {
-            "method": "deterministic descending-flux local maxima in the sky-subtracted/reprojected BS ON-OFF image, followed by greedy non-overlap selection",
-            "detection_image": "sky-subtracted/reprojected BS ON-OFF surface brightness",
-            "detection_snr_definition": "per-common-grid pixel BS ON-OFF divided by the outer-sky noise estimate",
+            "method": "deterministic local maxima in the modestly smoothed native BS ON-OFF image, sorted by brightness and greedily retained with non-overlap",
+            "detection_image": "sky-subtracted calibrated native BS ON-OFF",
+            "detection_smoothing_fwhm_arcsec": HB_APERTURE_DETECTION_SMOOTH_ARCSEC,
+            "external_detection_snr_definition": "native BS ON-OFF 6-arcsec aperture flux divided by empirical blank-aperture scatter",
             "external_detection_snr_threshold": HB_APERTURE_EXTERNAL_SNR_MIN,
+            "minimum_center_separation_arcsec": HB_APERTURE_MIN_CENTER_SEPARATION_ARCSEC,
             "support_threshold_fraction": HB_APERTURE_SUPPORT_MIN,
+            "candidate_regions": int(len(candidate_world)),
+            "nonoverlap_candidates": int(nonoverlap_count),
+            "passing_support": int(support_pass),
+            "passing_snr": int(len(selected_rows)),
+            "selected_regions": int(len(selected_rows)),
             "local_maximum_window_pixels": int(peak_size),
-            "candidate_pixels": int(np.sum(detection)),
-            "local_maxima": int(np.sum(local_maximum)),
-            "selected_apertures": int(len(primary_rows)),
         },
-        "filter_response_integration": filter_info,
-        "comparisons": primary_comparisons,
-        "surface_brightness_bins": _hbeta_surface_brightness_bins(primary_rows),
+        "filter_response_integration": {
+            "on": {"path": str(on_filter_path), **on_integration},
+            "off": {"path": str(off_filter_path), **off_integration},
+            "definition": "full calibrated VIRUS SCI integrated over wavelength with each supplied response normalized to peak one using the trapezoidal rule; no spectroscopic continuum subtraction",
+        },
+        "primary_6arcsec": primary_comparisons,
+        "surface_brightness_tertiles": tertiles,
+        "aperture_radius_stability": radius_rows,
         "material_change_threshold_fraction": HB_APERTURE_MATERIAL_FRACTION,
-        "aperture_radius_robustness": radius_checks,
-        "apertures": primary_rows,
     }
 
 
@@ -1226,8 +1463,8 @@ def _hbeta_validation(virus, virus_var, virus_snr, ew, external, external_suppor
             "coherent_regions": regions, "coherent_mask": coherent,
             "status": ("N coherent candidate regions detected and requiring inspection" if regions
                        else "no coherent Hbeta bright-line deficit population detected"),
-            "absolute_flux_all_high_SN": all_stats, "absolute_flux_high_EW": ew_stats,
-            "absolute_flux_calibration_reference_fraction": BS_ABSOLUTE_CALIBRATION_FRACTION,
+            "morphology_all_high_SN": all_stats, "morphology_high_EW": ew_stats,
+            "morphology_calibration_reference_fraction": BS_ABSOLUTE_CALIBRATION_FRACTION,
             "raw_external_narrowband_excess_is_not_absorption_corrected": True,
             "arrays": {"all_mask": all_mask, "ew_mask": ew_mask, "all_ratio": all_ratio,
                        "ew_ratio": ew_ratio, "external_support": external_support,
@@ -1236,8 +1473,7 @@ def _hbeta_validation(virus, virus_var, virus_snr, ew, external, external_suppor
 
 def _plot_hbeta(hb, map_header, output_dir):
     fig, axes = plt.subplots(2, 2, figsize=(12, 9), constrained_layout=True)
-    all_stats = hb["absolute_flux_all_high_SN"]
-    ew_stats = hb["absolute_flux_high_EW"]
+    all_stats = hb["morphology_all_high_SN"]
     images = [(hb["external_smoothed"], "External Hbeta SB (morphology-only)"),
               (hb["virus_smoothed"], "VIRUS Hbeta (morphology-only)"),
               (hb["residual"], "VIRUS - morphology-scaled external"),
@@ -1248,68 +1484,6 @@ def _plot_hbeta(hb, map_header, output_dir):
         im = ax.imshow(data, origin="lower", cmap="magma" if "ratio" not in title else "coolwarm")
         ax.set_title(title); fig.colorbar(im, ax=ax, shrink=.8)
     fig.savefig(output_dir / "hbeta_external_vs_virus.png", dpi=160); plt.close(fig)
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
-    for ax, mask, title, stats in (
-            (axes[0], hb["arrays"]["all_mask"], "All high-S/N Hbeta (morphology-only)", all_stats),
-            (axes[1], hb["arrays"]["ew_mask"], "High-EW Hbeta (morphology-only)", ew_stats)):
-        x = hb["external_smoothed"][mask]; y = hb["virus_smoothed"][mask]
-        ax.scatter(x, y, s=5, alpha=.35, rasterized=True)
-        if x.size:
-            lo, hi = np.nanpercentile(np.r_[x, y], [1, 99]); grid = np.linspace(lo, hi, 100)
-            ax.plot(grid, grid, "k--", label="y=x")
-            ax.fill_between(grid, .95 * grid, 1.05 * grid, color="gray", alpha=.2, label="+/-5%")
-        ax.set_xlabel("Burrell Schmidt Hbeta flux SB"); ax.set_ylabel("VIRUS Hbeta SB")
-        ax.set_title("%s\nrobust location=%.4g; median=%.4g" %
-                     (title, stats["robust_location"], stats["median"]))
-        ax.legend(loc="best")
-    fig.savefig(output_dir / "hbeta_bright_region_flux_comparison.png", dpi=160); plt.close(fig)
-
-
-def _plot_hbeta_aperture_surface_brightness(aperture, output_dir):
-    definitions = (
-        ("VIRUS_ON_over_BS_ON", "VIRUS ON / BS ON"),
-        ("VIRUS_OFF_over_BS_OFF", "VIRUS OFF / BS OFF"),
-        ("VIRUS_ON_MINUS_OFF_over_BS_ON_MINUS_OFF", "VIRUS ON-OFF / BS ON-OFF"),
-        ("VIRUS_HBETA_LINE_over_BS_ON_MINUS_OFF", "VIRUS Hbeta line / BS ON-OFF"),
-    )
-    bins = aperture["surface_brightness_bins"]
-    fig, axes = plt.subplots(2, 2, figsize=(11, 8), constrained_layout=True)
-    for ax, (key, label) in zip(axes.flat, definitions):
-        x = []
-        y = []
-        yerr_low = []
-        yerr_high = []
-        labels = []
-        for index, row in enumerate(bins, start=1):
-            lower = row["surface_brightness_lower"]
-            upper = row["surface_brightness_upper"]
-            stats = row["ratios"].get(key, {})
-            location = stats.get("robust_location")
-            p16 = stats.get("p16")
-            p84 = stats.get("p84")
-            if (lower is None or upper is None or location is None or
-                    p16 is None or p84 is None or lower <= 0 or upper <= 0):
-                continue
-            x.append(np.sqrt(lower * upper))
-            y.append(location)
-            yerr_low.append(max(0.0, location - p16))
-            yerr_high.append(max(0.0, p84 - location))
-            labels.append("Q%d" % index)
-        if x:
-            ax.errorbar(x, y, yerr=np.vstack((yerr_low, yerr_high)),
-                        fmt="o", capsize=4, label="robust location; p16--p84")
-            ax.set_xscale("log")
-            ax.set_xticks(x)
-            ax.set_xticklabels(labels)
-        ax.axhline(1.0, color="tab:red", linestyle="--", label="unity")
-        ax.set_title(label)
-        ax.set_xlabel("BS ON-OFF surface brightness")
-        ax.set_ylabel("aperture flux ratio")
-        ax.grid(alpha=.25)
-        ax.legend(loc="best")
-    fig.suptitle("Hbeta absolute normalization versus surface brightness")
-    fig.savefig(output_dir / "hbeta_aperture_ratio_vs_surface_brightness.png", dpi=160)
-    plt.close(fig)
 
 
 def _plot_balmer(balmer, output_dir, args):
@@ -1557,23 +1731,22 @@ def _markdown(summary):
     counts = summary["spectrum_accounting"]
     lsf = summary["lsf"]
     production = summary["production_cube_provenance"]
-    hb_all = hb["absolute_flux_all_high_SN"]
-    hb_ew = hb["absolute_flux_high_EW"]
+    hb_all = hb["morphology_all_high_SN"]
+    hb_ew = hb["morphology_high_EW"]
     hg = balmer["median_Hgamma_over_Hbeta"]
     hd = balmer["median_Hdelta_over_Hbeta"]
     ebv_diff = balmer["E_BV_gamma_minus_delta"]
     oiii_ratio = oiii["median_5007_over_4959"]
     overall_lsf = lsf["overall_fwhm"]
-    aperture = hb.get("aperture_comparison", {})
-    aperture_comparisons = aperture.get("comparisons", {})
+    aperture = hb.get("hbeta_filter_matched_validation", {})
+    aperture_comparisons = aperture.get("primary_6arcsec", {})
     aperture_lines = []
     if aperture_comparisons:
         aperture_lines.append(
             "- Authoritative 6-arcsec aperture normalization: N=%d; aperture ratio robust locations and robust through-zero slopes are reported below." %
-            aperture.get("bright_region_selection", {}).get("selected_apertures", 0))
+            aperture.get("bright_region_selection", {}).get("selected_regions", 0))
         for key in ("VIRUS_ON_over_BS_ON", "VIRUS_OFF_over_BS_OFF",
-                    "VIRUS_ON_MINUS_OFF_over_BS_ON_MINUS_OFF",
-                    "VIRUS_HBETA_LINE_over_BS_ON_MINUS_OFF"):
+                    "VIRUS_ON_MINUS_OFF_over_BS_ON_MINUS_OFF"):
             comparison = aperture_comparisons[key]
             aperture_lines.append(
                 "- %s: robust location=%s, median=%s, robust scatter=%s, slope=%s." %
@@ -1581,7 +1754,7 @@ def _markdown(summary):
                  comparison["median"], comparison["robust_scatter"],
                  comparison["robust_through_zero_slope"]))
         aperture_lines.append(
-            "- Four equal-population aperture surface-brightness bins and 4/8-arcsec robustness checks are in the JSON; the diagnostic plot is `hbeta_aperture_ratio_vs_surface_brightness.png`.")
+            "- The accepted sample is divided into three equal-population bright-region tertiles; 4/6/8-arcsec stability is reported in JSON and the required aperture figures/CSV are written.")
     else:
         aperture_lines.append("- Aperture absolute-normalization diagnostic was not available in this validation summary.")
     lines = ["# M101 referee validation and public release", "",
@@ -1673,27 +1846,61 @@ def _print_oiii_ratio_signal_tables(oiii):
 
 def _print_hbeta_aperture_tables(aperture):
     keys = ("VIRUS_ON_over_BS_ON", "VIRUS_OFF_over_BS_OFF",
-            "VIRUS_ON_MINUS_OFF_over_BS_ON_MINUS_OFF",
-            "VIRUS_HBETA_LINE_over_BS_ON_MINUS_OFF")
+            "VIRUS_ON_MINUS_OFF_over_BS_ON_MINUS_OFF")
     print("Hbeta bright-region aperture normalization (6 arcsec)")
     print("comparison\tN apertures\trobust ratio\tmedian ratio\trobust scatter\trobust through-zero slope")
     for key in keys:
-        row = aperture["comparisons"][key]
+        row = aperture["primary_6arcsec"][key]
         print("%s\t%s\t%s\t%s\t%s\t%s" %
               (row["label"], row["N"], row["robust_location"], row["median"],
                row["robust_scatter"], row["robust_through_zero_slope"]))
-    print("Hbeta aperture ratios versus BS ON-OFF surface brightness")
-    print("bin\tSB lower\tSB upper\tN\t%s" % "\t".join(key + " robust location" for key in keys))
-    for row in aperture["surface_brightness_bins"]:
-        values = [row["quantile_bin"], row["surface_brightness_lower"],
+    print("Hbeta bright-region surface-brightness tertiles")
+    print("tertile\tSB lower\tSB upper\tN\t%s" %
+          "\t".join(key + " robust location" for key in keys))
+    for row in aperture["surface_brightness_tertiles"]:
+        values = [row["tertile"], row["surface_brightness_lower"],
                   row["surface_brightness_upper"], row["N"]]
         values.extend(row["ratios"].get(key, {}).get("robust_location") for key in keys)
         print("\t".join(str(value) for value in values))
-    for check in aperture["aperture_radius_robustness"]:
+    print("Hbeta aperture-radius stability")
+    print("radius_arcsec\tN valid\tR_ON robust\tR_OFF robust\tR_DIFF robust")
+    for check in aperture["aperture_radius_stability"]:
+        values = [check["radius_arcsec"], check["N_valid_apertures"]]
+        values.extend(check["comparisons"].get(key, {}).get("robust_location") for key in keys)
+        print("\t".join(str(value) for value in values))
         material = [key for key, value in check["central_normalization_change"].items()
                     if value["material_change"]]
-        print("Hbeta %g-arcsec check: N=%d; material central-normalization changes=%s" %
-              (check["radius_arcsec"], check["N_apertures"], material or "none"))
+        print("radius %g arcsec material changes (>%.0f%%): %s" %
+              (check["radius_arcsec"], 100.0 * HB_APERTURE_MATERIAL_FRACTION,
+               material or "none"))
+    primary = aperture["primary_6arcsec"]
+    on_location = primary["VIRUS_ON_over_BS_ON"]["robust_location"]
+    off_location = primary["VIRUS_OFF_over_BS_OFF"]["robust_location"]
+    if on_location is not None and off_location is not None and off_location != 0:
+        on_off_difference = float(on_location / off_location - 1.0)
+        consistency = "consistent within %.0f%%" % (100.0 * HB_APERTURE_MATERIAL_FRACTION) \
+            if abs(on_off_difference) <= HB_APERTURE_MATERIAL_FRACTION else "not consistent within %.0f%%" % (100.0 * HB_APERTURE_MATERIAL_FRACTION)
+        print("Hbeta bright-region ON/OFF relative normalizations: %s (ON/OFF difference=%s)" %
+              (consistency, on_off_difference))
+        print("Hbeta bright-region calibration offsets: R_ON=%s, R_OFF=%s, R_DIFF=%s" %
+              (on_location, off_location,
+               primary["VIRUS_ON_MINUS_OFF_over_BS_ON_MINUS_OFF"]["robust_location"]))
+    tertile_locations = []
+    for tertile in aperture["surface_brightness_tertiles"]:
+        location = tertile["ratios"].get("VIRUS_ON_over_BS_ON", {}).get("robust_location")
+        if location is not None:
+            tertile_locations.append(location)
+    if tertile_locations:
+        print("Hbeta surface-brightness dependence: tertile R_ON robust-location range=%s; no correction fitted or applied" %
+              (max(tertile_locations) - min(tertile_locations)))
+    radius_locations = []
+    for check in aperture["aperture_radius_stability"]:
+        location = check["comparisons"].get("VIRUS_ON_over_BS_ON", {}).get("robust_location")
+        if location is not None:
+            radius_locations.append(location)
+    if radius_locations:
+        print("Hbeta aperture-radius stability: R_ON robust-location range=%s" %
+              (max(radius_locations) - min(radius_locations)))
 
 
 def main():
@@ -1787,17 +1994,15 @@ def main():
     hb = _hbeta_validation(line_products["Hbeta_4861"]["flux"], line_products["Hbeta_4861"]["variance"],
                            line_products["Hbeta_4861"]["snr"], line_products["Hbeta_4861"]["ew"],
                            absolute_external, external_support, args, pixel_scale, output_dir, map_header)
-    hb["aperture_comparison"] = _hbeta_aperture_validation(
+    hb["hbeta_filter_matched_validation"] = _hbeta_filter_matched_validation(
         arrays["SCI"], arrays["DQ"], wave, sci_scale, celestial, pixel_scale,
-        _pixel_area_arcsec2(celestial), on_target, off_target, on_fp, off_fp,
+        _pixel_area_arcsec2(celestial), on_sky, off_sky, on_wcs, off_wcs,
         on_scale, off_scale, on_area, off_area,
-        line_products["Hbeta_4861"]["flux"],
         {"on": args.hb_on_filter, "off": args.hb_off_filter},
-        args.outer_sky_radius_arcmin, on_sky, off_sky, on_wcs, off_wcs)
+        args.outer_sky_radius_arcmin, output_dir)
     _write_image(output_dir / "hbeta_residual_map.fits", hb["residual"],
                  _map_header(map_header, "erg s-1 cm-2 arcsec-2", "Hbeta morphology residual"))
     _plot_hbeta(hb, map_header, output_dir)
-    _plot_hbeta_aperture_surface_brightness(hb["aperture_comparison"], output_dir)
     balmer = _balmer_validation(line_products, args); _plot_balmer(balmer, output_dir, args)
     oiii = _oiii_validation(line_products, args)
     _write_image(output_dir / "oiii5007_ratio_map.fits", oiii["ratio"], _map_header(map_header, "dimensionless", "OIII 5007/4959 ratio"))
@@ -1884,6 +2089,7 @@ def main():
                                   "filters": {"on": _read_filter_summary(args.hb_on_filter), "off": _read_filter_summary(args.hb_off_filter)},
                                   "raw_definition": "HB_ON - HB_OFF; underlying stellar Hbeta absorption not removed",
                                   "raw_surface_brightness_units": "erg s-1 cm-2 arcsec-2",
+                                  "pixel_level_comparison_scope": "morphology-only; not an absolute normalization measurement",
                                   "corrected_line_image": line_image_info,
                                   "published_absolute_uncertainty_fraction": BS_ABSOLUTE_CALIBRATION_FRACTION},
                "line_products": {name: {key: value for key, value in result.items() if key != "arrays"}
@@ -1897,9 +2103,9 @@ def main():
     (output_dir / "referee_validation_summary.json").write_text(json.dumps(summary, indent=2, allow_nan=False))
     markdown = _markdown(summary)
     (output_dir / "referee_validation_summary.md").write_text(markdown)
-    hbeta_all = summary["hbeta_validation"]["absolute_flux_all_high_SN"]
-    hbeta_ew = summary["hbeta_validation"]["absolute_flux_high_EW"]
-    hbeta_aperture = summary["hbeta_validation"]["aperture_comparison"]
+    hbeta_all = summary["hbeta_validation"]["morphology_all_high_SN"]
+    hbeta_ew = summary["hbeta_validation"]["morphology_high_EW"]
+    hbeta_aperture = summary["hbeta_validation"]["hbeta_filter_matched_validation"]
     gamma = summary["balmer_validation"]["median_Hgamma_over_Hbeta"]
     delta = summary["balmer_validation"]["median_Hdelta_over_Hbeta"]
     ebv_difference = summary["balmer_validation"]["E_BV_gamma_minus_delta"]
@@ -1936,8 +2142,8 @@ def main():
         ("OIII 5007/4959", oiii_ratio),
         ("Hgamma/Hbeta", gamma),
         ("Hdelta/Hbeta", delta),
-        ("Hbeta VIRUS/Burrell all-high-S/N", hbeta_all),
-        ("Hbeta VIRUS/Burrell high-EW", hbeta_ew),
+        ("Hbeta morphology-only VIRUS/Burrell all-high-S/N", hbeta_all),
+        ("Hbeta morphology-only VIRUS/Burrell high-EW", hbeta_ew),
         ("overall LSF FWHM", overall_lsf),
     )
     for label, stats in central_rows:
