@@ -248,14 +248,27 @@ def _cube_wavelength(header, nplane):
         axis = int(wcs.wcs.spec)
         if axis < 0:
             axis = 2
-        pixels = np.ones((nplane, wcs.wcs.naxis), dtype=float)
-        pixels[:, axis] = np.arange(nplane, dtype=float) + 1.0
-        world = wcs.wcs_pix2world(pixels, 1)[:, axis]
-        unit = wcs.wcs.cunit[axis]
+        card_axis = axis + 1
+        crval_key = "CRVAL%d" % card_axis
+        crpix_key = "CRPIX%d" % card_axis
+        cunit_key = "CUNIT%d" % card_axis
+        cdelt_key = "CDELT%d" % card_axis
+        cd_key = "CD%d_%d" % (card_axis, card_axis)
+        if not all(key in header for key in (crval_key, crpix_key, cunit_key)):
+            raise ValueError("spectral WCS lacks explicit linear axis cards")
+        # The production writer emits a linear FITS spectral axis.  Reading
+        # these cards directly avoids a WCSLIB unit-normalization issue for
+        # CTYPE=WAVE/CUNIT=Angstrom, which can otherwise halve CDELT3.
+        delta = header.get(cd_key, header.get(cdelt_key))
+        if delta is None:
+            raise ValueError("spectral WCS lacks CDELT/CD diagonal")
+        native = (float(header[crval_key])
+                  + (np.arange(nplane, dtype=float) + 1.0
+                     - float(header[crpix_key])) * float(delta))
+        unit = u.Unit(str(header[cunit_key]))
         if unit is None or not unit.is_equivalent(u.AA):
             raise ValueError("spectral WCS unit is not convertible to Angstrom")
-        world = world * unit.to(u.AA)
-        wave = np.asarray(world, dtype=float)
+        wave = np.asarray(native * unit.to(u.AA), dtype=float)
     except Exception as exc:
         raise ValueError("could not evaluate spectral WCS") from exc
     if wave.size != nplane or not np.all(np.isfinite(wave)):
@@ -263,6 +276,16 @@ def _cube_wavelength(header, nplane):
     step = np.diff(wave)
     if step.size and (not np.allclose(step, np.median(step), rtol=1e-5, atol=1e-5)):
         raise ValueError("spectral WCS is not linear")
+    expected = np.asarray(validated_m101.DEF_WAVE, dtype=float)
+    if wave.size != expected.size or not np.allclose(
+            wave, expected, rtol=0.0, atol=1.0e-6):
+        raise ValueError(
+            "spectral WCS does not match the current-model DEF_WAVE grid: "
+            "got %d planes %.6f--%.6f A at %.6f A/pixel; expected %d planes "
+            "%.6f--%.6f A at %.6f A/pixel" % (
+                wave.size, wave[0], wave[-1], np.median(step),
+                expected.size, expected[0], expected[-1],
+                np.median(np.diff(expected))))
     return wave
 
 
@@ -463,7 +486,8 @@ def _line_map(sci, var, dq, wave, rest_center, half_width, unit_scale=SCI_SCALE)
     y = sci[cont_sel]
     v = var[cont_sel]
     good = fit_valid[cont_sel]
-    weight = np.where(good, 1.0 / np.maximum(v, np.finfo(float).tiny), 0.0)
+    weight = np.zeros_like(v, dtype=float)
+    np.divide(1.0, np.maximum(v, np.finfo(float).tiny), out=weight, where=good)
     s00 = np.sum(weight, axis=0)
     s01 = np.sum(weight * xc[:, None, None], axis=0)
     s11 = np.sum(weight * xc[:, None, None] ** 2, axis=0)
