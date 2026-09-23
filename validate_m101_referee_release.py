@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 import glob
 import json
 from pathlib import Path
+from time import perf_counter
 import warnings
 
 import matplotlib
@@ -109,6 +110,12 @@ def json_safe(value):
     if isinstance(value, Path):
         return str(value)
     return value
+
+
+def _timing(label, started):
+    elapsed = perf_counter() - float(started)
+    print("[timing] %-42s %.2f s" % (label, elapsed), flush=True)
+    return perf_counter()
 
 
 def reportable(value):
@@ -679,8 +686,7 @@ def _comparison_stats(virus, external, variance, ew, snr_min, min_ew=None):
     return result, good, ratio
 
 
-def _integrate_cube_filter(sci, dq, wave, sci_scale, filter_wave, response):
-    """Integrate the calibrated cube through one relative filter curve."""
+def _filter_integration_weights(wave, filter_wave, response):
     response = np.asarray(response, dtype=float)
     response_peak = float(np.max(response))
     if not np.isfinite(response_peak) or response_peak <= 0:
@@ -698,25 +704,48 @@ def _integrate_cube_filter(sci, dq, wave, sci_scale, filter_wave, response):
     response_integral = float(np.sum(weights))
     if not np.isfinite(response_integral) or response_integral <= 0:
         raise ValueError("filter response has no positive wavelength integral on cube grid")
+    return weights, response_peak, response_integral
 
-    image = np.zeros(sci.shape[1:], dtype=float)
-    support = np.zeros(sci.shape[1:], dtype=float)
-    for plane, weight in enumerate(weights):
-        if weight <= 0:
+
+def _integrate_cube_filters(sci, dq, wave, sci_scale, filter_curves):
+    """Integrate multiple filters in one cube pass, preserving each filter's result."""
+    prepared = []
+    for filter_wave, response in filter_curves:
+        weights, response_peak, response_integral = _filter_integration_weights(
+            wave, filter_wave, response)
+        prepared.append((weights, response_peak, response_integral))
+    images = [np.zeros(sci.shape[1:], dtype=float) for _ in prepared]
+    supports = [np.zeros(sci.shape[1:], dtype=float) for _ in prepared]
+    positive_planes = [weights > 0 for weights, _, _ in prepared]
+    for plane in range(wave.size):
+        active = [index for index, mask in enumerate(positive_planes) if mask[plane]]
+        if not active:
             continue
         values = sci[plane]
         valid = np.isfinite(values) & ((dq[plane] & DQ_INSUFFICIENT_SUPPORT) == 0)
-        image[valid] += values[valid] * weight * float(sci_scale)
-        support[valid] += weight
-    support_fraction = support / response_integral
-    image[support <= 0] = np.nan
-    return image, support_fraction, {
-        "response_normalization": "relative response divided by its maximum",
-        "response_peak_before_normalization": response_peak,
-        "response_integral_on_cube_grid_A": response_integral,
-        "cube_planes_with_positive_filter_weight": int(np.sum(weights > 0)),
-        "integration": "trapezoidal integral of SCI(lambda) times normalized response(lambda) over wavelength",
-    }
+        for index in active:
+            weight = prepared[index][0][plane]
+            images[index][valid] += values[valid] * weight * float(sci_scale)
+            supports[index][valid] += weight
+    results = []
+    for image, support, (weights, response_peak, response_integral) in zip(
+            images, supports, prepared):
+        support_fraction = support / response_integral
+        image[support <= 0] = np.nan
+        results.append((image, support_fraction, {
+            "response_normalization": "relative response divided by its maximum",
+            "response_peak_before_normalization": response_peak,
+            "response_integral_on_cube_grid_A": response_integral,
+            "cube_planes_with_positive_filter_weight": int(np.sum(weights > 0)),
+            "integration": "trapezoidal integral of SCI(lambda) times normalized response(lambda) over wavelength",
+        }))
+    return results
+
+
+def _integrate_cube_filter(sci, dq, wave, sci_scale, filter_wave, response):
+    """Integrate the calibrated cube through one relative filter curve."""
+    return _integrate_cube_filters(
+        sci, dq, wave, sci_scale, [(filter_wave, response)])[0]
 
 
 def _angular_separation_arcsec(ra, dec, center_ra, center_dec):
@@ -780,10 +809,92 @@ def _measure_fractional_aperture(image, wcs, shape, ra, dec, radius_arcsec,
     if support is not None:
         valid &= np.asarray(support[yy, xx], dtype=float) >= HB_APERTURE_SUPPORT_MIN
     supported_fraction = float(np.clip(np.sum(fractions[valid]) / total_fraction, 0.0, 1.0))
-    flux = float(np.sum(np.where(valid, image[yy, xx], 0.0) * fractions[valid]) * value_scale)
+    flux = float(np.sum(np.where(valid, image[yy, xx] * fractions, 0.0)) * value_scale)
     return {"flux": flux, "support_fraction": supported_fraction,
             "area_arcsec2": float(total_fraction * pixel_area),
             "total_fraction": total_fraction}
+
+
+def _measure_fractional_apertures_batch(image, wcs, shape, ras, decs,
+                                        radius_arcsec, pixel_area,
+                                        value_scale=1.0, support=None,
+                                        batch_size=32):
+    """Batch the exact subpixel/WCS aperture calculation for many centers."""
+    ras = np.asarray(ras, dtype=float).ravel()
+    decs = np.asarray(decs, dtype=float).ravel()
+    if ras.size != decs.size:
+        raise ValueError("aperture RA and Dec arrays have different lengths")
+    flux = np.full(ras.shape, np.nan, dtype=float)
+    support_fraction = np.zeros(ras.shape, dtype=float)
+    if ras.size == 0:
+        return flux, support_fraction
+    try:
+        x0, y0 = wcs.world_to_pixel_values(ras, decs)
+        scales = np.asarray(proj_plane_pixel_scales(wcs), dtype=float) * 3600.0
+    except Exception:
+        return flux, support_fraction
+    x0 = np.asarray(x0, dtype=float).ravel()
+    y0 = np.asarray(y0, dtype=float).ravel()
+    good_centers = (np.isfinite(ras) & np.isfinite(decs) & np.isfinite(x0) &
+                    np.isfinite(y0))
+    if (scales.size != 2 or not np.all(np.isfinite(scales)) or
+            np.any(scales <= 0) or not np.any(good_centers)):
+        return flux, support_fraction
+    half_x = int(np.ceil(float(radius_arcsec) / scales[0])) + 2
+    half_y = int(np.ceil(float(radius_arcsec) / scales[1])) + 2
+    local_x = np.arange(-half_x, half_x + 1, dtype=int)
+    local_y = np.arange(-half_y, half_y + 1, dtype=int)
+    offsets = (np.arange(HB_APERTURE_SUBPIXELS, dtype=float) + 0.5) / float(HB_APERTURE_SUBPIXELS) - 0.5
+    full_fraction = np.pi * float(radius_arcsec) ** 2 / float(abs(scales[0] * scales[1]))
+    for start in range(0, ras.size, int(batch_size)):
+        stop = min(start + int(batch_size), ras.size)
+        batch_good = good_centers[start:stop]
+        if not np.any(batch_good):
+            continue
+        batch_index = np.flatnonzero(batch_good)
+        batch_x0 = np.floor(x0[start:stop][batch_good]).astype(int)
+        batch_y0 = np.floor(y0[start:stop][batch_good]).astype(int)
+        pixel_x = batch_x0[:, None] + local_x[None, :]
+        pixel_y = batch_y0[:, None] + local_y[None, :]
+        pixel_valid = ((pixel_x[:, None, :] >= 0) &
+                       (pixel_x[:, None, :] < shape[1]) &
+                       (pixel_y[:, :, None] >= 0) &
+                       (pixel_y[:, :, None] < shape[0]))
+        sample_x = pixel_x[:, None, :, None, None] + offsets[None, None, None, :, None]
+        sample_y = pixel_y[:, :, None, None, None] + offsets[None, None, None, None, :]
+        sample_shape = (batch_index.size, local_y.size, local_x.size,
+                        HB_APERTURE_SUBPIXELS, HB_APERTURE_SUBPIXELS)
+        sample_x = np.broadcast_to(sample_x, sample_shape)
+        sample_y = np.broadcast_to(sample_y, sample_shape)
+        try:
+            sample_ra, sample_dec = wcs.pixel_to_world_values(
+                sample_x.ravel(), sample_y.ravel())
+        except Exception:
+            continue
+        sample_ra = np.asarray(sample_ra, dtype=float).reshape(sample_shape)
+        sample_dec = np.asarray(sample_dec, dtype=float).reshape(sample_shape)
+        center_ra = ras[start:stop][batch_good][:, None, None, None, None]
+        center_dec = decs[start:stop][batch_good][:, None, None, None, None]
+        separation = _angular_separation_arcsec(
+            sample_ra, sample_dec, center_ra, center_dec)
+        inside = ((separation <= float(radius_arcsec)) &
+                  pixel_valid[..., None, None])
+        fractions = np.mean(inside, axis=(3, 4))
+        safe_x = np.clip(pixel_x, 0, shape[1] - 1)
+        safe_y = np.clip(pixel_y, 0, shape[0] - 1)
+        values = image[safe_y[:, :, None], safe_x[:, None, :]]
+        valid = pixel_valid & np.isfinite(values)
+        if support is not None:
+            values_support = support[safe_y[:, :, None], safe_x[:, None, :]]
+            valid &= np.asarray(values_support, dtype=float) >= HB_APERTURE_SUPPORT_MIN
+        supported = np.sum(fractions * valid, axis=(1, 2))
+        batch_flux = (np.sum(fractions * np.where(valid, values, 0.0), axis=(1, 2))
+                      * float(value_scale))
+        absolute_index = start + batch_index
+        flux[absolute_index] = batch_flux
+        support_fraction[absolute_index] = np.clip(
+            supported / full_fraction, 0.0, 1.0)
+    return flux, support_fraction
 
 
 def _native_bs_grid_check(on, off, on_wcs, off_wcs):
@@ -805,34 +916,52 @@ def _blank_aperture_noise(bs_difference, on_wcs, off_wcs, radius_arcsec,
                           outer_radius_arcmin, on_image, off_image,
                           on_area, off_area):
     """Estimate 6-arcsec aperture noise from non-overlapping outer-sky apertures."""
+    started = perf_counter()
     scales = np.asarray(proj_plane_pixel_scales(on_wcs), dtype=float) * 3600.0
     step = max(1, int(np.ceil(HB_APERTURE_MIN_CENTER_SEPARATION_ARCSEC /
                               max(float(np.min(scales)), np.finfo(float).tiny))))
     radius_guard = float(radius_arcsec) / 60.0
+    grid_y, grid_x = np.mgrid[0:bs_difference.shape[0]:step,
+                               0:bs_difference.shape[1]:step]
+    grid_ra, grid_dec = on_wcs.pixel_to_world_values(
+        grid_x.astype(float), grid_y.astype(float))
+    field_radius = (_angular_separation_arcsec(
+        grid_ra, grid_dec, M101_RA_DEG, M101_DEC_DEG) / 60.0)
+    outer = field_radius >= float(outer_radius_arcmin) + radius_guard
+    ras = np.asarray(grid_ra[outer], dtype=float)
+    decs = np.asarray(grid_dec[outer], dtype=float)
+    on_flux, on_support = _measure_fractional_apertures_batch(
+        on_image, on_wcs, on_image.shape, ras, decs, radius_arcsec, on_area)
+    off_flux, off_support = _measure_fractional_apertures_batch(
+        off_image, off_wcs, off_image.shape, ras, decs, radius_arcsec, off_area)
+    _timing("Hbeta blank-aperture batch WCS integration", started)
+
+    # Keep the original deterministic raster order while avoiding the former
+    # O(N^2) scan over every previously accepted blank aperture.
+    selection_started = perf_counter()
     values = []
-    centers = []
-    for y in range(0, bs_difference.shape[0], step):
-        for x in range(0, bs_difference.shape[1], step):
-            ra, dec = on_wcs.pixel_to_world_values(float(x), float(y))
-            field_radius = float(_angular_separation_arcsec(ra, dec, M101_RA_DEG, M101_DEC_DEG)) / 60.0
-            if field_radius < float(outer_radius_arcmin) + radius_guard:
-                continue
-            if any(float(_angular_separation_arcsec(ra, dec, old_ra, old_dec)) <
-                   HB_APERTURE_MIN_CENTER_SEPARATION_ARCSEC
-                   for old_ra, old_dec in centers):
-                continue
-            measured_on = _measure_fractional_aperture(
-                on_image, on_wcs, on_image.shape, ra, dec, radius_arcsec,
-                on_area)
-            measured_off = _measure_fractional_aperture(
-                off_image, off_wcs, off_image.shape, ra, dec, radius_arcsec,
-                off_area)
-            if (measured_on is None or measured_off is None or
-                    min(measured_on["support_fraction"], measured_off["support_fraction"]) <
-                    HB_APERTURE_SUPPORT_MIN):
-                continue
-            values.append(float(measured_on["flux"] - measured_off["flux"]))
-            centers.append((float(ra), float(dec)))
+    occupied = {}
+    cell_size = float(HB_APERTURE_MIN_CENTER_SEPARATION_ARCSEC)
+    cos_dec = np.cos(np.deg2rad(M101_DEC_DEG))
+    plane_x = (ras - M101_RA_DEG) * cos_dec * 3600.0
+    plane_y = (decs - M101_DEC_DEG) * 3600.0
+    for index in range(ras.size):
+        if (not np.isfinite(on_flux[index]) or not np.isfinite(off_flux[index]) or
+                min(on_support[index], off_support[index]) < HB_APERTURE_SUPPORT_MIN):
+            continue
+        cell = (int(np.floor(plane_x[index] / cell_size)),
+                int(np.floor(plane_y[index] / cell_size)))
+        nearby = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                nearby.extend(occupied.get((cell[0] + dx, cell[1] + dy), ()))
+        if any(float(_angular_separation_arcsec(
+                ras[index], decs[index], old_ra, old_dec)) < cell_size
+               for old_ra, old_dec in nearby):
+            continue
+        occupied.setdefault(cell, []).append((float(ras[index]), float(decs[index])))
+        values.append(float(on_flux[index] - off_flux[index]))
+    _timing("Hbeta blank-aperture spatial selection", selection_started)
     values = np.asarray(values, dtype=float)
     if values.size < 8:
         raise ValueError("fewer than 8 complete blank 6-arcsec apertures for empirical noise")
@@ -847,6 +976,8 @@ def _blank_aperture_noise(bs_difference, on_wcs, off_wcs, radius_arcsec,
         "blank_aperture_median_flux": center,
         "robust_scatter": float(scatter),
         "center_separation_arcsec": HB_APERTURE_MIN_CENTER_SEPARATION_ARCSEC,
+        "grid_step_pixels": int(step),
+        "N_outer_grid_positions": int(ras.size),
     }
 
 
@@ -1094,10 +1225,13 @@ def _hbeta_filter_matched_validation(sci, dq, wave, sci_scale, virus_wcs,
                                      filter_paths, outer_radius_arcmin, output_dir):
     on_filter_path, on_filter_wave, on_response = _read_filter_curve(filter_paths["on"])
     off_filter_path, off_filter_wave, off_response = _read_filter_curve(filter_paths["off"])
-    virus_on, virus_on_support, on_integration = _integrate_cube_filter(
-        sci, dq, wave, sci_scale, on_filter_wave, on_response)
-    virus_off, virus_off_support, off_integration = _integrate_cube_filter(
-        sci, dq, wave, sci_scale, off_filter_wave, off_response)
+    filter_started = perf_counter()
+    filter_results = _integrate_cube_filters(
+        sci, dq, wave, sci_scale,
+        [(on_filter_wave, on_response), (off_filter_wave, off_response)])
+    (virus_on, virus_on_support, on_integration), \
+        (virus_off, virus_off_support, off_integration) = filter_results
+    _timing("Hbeta synthetic ON/OFF filter integrations", filter_started)
     _native_bs_grid_check(on_sky, off_sky, on_wcs, off_wcs)
     bs_difference = on_sky - off_sky
     detection_sigma = (HB_APERTURE_DETECTION_SMOOTH_ARCSEC / 2.354820045 /
@@ -1124,6 +1258,7 @@ def _hbeta_filter_matched_validation(sci, dq, wave, sci_scale, virus_wcs,
     selected_world = []
     support_pass = 0
     nonoverlap_count = 0
+    selection_started = perf_counter()
     for ra, dec, x, y in candidate_world:
         if any(float(_angular_separation_arcsec(ra, dec, old_ra, old_dec)) <
                HB_APERTURE_MIN_CENTER_SEPARATION_ARCSEC
@@ -1193,7 +1328,9 @@ def _hbeta_filter_matched_validation(sci, dq, wave, sci_scale, virus_wcs,
                             "N_valid_apertures": int(len(radius_rows_data)),
                             "comparisons": radius_comparisons,
                             "central_normalization_change": changes})
+    _timing("Hbeta source selection and radius stability", selection_started)
 
+    products_started = perf_counter()
     fields = ["region_id", "RA", "Dec", "aperture_radius_arcsec", "BS_ON", "BS_OFF",
               "BS_ON_MINUS_OFF", "VIRUS_ON", "VIRUS_OFF", "VIRUS_ON_MINUS_OFF",
               "R_ON", "R_OFF", "R_DIFF", "BS_ON_MINUS_OFF_SNR",
@@ -1207,6 +1344,7 @@ def _hbeta_filter_matched_validation(sci, dq, wave, sci_scale, virus_wcs,
     _plot_hbeta_filter_matched_fluxes(selected_rows, primary_comparisons, output_dir)
     _plot_hbeta_ratio_vs_surface_brightness(selected_rows, tertiles, output_dir)
     _plot_hbeta_aperture_radius_stability(radius_rows, output_dir)
+    _timing("Hbeta aperture CSV and figures", products_started)
     return {
         "status": "authoritative absolute-normalization diagnostic",
         "comparison_scope": "matched sky-coordinate native-BS/VIRUS apertures; ON and OFF are authoritative absolute-flux comparisons",
@@ -1928,6 +2066,8 @@ def main():
     args = parser.parse_args()
     if args.comparison_smoothing_fwhm < 0 or args.min_hbeta_ew < 0 or args.min_defect_area < 1:
         parser.error("smoothing, EW, and minimum defect area must be nonnegative/positive")
+    run_started = perf_counter()
+    stage_started = run_started
     output_dir = Path(args.output_dir).expanduser().resolve(); output_dir.mkdir(parents=True, exist_ok=True)
     arrays, headers, wave, celestial, pixel_scale, paths = _read_cube_products(args)
     arrays["_SCI_HEADER"] = headers["SCI"]
@@ -1935,6 +2075,7 @@ def main():
     sci_scale, sci_scale_provenance = _science_unit_scale(headers["SCI"])
     cube_validation["SCI_physical_scale"] = sci_scale
     cube_validation["SCI_physical_scale_provenance"] = sci_scale_provenance
+    stage_started = _timing("cube products read and validated", stage_started)
     cube_summary_path = _require_file(args.cube_summary, "cube summary")
     try:
         cube_summary = json.loads(cube_summary_path.read_text())
@@ -1989,6 +2130,7 @@ def main():
     line_products = {name: _line_map(arrays["SCI"], arrays["VAR"], arrays["DQ"], wave, rest, half,
                                      unit_scale=sci_scale)
                      for name, (rest, half) in LINES.items()}
+    stage_started = _timing("line products computed", stage_started)
     map_header = celestial.to_header()
     _write_line_products(output_dir, line_products, map_header)
     hb = _hbeta_validation(line_products["Hbeta_4861"]["flux"], line_products["Hbeta_4861"]["variance"],
@@ -2000,6 +2142,7 @@ def main():
         on_scale, off_scale, on_area, off_area,
         {"on": args.hb_on_filter, "off": args.hb_off_filter},
         args.outer_sky_radius_arcmin, output_dir)
+    stage_started = _timing("external Hbeta validation", stage_started)
     _write_image(output_dir / "hbeta_residual_map.fits", hb["residual"],
                  _map_header(map_header, "erg s-1 cm-2 arcsec-2", "Hbeta morphology residual"))
     _plot_hbeta(hb, map_header, output_dir)
@@ -2019,6 +2162,7 @@ def main():
                    "zero_flux_fraction_at_SNR_ge_5": float(np.mean(oii["flux"][oii_high] == 0)) if oii_high.any() else None,
                    "doublet_ratio_test": "not attempted; VIRUS does not resolve 3726/3729"}
     lsf = _lsf_summary(args.lsf_samples, wave, output_dir)
+    stage_started = _timing("Balmer, OIII, and LSF validation", stage_started)
     release_dq = np.asarray(arrays["DQ"], dtype=np.uint16).copy()
     oiii_planes = np.abs(wave - _line_center(LINES["OIII_5007"][0])) <= LINES["OIII_5007"][1]
     for plane in np.flatnonzero(oiii_planes):
@@ -2152,6 +2296,7 @@ def main():
                stats["robust_scatter"]))
     print("Final release FITS: %s" % release_path)
     print("Referee Markdown report: %s" % (output_dir / "referee_validation_summary.md"))
+    _timing("total validation", run_started)
 
 
 if __name__ == "__main__":
