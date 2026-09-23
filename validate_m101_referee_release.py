@@ -1056,6 +1056,16 @@ def _measure_filter_matched_apertures_batch(ras, decs, radius_arcsec,
     virus_off_flux, virus_off_support_fraction = _measure_fractional_apertures_batch(
         virus_off, virus_wcs, virus_off.shape, ras, decs, radius_arcsec,
         virus_area, value_scale=virus_area, support=virus_off_support)
+    return _assemble_filter_matched_aperture_rows(
+        ras, decs, radius_arcsec, bs_on_flux, bs_off_flux,
+        virus_on_flux, virus_off_flux, bs_on_support, bs_off_support,
+        virus_on_support_fraction, virus_off_support_fraction)
+
+
+def _assemble_filter_matched_aperture_rows(
+        ras, decs, radius_arcsec, bs_on_flux, bs_off_flux,
+        virus_on_flux, virus_off_flux, bs_on_support, bs_off_support,
+        virus_on_support_fraction, virus_off_support_fraction):
     rows = []
     aperture_area = float(np.pi * radius_arcsec ** 2)
     for index, (ra, dec) in enumerate(zip(ras, decs)):
@@ -1300,22 +1310,62 @@ def _hbeta_filter_matched_validation(sci, dq, wave, sci_scale, virus_wcs,
                      (peak_values == maximum_filter(peak_values, size=peak_size,
                                                     mode="constant", cval=-np.inf)))
     peak_y, peak_x = np.where(local_maximum)
-    order = np.lexsort((peak_x, peak_y, -peak_values[peak_y, peak_x])) if peak_y.size else []
     candidate_world = []
-    for index in order:
-        x, y = int(peak_x[index]), int(peak_y[index])
-        ra, dec = on_wcs.pixel_to_world_values(float(x), float(y))
-        candidate_world.append((float(ra), float(dec), x, y))
+    if peak_y.size:
+        order = np.lexsort((peak_x, peak_y, -peak_values[peak_y, peak_x]))
+        ordered_x = peak_x[order].astype(float)
+        ordered_y = peak_y[order].astype(float)
+        ordered_ra, ordered_dec = on_wcs.pixel_to_world_values(ordered_x, ordered_y)
+        candidate_world = [
+            (float(ra), float(dec), int(x), int(y))
+            for ra, dec, x, y in zip(ordered_ra, ordered_dec,
+                                     ordered_x, ordered_y)]
 
     blank_noise, noise_info = _blank_aperture_noise(
         bs_difference, on_wcs, off_wcs, HB_APERTURE_RADIUS_ARCSEC,
         outer_radius_arcmin, on_sky, off_sky, on_area, off_area)
     candidate_ras = np.asarray([row[0] for row in candidate_world], dtype=float)
     candidate_decs = np.asarray([row[1] for row in candidate_world], dtype=float)
-    candidate_measurements = _measure_filter_matched_apertures_batch(
-        candidate_ras, candidate_decs, HB_APERTURE_RADIUS_ARCSEC,
-        on_sky, off_sky, on_wcs, off_wcs, virus_on, virus_off, virus_wcs,
-        virus_on_support, virus_off_support, on_area, off_area, common_pixel_area)
+    candidate_started = perf_counter()
+    candidate_bs_on, candidate_bs_on_support = _measure_fractional_apertures_batch(
+        on_sky, on_wcs, on_sky.shape, candidate_ras, candidate_decs,
+        HB_APERTURE_RADIUS_ARCSEC, on_area)
+    candidate_bs_off, candidate_bs_off_support = _measure_fractional_apertures_batch(
+        off_sky, off_wcs, off_sky.shape, candidate_ras, candidate_decs,
+        HB_APERTURE_RADIUS_ARCSEC, off_area)
+    candidate_bs_snr = (candidate_bs_on - candidate_bs_off) / blank_noise
+    bs_eligible = (
+        np.isfinite(candidate_bs_on) & np.isfinite(candidate_bs_off) &
+        (candidate_bs_on_support >= HB_APERTURE_SUPPORT_MIN) &
+        (candidate_bs_off_support >= HB_APERTURE_SUPPORT_MIN) &
+        np.isfinite(candidate_bs_snr) &
+        (candidate_bs_snr >= HB_APERTURE_EXTERNAL_SNR_MIN))
+    _timing("Hbeta candidate BS aperture preselection", candidate_started)
+
+    candidate_measurements = [None] * len(candidate_world)
+    eligible_index = np.flatnonzero(bs_eligible)
+    virus_started = perf_counter()
+    if eligible_index.size:
+        eligible_ras = candidate_ras[eligible_index]
+        eligible_decs = candidate_decs[eligible_index]
+        candidate_virus_on, candidate_virus_on_support = _measure_fractional_apertures_batch(
+            virus_on, virus_wcs, virus_on.shape, eligible_ras, eligible_decs,
+            HB_APERTURE_RADIUS_ARCSEC, common_pixel_area,
+            value_scale=common_pixel_area, support=virus_on_support)
+        candidate_virus_off, candidate_virus_off_support = _measure_fractional_apertures_batch(
+            virus_off, virus_wcs, virus_off.shape, eligible_ras, eligible_decs,
+            HB_APERTURE_RADIUS_ARCSEC, common_pixel_area,
+            value_scale=common_pixel_area, support=virus_off_support)
+        eligible_rows = _assemble_filter_matched_aperture_rows(
+            eligible_ras, eligible_decs, HB_APERTURE_RADIUS_ARCSEC,
+            candidate_bs_on[eligible_index], candidate_bs_off[eligible_index],
+            candidate_virus_on, candidate_virus_off,
+            candidate_bs_on_support[eligible_index],
+            candidate_bs_off_support[eligible_index],
+            candidate_virus_on_support, candidate_virus_off_support)
+        for index, row in zip(eligible_index, eligible_rows):
+            candidate_measurements[int(index)] = row
+    _timing("Hbeta candidate VIRUS aperture measurements", virus_started)
     selected_rows = []
     selected_world = []
     support_pass = 0
@@ -1328,6 +1378,8 @@ def _hbeta_filter_matched_validation(sci, dq, wave, sci_scale, virus_wcs,
             continue
         nonoverlap_count += 1
         row = candidate_measurements[candidate_index]
+        if row is None:
+            continue
         if not row["support_ok"]:
             continue
         support_pass += 1
