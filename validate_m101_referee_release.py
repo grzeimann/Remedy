@@ -40,6 +40,7 @@ from reproject import reproject_interp
 from scipy.ndimage import gaussian_filter, label, find_objects
 
 import diagnose_m101_hierarchical as validated_m101
+from m101_calibration_utils import robust_location
 from m101_hardware_exclusions import HARDWARE_EXCLUSIONS, hardware_excluded
 
 
@@ -73,11 +74,15 @@ def finite_stats(values):
     values = values[np.isfinite(values)]
     if values.size == 0:
         return {"N": 0, "min": None, "p16": None, "median": None,
-                "p84": None, "max": None, "robust_scatter": None}
+                "robust_location": None, "p84": None, "max": None,
+                "robust_scatter": None}
     med = float(np.median(values))
+    with np.errstate(all="ignore"):
+        location = float(robust_location(values))
     scatter = 1.4826 * float(np.median(np.abs(values - med)))
     return {"N": int(values.size), "min": float(np.min(values)),
             "p16": float(np.percentile(values, 16)), "median": med,
+            "robust_location": location,
             "p84": float(np.percentile(values, 84)), "max": float(np.max(values)),
             "robust_scatter": float(scatter)}
 
@@ -797,17 +802,22 @@ def _hbeta_validation(virus, virus_var, virus_snr, ew, external, external_suppor
 
 def _plot_hbeta(hb, map_header, output_dir):
     fig, axes = plt.subplots(2, 2, figsize=(12, 9), constrained_layout=True)
+    all_stats = hb["absolute_flux_all_high_SN"]
+    ew_stats = hb["absolute_flux_high_EW"]
     images = [(hb["external_smoothed"], "External Hbeta SB"),
               (hb["virus_smoothed"], "VIRUS Hbeta"),
               (hb["residual"], "VIRUS - morphology-scaled external"),
-              (hb["arrays"]["all_ratio"], "VIRUS / external absolute ratio")]
+              (hb["arrays"]["all_ratio"],
+               "VIRUS / external ratio\nrobust location=%.4g; median=%.4g" %
+               (all_stats["robust_location"], all_stats["median"]))]
     for ax, (data, title) in zip(axes.flat, images):
         im = ax.imshow(data, origin="lower", cmap="magma" if "ratio" not in title else "coolwarm")
         ax.set_title(title); fig.colorbar(im, ax=ax, shrink=.8)
     fig.savefig(output_dir / "hbeta_external_vs_virus.png", dpi=160); plt.close(fig)
     fig, axes = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
-    for ax, mask, title in ((axes[0], hb["arrays"]["all_mask"], "All high-S/N Hbeta"),
-                            (axes[1], hb["arrays"]["ew_mask"], "High-EW Hbeta")):
+    for ax, mask, title, stats in (
+            (axes[0], hb["arrays"]["all_mask"], "All high-S/N Hbeta", all_stats),
+            (axes[1], hb["arrays"]["ew_mask"], "High-EW Hbeta", ew_stats)):
         x = hb["external_smoothed"][mask]; y = hb["virus_smoothed"][mask]
         ax.scatter(x, y, s=5, alpha=.35, rasterized=True)
         if x.size:
@@ -815,7 +825,9 @@ def _plot_hbeta(hb, map_header, output_dir):
             ax.plot(grid, grid, "k--", label="y=x")
             ax.fill_between(grid, .95 * grid, 1.05 * grid, color="gray", alpha=.2, label="+/-5%")
         ax.set_xlabel("Burrell Schmidt Hbeta flux SB"); ax.set_ylabel("VIRUS Hbeta SB")
-        ax.set_title(title); ax.legend(loc="best")
+        ax.set_title("%s\nrobust location=%.4g; median=%.4g" %
+                     (title, stats["robust_location"], stats["median"]))
+        ax.legend(loc="best")
     fig.savefig(output_dir / "hbeta_bright_region_flux_comparison.png", dpi=160); plt.close(fig)
 
 
@@ -830,8 +842,13 @@ def _plot_balmer(balmer, output_dir, args):
             args.caseb_hdelta_hbeta * 10 ** (-.4 * e * (k[1] - k[2])),
             "k-", label="Calzetti reddening locus")
     ax.plot(args.caseb_hgamma_hbeta, args.caseb_hdelta_hbeta, "r*", ms=12, label="intrinsic Case B")
+    gamma_stats = balmer["median_Hgamma_over_Hbeta"]
+    delta_stats = balmer["median_Hdelta_over_Hbeta"]
     ax.set_xlabel("Hgamma / Hbeta"); ax.set_ylabel("Hdelta / Hbeta"); ax.legend(loc="best")
-    ax.set_title("Balmer ratios: Case B and reddening")
+    ax.set_title(
+        "Balmer ratios: Case B and reddening\n"
+        "robust locations Hgamma/Hbeta=%.4g, Hdelta/Hbeta=%.4g" %
+        (gamma_stats["robust_location"], delta_stats["robust_location"]))
     fig.savefig(output_dir / "balmer_caseb_validation.png", dpi=160); plt.close(fig)
 
 
@@ -839,7 +856,12 @@ def _plot_oiii(oiii, output_dir, args):
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.5), constrained_layout=True)
     good = np.isfinite(oiii["ratio"])
     x = np.asarray(oiii["ratio"])[good]
+    stats = oiii["median_5007_over_4959"]
     axes[0].hist(x, bins=60, histtype="step", color="k")
+    axes[0].axvline(stats["robust_location"], color="tab:blue",
+                    label="robust location %.3f" % stats["robust_location"])
+    axes[0].axvline(stats["median"], color="tab:gray", linestyle="--",
+                    label="median %.3f" % stats["median"])
     axes[0].axvline(args.oiii_ratio, color="r", label="theory %.3f" % args.oiii_ratio)
     axes[0].set_xlabel("F5007 / F4959"); axes[0].legend()
     im = axes[1].imshow(oiii["residual_significance"], origin="lower", cmap="coolwarm", vmin=-8, vmax=8)
@@ -883,36 +905,58 @@ def _lsf_summary(path, wave, output_dir):
         values = fwhm[selected & np.isclose(ref, reference)]
         stats = finite_stats(values)
         rows.append({"reference_wavelength_A": float(reference), "N": stats["N"],
-                     "median_FWHM_A": stats["median"], "p16_FWHM_A": stats["p16"],
-                     "p84_FWHM_A": stats["p84"], "robust_scatter_A": stats["robust_scatter"],
-                     "resolving_power": float(reference / stats["median"])})
+                     "min_FWHM_A": stats["min"], "p16_FWHM_A": stats["p16"],
+                     "median_FWHM_A": stats["median"],
+                     "robust_location_FWHM_A": stats["robust_location"],
+                     "p84_FWHM_A": stats["p84"], "max_FWHM_A": stats["max"],
+                     "robust_scatter_A": stats["robust_scatter"],
+                     # Keep the existing release-table resolving power
+                     # definition unchanged; expose the robust counterpart
+                     # for validation plots and interpretation.
+                     "resolving_power": float(reference / stats["median"]),
+                     "robust_resolving_power": float(reference / stats["robust_location"])})
     _write_csv(output_dir / "m101_lsf_summary.csv", rows)
     anchors = np.array([row["reference_wavelength_A"] for row in rows], dtype=float)
     meds = np.array([row["median_FWHM_A"] for row in rows], dtype=float)
+    locations = np.array([row["robust_location_FWHM_A"] for row in rows], dtype=float)
     interp = np.full(wave.shape, np.nan, dtype=float)
+    median_interp = np.full(wave.shape, np.nan, dtype=float)
     if anchors.size >= 2:
         inside = (wave >= anchors.min()) & (wave <= anchors.max())
-        interp[inside] = np.interp(wave[inside], anchors, meds)
+        interp[inside] = np.interp(wave[inside], anchors, locations)
+        median_interp[inside] = np.interp(wave[inside], anchors, meds)
     elif anchors.size == 1:
-        interp[np.isclose(wave, anchors[0])] = meds[0]
+        interp[np.isclose(wave, anchors[0])] = locations[0]
+        median_interp[np.isclose(wave, anchors[0])] = meds[0]
     _write_csv(output_dir / "m101_lsf_interpolated.csv",
                ({"wavelength_A": float(w), "FWHM_A": float(f),
+                 "median_FWHM_A": float(m),
                  "resolving_power": float(w / f) if np.isfinite(f) else None}
-                for w, f in zip(wave, interp)),
-               ["wavelength_A", "FWHM_A", "resolving_power"])
+                for w, f, m in zip(wave, interp, median_interp)),
+               ["wavelength_A", "FWHM_A", "median_FWHM_A", "resolving_power"])
     fig, ax = plt.subplots(figsize=(8, 4.5), constrained_layout=True)
     if rows:
-        ax.errorbar(anchors, meds, yerr=np.vstack((meds - np.array([r["p16_FWHM_A"] for r in rows]),
-                                                    np.array([r["p84_FWHM_A"] for r in rows]) - meds)),
-                    fmt="o", label="usable, unblended samples")
-    ax.set_xlabel("Wavelength (A)"); ax.set_ylabel("LSF FWHM (A)"); ax.set_title("M101 instrumental LSF")
+        p16 = np.array([r["p16_FWHM_A"] for r in rows], dtype=float)
+        p84 = np.array([r["p84_FWHM_A"] for r in rows], dtype=float)
+        ax.errorbar(anchors, locations,
+                    yerr=np.vstack((np.maximum(0.0, locations - p16),
+                                    np.maximum(0.0, p84 - locations))),
+                    fmt="o", label="robust location; p16--p84")
+        ax.scatter(anchors, meds, marker="x", color="tab:gray",
+                   label="median")
+    ax.set_xlabel("Wavelength (A)"); ax.set_ylabel("LSF FWHM (A)")
+    ax.set_title("M101 instrumental LSF (robust-location FWHM)")
     ax.grid(alpha=.25); ax.legend(loc="best")
     fig.savefig(output_dir / "m101_lsf_summary.png", dpi=160); plt.close(fig)
+    overall = finite_stats(fwhm[selected]) if selected.any() else finite_stats([])
     return {"input": str(path), "usable_unblended_rows": int(selected.sum()),
             "excluded_usable_known_blend_rows": int((usable & ~not_blend).sum()),
             "by_reference_wavelength": rows,
-            "median_FWHM_A": float(np.median(fwhm[selected])) if selected.any() else None,
-            "range_FWHM_A": [float(np.min(fwhm[selected])), float(np.max(fwhm[selected]))] if selected.any() else [None, None]}
+            "overall_fwhm": overall,
+            "median_FWHM_A": overall["median"],
+            "robust_location_FWHM_A": overall["robust_location"],
+            "range_FWHM_A": [float(np.min(fwhm[selected])), float(np.max(fwhm[selected]))]
+            if selected.any() else [None, None]}
 
 
 def _write_release(path, arrays, sci_header, lsf_rows, info, oiii_mask, wave):
@@ -980,8 +1024,9 @@ def _plot_release_qa(arrays, lsf, output_dir):
     rows = lsf.get("by_reference_wavelength", [])
     if rows:
         axes[1, 1].plot([r["reference_wavelength_A"] for r in rows],
-                        [r["resolving_power"] for r in rows], "o-")
-    axes[1, 1].set_title("LSF resolving power"); axes[1, 1].set_xlabel("A")
+                        [r.get("robust_resolving_power", r["resolving_power"])
+                         for r in rows], "o-")
+    axes[1, 1].set_title("LSF resolving power (robust location)"); axes[1, 1].set_xlabel("A")
     fig.savefig(output_dir / "release_product_qa.png", dpi=160); plt.close(fig)
 
 
@@ -991,8 +1036,13 @@ def _markdown(summary):
     counts = summary["spectrum_accounting"]
     lsf = summary["lsf"]
     production = summary["production_cube_provenance"]
-    def val(obj, key="median"):
-        return obj.get(key) if isinstance(obj, dict) else obj
+    hb_all = hb["absolute_flux_all_high_SN"]
+    hb_ew = hb["absolute_flux_high_EW"]
+    hg = balmer["median_Hgamma_over_Hbeta"]
+    hd = balmer["median_Hdelta_over_Hbeta"]
+    ebv_diff = balmer["E_BV_gamma_minus_delta"]
+    oiii_ratio = oiii["median_5007_over_4959"]
+    overall_lsf = lsf["overall_fwhm"]
     lines = ["# M101 referee validation and public release", "",
              "This report is downstream validation and packaging of the accepted current-model production cube. No calibration was refit and no production SCI voxel was changed.", "",
              "## Production calibration provenance", "",
@@ -1012,28 +1062,30 @@ def _markdown(summary):
              (len(hb["coherent_regions"]), hb["global_robust_through_zero_morphology_scale"]),
              "- Hbeta candidates are flagged for inspection only; this script does not mask or interpolate Hbeta.", "",
              "## Independent Hbeta imaging comparison", "",
-             "- All high-S/N samples: N=%d, median VIRUS/external=%s, p16/p84=%s/%s, robust scatter=%s." %
-             (hb["absolute_flux_all_high_SN"]["mask_count"], val(hb["absolute_flux_all_high_SN"]),
-              hb["absolute_flux_all_high_SN"]["p16"], hb["absolute_flux_all_high_SN"]["p84"],
-              hb["absolute_flux_all_high_SN"]["robust_scatter"]),
-             "- High-EW subset (EW >= %s A): N=%d, median=%s, p16/p84=%s/%s, robust scatter=%s." %
-             (summary["configuration"]["min_hbeta_ew"], hb["absolute_flux_high_EW"]["mask_count"],
-              val(hb["absolute_flux_high_EW"]), hb["absolute_flux_high_EW"]["p16"],
-              hb["absolute_flux_high_EW"]["p84"], hb["absolute_flux_high_EW"]["robust_scatter"]),
+             "- All high-S/N samples: N=%d, robust location VIRUS/external=%s, median=%s, p16/p84=%s/%s, robust scatter=%s." %
+             (hb_all["mask_count"], hb_all["robust_location"], hb_all["median"],
+              hb_all["p16"], hb_all["p84"], hb_all["robust_scatter"]),
+             "- High-EW subset (EW >= %s A): N=%d, robust location=%s, median=%s, p16/p84=%s/%s, robust scatter=%s." %
+             (summary["configuration"]["min_hbeta_ew"], hb_ew["mask_count"],
+              hb_ew["robust_location"], hb_ew["median"], hb_ew["p16"],
+              hb_ew["p84"], hb_ew["robust_scatter"]),
              "- Raw external narrowband excess is HB_ON - HB_OFF and is not claimed to be exactly absorption-corrected nebular Hbeta.", "",
              "## Balmer decrement validation", "",
-             "- High-quality samples: N=%d; median Hgamma/Hbeta=%s; median Hdelta/Hbeta=%s." %
-             (balmer["N_high_quality_samples"], val(balmer["median_Hgamma_over_Hbeta"]),
-              val(balmer["median_Hdelta_over_Hbeta"])),
-             "- E(B-V)_gamma - E(B-V)_delta: median=%s, robust scatter=%s; 1-sigma fraction=%s; 2-sigma fraction=%s." %
-             (val(balmer["E_BV_gamma_minus_delta"]), balmer["E_BV_gamma_minus_delta"]["robust_scatter"],
+             "- High-quality samples: N=%d; robust locations Hgamma/Hbeta=%s and Hdelta/Hbeta=%s; medians=%s and %s." %
+             (balmer["N_high_quality_samples"], hg["robust_location"], hd["robust_location"],
+              hg["median"], hd["median"]),
+             "- E(B-V)_gamma - E(B-V)_delta: robust location=%s, median=%s, robust scatter=%s; 1-sigma fraction=%s; 2-sigma fraction=%s." %
+             (ebv_diff["robust_location"], ebv_diff["median"], ebv_diff["robust_scatter"],
               balmer["fraction_consistent_1sigma"], balmer["fraction_consistent_2sigma"]),
+             "- E(B-V)_gamma and E(B-V)_delta robust locations=%s and %s; medians=%s and %s." %
+             (balmer["E_BV_gamma"]["robust_location"], balmer["E_BV_delta"]["robust_location"],
+              balmer["E_BV_gamma"]["median"], balmer["E_BV_delta"]["median"]),
              "- Case B ratios: Hgamma/Hbeta=%.4f, Hdelta/Hbeta=%.4f; attenuation: Calzetti et al. 2000, Rv=%.3f." %
              (balmer["caseB_intrinsic_ratios"]["Hgamma_Hbeta"], balmer["caseB_intrinsic_ratios"]["Hdelta_Hbeta"], balmer["calzetti_Rv"]), "",
              "## [O III] 5007 artifact validation", "",
-             "- High-S/N 4959 samples: N=%d; median 5007/4959=%s; robust scatter=%s; adopted ratio=%.4f." %
-             (oiii["N_high_SN_4959_samples"], val(oiii["median_5007_over_4959"]),
-              oiii["median_5007_over_4959"]["robust_scatter"], oiii["adopted_branching_ratio"]),
+             "- High-S/N 4959 samples: N=%d; robust location 5007/4959=%s; median=%s; robust scatter=%s; adopted ratio=%.4f." %
+             (oiii["N_high_SN_4959_samples"], oiii_ratio["robust_location"],
+              oiii_ratio["median"], oiii_ratio["robust_scatter"], oiii["adopted_branching_ratio"]),
              "- Status: %s; DQ bit-5 voxels assigned: %d." % (oiii["status"], oiii["DQ_voxels_assigned"]), "",
              "## Public cube ancillary products", "",
              "- Release FITS: `%s`. Extensions: PRIMARY/SCI, VAR, ERROR, DQ, COVERAGE, NCONTRIB, LSF, RELEASE_INFO." % summary["release_cube"],
@@ -1044,8 +1096,9 @@ def _markdown(summary):
              (cube["VAR_nonnegative_finite"], cube["ERROR_matches_sqrt_VAR"],
               cube["COVERAGE_in_expected_0_1_range"], cube["DQ_bit0_semantics_agree"]), "",
              "## Instrumental LSF", "",
-             "- Usable unblended sample rows: %d; median FWHM=%s A; range=%s A." %
-             (lsf["usable_unblended_rows"], lsf["median_FWHM_A"], lsf["range_FWHM_A"]),
+             "- Usable unblended sample rows: %d; robust-location FWHM=%s A; median=%s A; range=%s A." %
+             (lsf["usable_unblended_rows"], overall_lsf["robust_location"],
+              overall_lsf["median"], lsf["range_FWHM_A"]),
              "- LSF files: `m101_lsf_summary.csv`, `m101_lsf_interpolated.csv`, `m101_lsf_summary.png`.", "",
              "## Input/retained spectrum accounting", "",
              "- H5=%d; input fiber spectra=%d; hardware excluded=%d; historical=%d; persistent=%d; retained=%d; shots=%d; amplifier observations=%d." %
@@ -1252,28 +1305,50 @@ def main():
     (output_dir / "referee_validation_summary.json").write_text(json.dumps(summary, indent=2, allow_nan=False))
     markdown = _markdown(summary)
     (output_dir / "referee_validation_summary.md").write_text(markdown)
-    print("Hbeta: external comparison N=%d; median ratio=%s; robust scatter=%s; high-EW ratio=%s; coherent deficit regions=%d" %
-          (summary["hbeta_validation"]["absolute_flux_all_high_SN"]["mask_count"],
-           summary["hbeta_validation"]["absolute_flux_all_high_SN"]["median"],
-           summary["hbeta_validation"]["absolute_flux_all_high_SN"]["robust_scatter"],
-           summary["hbeta_validation"]["absolute_flux_high_EW"]["median"],
-           len(summary["hbeta_validation"]["coherent_regions"])))
-    print("Balmer: N=%d; medians Hgamma/Hbeta=%s Hdelta/Hbeta=%s; median dE(B-V)=%s; robust scatter=%s" %
+    hbeta_all = summary["hbeta_validation"]["absolute_flux_all_high_SN"]
+    hbeta_ew = summary["hbeta_validation"]["absolute_flux_high_EW"]
+    gamma = summary["balmer_validation"]["median_Hgamma_over_Hbeta"]
+    delta = summary["balmer_validation"]["median_Hdelta_over_Hbeta"]
+    ebv_difference = summary["balmer_validation"]["E_BV_gamma_minus_delta"]
+    oiii_ratio = summary["oiii_validation"]["median_5007_over_4959"]
+    overall_lsf = summary["lsf"]["overall_fwhm"]
+    print("Hbeta: N=%d; robust location=%s; median=%s; robust scatter=%s; "
+          "high-EW robust location=%s; high-EW median=%s; coherent regions=%d" %
+          (hbeta_all["mask_count"], hbeta_all["robust_location"], hbeta_all["median"],
+           hbeta_all["robust_scatter"], hbeta_ew["robust_location"],
+           hbeta_ew["median"], len(summary["hbeta_validation"]["coherent_regions"])))
+    print("Balmer: N=%d; robust locations Hgamma/Hbeta=%s Hdelta/Hbeta=%s; "
+          "medians=%s/%s; robust dE(B-V)=%s; median=%s; robust scatter=%s" %
           (summary["balmer_validation"]["N_high_quality_samples"],
-           summary["balmer_validation"]["median_Hgamma_over_Hbeta"]["median"],
-           summary["balmer_validation"]["median_Hdelta_over_Hbeta"]["median"],
-           summary["balmer_validation"]["E_BV_gamma_minus_delta"]["median"],
-           summary["balmer_validation"]["E_BV_gamma_minus_delta"]["robust_scatter"]))
-    print("OIII: N=%d; median ratio=%s; robust scatter=%s; coherent regions=%d; DQ bit-5 voxels=%d" %
+           gamma["robust_location"], delta["robust_location"], gamma["median"],
+           delta["median"], ebv_difference["robust_location"], ebv_difference["median"],
+           ebv_difference["robust_scatter"]))
+    print("OIII: N=%d; robust location ratio=%s; median=%s; robust scatter=%s; "
+          "coherent regions=%d; DQ bit-5 voxels=%d" %
           (summary["oiii_validation"]["N_high_SN_4959_samples"],
-           summary["oiii_validation"]["median_5007_over_4959"]["median"],
-           summary["oiii_validation"]["median_5007_over_4959"]["robust_scatter"],
-           len(summary["oiii_validation"]["coherent_regions"]), summary["release_dq_bit5_voxels"]))
-    print("Release: dimensions=%s; input=%d; retained=%d; shots=%d; valid SCI=%d; finite VAR fraction=%s; LSF median/range=%s/%s A" %
+           oiii_ratio["robust_location"], oiii_ratio["median"],
+           oiii_ratio["robust_scatter"], len(summary["oiii_validation"]["coherent_regions"]),
+           summary["release_dq_bit5_voxels"]))
+    print("Release: dimensions=%s; input=%d; retained=%d; shots=%d; valid SCI=%d; "
+          "finite VAR fraction=%s; LSF robust location/median/range=%s/%s/%s A" %
           (summary["cube_validation"]["cube_dimensions"], summary["spectrum_accounting"]["N_input_fiber_spectra"],
            summary["spectrum_accounting"]["N_retained_fiber_spectra"], summary["spectrum_accounting"]["N_exposures_shots"],
            summary["cube_validation"]["valid_SCI_voxels"], summary["cube_validation"]["finite_VAR_fraction"],
-           summary["lsf"]["median_FWHM_A"], summary["lsf"]["range_FWHM_A"]))
+           overall_lsf["robust_location"], overall_lsf["median"], summary["lsf"]["range_FWHM_A"]))
+    print("Central-value summary")
+    print("quantity\tN\told median\tnew robust_location\trobust_scatter")
+    central_rows = (
+        ("OIII 5007/4959", oiii_ratio),
+        ("Hgamma/Hbeta", gamma),
+        ("Hdelta/Hbeta", delta),
+        ("Hbeta VIRUS/Burrell all-high-S/N", hbeta_all),
+        ("Hbeta VIRUS/Burrell high-EW", hbeta_ew),
+        ("overall LSF FWHM", overall_lsf),
+    )
+    for label, stats in central_rows:
+        print("%s\t%s\t%s\t%s\t%s" %
+              (label, stats["N"], stats["median"], stats["robust_location"],
+               stats["robust_scatter"]))
     print("Final release FITS: %s" % release_path)
     print("Referee Markdown report: %s" % (output_dir / "referee_validation_summary.md"))
 
