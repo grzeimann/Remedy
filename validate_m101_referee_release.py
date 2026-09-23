@@ -37,7 +37,7 @@ from astropy.table import Table
 from astropy.wcs import WCS
 from astropy.wcs.utils import proj_plane_pixel_scales
 from reproject import reproject_interp
-from scipy.ndimage import gaussian_filter, label, find_objects
+from scipy.ndimage import gaussian_filter, label, find_objects, maximum_filter
 
 import diagnose_m101_hierarchical as validated_m101
 from m101_calibration_utils import robust_location
@@ -54,6 +54,11 @@ SCI_SCALE = 1e-17
 BS_ON_ZEROPOINT = 7.65e-18
 BS_OFF_ZEROPOINT = 7.91e-18
 BS_ABSOLUTE_CALIBRATION_FRACTION = 0.05
+HB_APERTURE_RADIUS_ARCSEC = 6.0
+HB_APERTURE_CHECK_RADII_ARCSEC = (4.0, 8.0)
+HB_APERTURE_EXTERNAL_SNR_MIN = 10.0
+HB_APERTURE_SUPPORT_MIN = 0.80
+HB_APERTURE_MATERIAL_FRACTION = 0.05
 DQ_INSUFFICIENT_SUPPORT = np.uint16(1 << 0)
 DQ_VAR_INCOMPLETE = np.uint16(1 << 1)
 DQ_OIII5007_VALIDATION = np.uint16(1 << 5)
@@ -122,6 +127,15 @@ def _require_file(path, label):
     return path
 
 
+def _wcs_header_for_astropy(header):
+    """Use modern WCS spelling on a temporary header copy only."""
+    result = header.copy()
+    if "RADECSYS" in result and "RADESYSa" not in result:
+        result["RADESYSa"] = result["RADECSYS"]
+        del result["RADECSYS"]
+    return result
+
+
 def _file_identity(path):
     path = Path(path).resolve()
     stat = path.stat()
@@ -185,7 +199,7 @@ def _read_image_hdu(path, label, require_celestial=True):
         data = np.asarray(selected.data, dtype=float).copy()
         header = selected.header.copy()
     try:
-        wcs = WCS(header).celestial
+        wcs = WCS(_wcs_header_for_astropy(header)).celestial
     except Exception as exc:
         raise ValueError("could not construct celestial WCS for %s" % path) from exc
     if require_celestial and not wcs.has_celestial:
@@ -223,7 +237,7 @@ def _image_unit_decision(header, mode, label, allow_adu=True):
                      (label, bunit))
 
 
-def _read_filter_summary(path):
+def _read_filter_curve(path):
     path = _require_file(path, "filter curve")
     try:
         table = Table.read(path, format="ascii")
@@ -236,20 +250,35 @@ def _read_filter_summary(path):
         response = np.asarray(table[response_name], dtype=float)
     except Exception as exc:
         raise ValueError("could not read filter %s: %s" % (path, exc)) from exc
-    good = np.isfinite(wave) & np.isfinite(response) & (response > 0)
+    good = np.isfinite(wave) & np.isfinite(response)
     if not np.any(good):
         raise ValueError("filter has no positive finite response: %s" % path)
-    wave, response = wave[good], response[good]
+    wave, response = wave[good], np.maximum(response[good], 0.0)
+    order = np.argsort(wave, kind="mergesort")
+    wave, response = wave[order], response[order]
+    unique_wave, inverse, counts = np.unique(wave, return_inverse=True,
+                                              return_counts=True)
+    if unique_wave.size != wave.size:
+        response = (np.bincount(inverse, weights=response)
+                    / counts.astype(float))
+        wave = unique_wave
+    if not np.any(response > 0):
+        raise ValueError("filter has no positive finite response: %s" % path)
+    return path, wave, response
+
+
+def _read_filter_summary(path):
+    path, wave, response = _read_filter_curve(path)
     integral = float(np.trapz(response, wave))
     center = float(np.trapz(wave * response, wave) / integral)
-    return {"path": str(path), "positive_samples": int(good.sum()),
+    return {"path": str(path), "positive_samples": int(np.sum(response > 0)),
             "response_weighted_center_A": center,
             "equivalent_width_A": integral / float(np.max(response))}
 
 
 def _cube_wavelength(header, nplane):
     try:
-        wcs = WCS(header)
+        wcs = WCS(_wcs_header_for_astropy(header))
         axis = int(wcs.wcs.spec)
         if axis < 0:
             axis = 2
@@ -317,7 +346,7 @@ def _read_cube_products(args):
                          dimension_checks)
     header = headers["SCI"]
     wave = _cube_wavelength(header, shape[0])
-    celestial = WCS(header).celestial
+    celestial = WCS(_wcs_header_for_astropy(header)).celestial
     scales = np.asarray(proj_plane_pixel_scales(celestial), dtype=float) * 3600.0
     if not np.all(np.isfinite(scales)) or np.any(scales <= 0):
         raise ValueError("cube spatial WCS has no positive pixel scale")
@@ -642,6 +671,353 @@ def _comparison_stats(virus, external, variance, ew, snr_min, min_ew=None):
     return result, good, ratio
 
 
+def _integrate_cube_filter(sci, dq, wave, sci_scale, filter_wave, response):
+    """Integrate the calibrated cube through one relative filter curve."""
+    response = np.asarray(response, dtype=float)
+    response_peak = float(np.max(response))
+    if not np.isfinite(response_peak) or response_peak <= 0:
+        raise ValueError("filter response has no positive finite peak")
+    response_norm = response / response_peak
+    sampled = np.interp(wave, filter_wave, response_norm, left=0.0, right=0.0)
+    if not np.any(sampled > 0):
+        raise ValueError("filter curve has no overlap with the VIRUS wavelength grid")
+    trapezoid = np.zeros(wave.shape, dtype=float)
+    if wave.size > 1:
+        step = np.diff(wave)
+        trapezoid[:-1] += .5 * step
+        trapezoid[1:] += .5 * step
+    weights = trapezoid * sampled
+    response_integral = float(np.sum(weights))
+    if not np.isfinite(response_integral) or response_integral <= 0:
+        raise ValueError("filter response has no positive wavelength integral on cube grid")
+
+    image = np.zeros(sci.shape[1:], dtype=float)
+    support = np.zeros(sci.shape[1:], dtype=float)
+    for plane, weight in enumerate(weights):
+        if weight <= 0:
+            continue
+        values = sci[plane]
+        valid = np.isfinite(values) & ((dq[plane] & DQ_INSUFFICIENT_SUPPORT) == 0)
+        image[valid] += values[valid] * weight * float(sci_scale)
+        support[valid] += weight
+    support_fraction = support / response_integral
+    image[support <= 0] = np.nan
+    return image, support_fraction, {
+        "response_normalization": "relative response divided by its maximum",
+        "response_peak_before_normalization": response_peak,
+        "response_integral_on_cube_grid_A": response_integral,
+        "cube_planes_with_positive_filter_weight": int(np.sum(weights > 0)),
+        "integration": "trapezoidal integral of SCI(lambda) times normalized response(lambda) over wavelength",
+    }
+
+
+def _outer_sky_noise(data, support, wcs, radius_arcmin, method=None):
+    yy, xx = np.indices(data.shape, dtype=float)
+    try:
+        ra, dec = wcs.pixel_to_world_values(xx, yy)
+    except Exception as exc:
+        raise ValueError("could not evaluate common-grid WCS for external noise") from exc
+    radius = np.hypot((ra - M101_RA_DEG) * np.cos(np.deg2rad(M101_DEC_DEG)),
+                      dec - M101_DEC_DEG) * 60.0
+    outer = ((radius >= float(radius_arcmin)) & np.asarray(support, dtype=bool)
+             & np.isfinite(data))
+    values = np.asarray(data[outer], dtype=float)
+    if values.size < 100:
+        raise ValueError("fewer than 100 supported outer-sky pixels for external noise")
+    center = float(np.median(values))
+    scatter = 1.4826 * float(np.median(np.abs(values - center)))
+    if not np.isfinite(scatter) or scatter <= 0:
+        raise ValueError("outer-sky external noise estimate is not positive")
+    return scatter, {
+        "method": (method or
+                    "1.4826 times the median absolute deviation of sky-subtracted, reprojected BS ON-OFF outer-sky pixels"),
+        "radius_arcmin": float(radius_arcmin),
+        "N_outer_supported_pixels": int(values.size),
+        "outer_median": center,
+        "robust_scatter": scatter,
+    }
+
+
+def _external_hbeta_noise(common_data, common_support, common_wcs,
+                          native_on, native_off, native_on_wcs, native_off_wcs,
+                          on_area, off_area, radius_arcmin):
+    try:
+        return _outer_sky_noise(common_data, common_support, common_wcs,
+                                radius_arcmin)
+    except ValueError as common_error:
+        on_noise, on_info = _outer_sky_noise(
+            native_on, np.isfinite(native_on), native_on_wcs, radius_arcmin,
+            "1.4826 times the median absolute deviation of native sky-subtracted BS ON outer-sky pixels")
+        off_noise, off_info = _outer_sky_noise(
+            native_off, np.isfinite(native_off), native_off_wcs, radius_arcmin,
+            "1.4826 times the median absolute deviation of native sky-subtracted BS OFF outer-sky pixels")
+        on_sb_noise = on_noise / float(on_area)
+        off_sb_noise = off_noise / float(off_area)
+        combined = float(np.hypot(on_sb_noise, off_sb_noise))
+        if not np.isfinite(combined) or combined <= 0:
+            raise ValueError("native outer-sky external noise estimate is not positive") from common_error
+        return combined, {
+            "method": "quadrature of 1.4826 times the native sky-subtracted BS ON and OFF outer-sky MAD scatters, each divided by its native pixel area",
+            "fallback_reason": str(common_error),
+            "on": on_info,
+            "off": off_info,
+            "on_surface_brightness_noise": float(on_sb_noise),
+            "off_surface_brightness_noise": float(off_sb_noise),
+            "combined_surface_brightness_noise": combined,
+            "radius_arcmin": float(radius_arcmin),
+        }
+
+
+def _circular_offsets(radius_pixels):
+    half = int(np.ceil(float(radius_pixels)))
+    yy, xx = np.mgrid[-half:half + 1, -half:half + 1]
+    keep = (xx ** 2 + yy ** 2) <= float(radius_pixels) ** 2
+    return yy[keep].astype(int), xx[keep].astype(int)
+
+
+def _aperture_indices(y, x, offsets, shape):
+    dy, dx = offsets
+    yy = y + dy
+    xx = x + dx
+    if (np.any(yy < 0) or np.any(yy >= shape[0]) or
+            np.any(xx < 0) or np.any(xx >= shape[1])):
+        return None
+    return yy, xx
+
+
+def _measure_hbeta_apertures(centers, radius_arcsec, common_pixel_scale,
+                             common_pixel_area, bs_on, bs_off, bs_support,
+                             virus_on, virus_off, virus_on_support,
+                             virus_off_support, hb_line):
+    radius_pixels = float(radius_arcsec) / float(common_pixel_scale)
+    offsets = _circular_offsets(radius_pixels)
+    bs_valid = (np.isfinite(bs_on) & np.isfinite(bs_off)
+                & (bs_support >= HB_APERTURE_SUPPORT_MIN))
+    virus_valid = (np.isfinite(virus_on) & np.isfinite(virus_off)
+                   & (virus_on_support >= HB_APERTURE_SUPPORT_MIN)
+                   & (virus_off_support >= HB_APERTURE_SUPPORT_MIN))
+    line_valid = np.isfinite(hb_line)
+    rows = []
+    for y, x in centers:
+        indices = _aperture_indices(int(y), int(x), offsets, bs_on.shape)
+        if indices is None:
+            continue
+        yy, xx = indices
+        bs_fraction = float(np.mean(bs_valid[yy, xx]))
+        virus_fraction = float(np.mean(virus_valid[yy, xx]))
+        line_fraction = float(np.mean(line_valid[yy, xx]))
+        common = bs_valid[yy, xx] & virus_valid[yy, xx] & line_valid[yy, xx]
+        common_fraction = float(np.mean(common))
+        if min(bs_fraction, virus_fraction, line_fraction, common_fraction) < HB_APERTURE_SUPPORT_MIN:
+            continue
+        area = float(common.sum()) * float(common_pixel_area)
+        if area <= 0:
+            continue
+        def integrate(image):
+            return float(np.sum(image[yy[common], xx[common]]) * common_pixel_area)
+        rows.append({
+            "x_pixel": int(x), "y_pixel": int(y),
+            "BS_ON": integrate(bs_on), "VIRUS_ON": integrate(virus_on),
+            "BS_OFF": integrate(bs_off), "VIRUS_OFF": integrate(virus_off),
+            "BS_ON_MINUS_OFF": integrate(bs_on - bs_off),
+            "VIRUS_ON_MINUS_OFF": integrate(virus_on - virus_off),
+            "VIRUS_HBETA_LINE": integrate(hb_line),
+            "aperture_area_arcsec2": float(offsets[0].size * common_pixel_area),
+            "supported_area_arcsec2": area,
+            "BS_support_fraction": bs_fraction,
+            "VIRUS_support_fraction": virus_fraction,
+            "Hbeta_line_support_fraction": line_fraction,
+            "common_support_fraction": common_fraction,
+        })
+    return rows
+
+
+def _hbeta_aperture_comparisons(rows):
+    definitions = (
+        ("VIRUS_ON_over_BS_ON", "VIRUS_ON / BS_ON", "VIRUS_ON", "BS_ON"),
+        ("VIRUS_OFF_over_BS_OFF", "VIRUS_OFF / BS_OFF", "VIRUS_OFF", "BS_OFF"),
+        ("VIRUS_ON_MINUS_OFF_over_BS_ON_MINUS_OFF", "VIRUS_ON_MINUS_OFF / BS_ON_MINUS_OFF",
+         "VIRUS_ON_MINUS_OFF", "BS_ON_MINUS_OFF"),
+        ("VIRUS_HBETA_LINE_over_BS_ON_MINUS_OFF", "VIRUS_HBETA_LINE / BS_ON_MINUS_OFF",
+         "VIRUS_HBETA_LINE", "BS_ON_MINUS_OFF"),
+    )
+    result = {}
+    for key, label, numerator_name, denominator_name in definitions:
+        numerator = np.asarray([row[numerator_name] for row in rows], dtype=float)
+        denominator = np.asarray([row[denominator_name] for row in rows], dtype=float)
+        finite = np.isfinite(numerator) & np.isfinite(denominator) & (denominator > 0)
+        ratio = np.full(numerator.shape, np.nan, dtype=float)
+        ratio[finite] = numerator[finite] / denominator[finite]
+        stats = finite_stats(ratio)
+        slope, slope_keep = _robust_through_zero_scale(denominator, numerator)
+        result[key] = {
+            "label": label,
+            **stats,
+            "robust_through_zero_slope": float(slope) if np.isfinite(slope) else None,
+            "slope_fit_N": int(slope_keep.sum()),
+        }
+    return result
+
+
+def _hbeta_surface_brightness_bins(rows):
+    if not rows:
+        return [{"quantile_bin": i, "surface_brightness_lower": None,
+                 "surface_brightness_upper": None, "N": 0, "ratios": {}}
+                for i in range(1, 5)]
+    surface = np.asarray([row["BS_ON_MINUS_OFF"] / row["aperture_area_arcsec2"]
+                          for row in rows], dtype=float)
+    order = np.argsort(surface, kind="mergesort")
+    bins = []
+    for index, ranks in enumerate(np.array_split(np.arange(order.size), 4), start=1):
+        if ranks.size == 0:
+            bins.append({"quantile_bin": index,
+                         "surface_brightness_lower": None,
+                         "surface_brightness_upper": None,
+                         "N": 0, "ratios": {}})
+            continue
+        selected = order[ranks]
+        selected_rows = [rows[int(i)] for i in selected]
+        selected_surface = surface[selected]
+        bins.append({
+            "quantile_bin": index,
+            "surface_brightness_lower": float(np.min(selected_surface)),
+            "surface_brightness_upper": float(np.max(selected_surface)),
+            "N": int(selected.size),
+            "ratios": _hbeta_aperture_comparisons(selected_rows),
+        })
+    return bins
+
+
+def _hbeta_aperture_validation(sci, dq, wave, sci_scale, celestial,
+                               common_pixel_scale, common_pixel_area,
+                               on_target, off_target, on_fp, off_fp,
+                               on_scale, off_scale, on_area, off_area,
+                               hb_line, filter_paths, outer_radius_arcmin,
+                               native_on_sky, native_off_sky,
+                               native_on_wcs, native_off_wcs):
+    on_filter_path, on_filter_wave, on_response = _read_filter_curve(filter_paths["on"])
+    off_filter_path, off_filter_wave, off_response = _read_filter_curve(filter_paths["off"])
+    virus_on, virus_on_support, on_integration = _integrate_cube_filter(
+        sci, dq, wave, sci_scale, on_filter_wave, on_response)
+    virus_off, virus_off_support, off_integration = _integrate_cube_filter(
+        sci, dq, wave, sci_scale, off_filter_wave, off_response)
+    virus_on_minus_off = virus_on - virus_off
+    bs_on_minus_off = on_target - off_target
+    bs_support = (np.isfinite(on_target) & np.isfinite(off_target)
+                  & np.isfinite(on_fp) & np.isfinite(off_fp)
+                  & (on_fp >= HB_APERTURE_SUPPORT_MIN)
+                  & (off_fp >= HB_APERTURE_SUPPORT_MIN))
+    external_noise, noise_info = _external_hbeta_noise(
+        bs_on_minus_off, bs_support, celestial, native_on_sky, native_off_sky,
+        native_on_wcs, native_off_wcs, on_area, off_area, outer_radius_arcmin)
+    detection = (bs_support & np.isfinite(bs_on_minus_off)
+                 & (bs_on_minus_off / external_noise >= HB_APERTURE_EXTERNAL_SNR_MIN))
+    peak_values = np.where(detection, bs_on_minus_off, -np.inf)
+    radius_pixels = HB_APERTURE_RADIUS_ARCSEC / float(common_pixel_scale)
+    peak_size = max(3, 2 * int(np.ceil(radius_pixels)) + 1)
+    local_maximum = detection & (peak_values == maximum_filter(
+        peak_values, size=peak_size, mode="constant", cval=-np.inf))
+    peak_y, peak_x = np.where(local_maximum)
+    if peak_y.size:
+        order = np.lexsort((peak_x, peak_y, -peak_values[peak_y, peak_x]))
+        candidate_centers = [(int(peak_y[i]), int(peak_x[i])) for i in order]
+    else:
+        candidate_centers = []
+
+    primary_rows = []
+    primary_centers = []
+    for center in candidate_centers:
+        if any((center[0] - previous[0]) ** 2 + (center[1] - previous[1]) ** 2
+               < (2.0 * radius_pixels) ** 2 for previous in primary_centers):
+            continue
+        measured = _measure_hbeta_apertures(
+            [center], HB_APERTURE_RADIUS_ARCSEC, common_pixel_scale,
+            common_pixel_area, on_target, off_target, bs_support,
+            virus_on, virus_off, virus_on_support, virus_off_support, hb_line)
+        if not measured:
+            continue
+        row = measured[0]
+        try:
+            ra, dec = celestial.pixel_to_world_values(row["x_pixel"], row["y_pixel"])
+            row["RA_deg"] = float(ra); row["DEC_deg"] = float(dec)
+        except Exception:
+            row["RA_deg"] = None; row["DEC_deg"] = None
+        row["external_detection_surface_brightness"] = float(bs_on_minus_off[
+            row["y_pixel"], row["x_pixel"]])
+        row["external_detection_SNR"] = row["external_detection_surface_brightness"] / external_noise
+        primary_rows.append(row)
+        primary_centers.append(center)
+
+    primary_comparisons = _hbeta_aperture_comparisons(primary_rows)
+    radius_checks = []
+    primary_locations = {key: value["robust_location"]
+                         for key, value in primary_comparisons.items()}
+    for radius in HB_APERTURE_CHECK_RADII_ARCSEC:
+        check_rows = _measure_hbeta_apertures(
+            primary_centers, radius, common_pixel_scale, common_pixel_area,
+            on_target, off_target, bs_support, virus_on, virus_off,
+            virus_on_support, virus_off_support, hb_line)
+        comparisons = _hbeta_aperture_comparisons(check_rows)
+        changes = {}
+        for key, value in comparisons.items():
+            baseline = primary_locations.get(key)
+            location = value["robust_location"]
+            fractional_change = None
+            if baseline is not None and location is not None and baseline != 0:
+                fractional_change = float(location / baseline - 1.0)
+            changes[key] = {
+                "primary_6arcsec_robust_location": baseline,
+                "check_robust_location": location,
+                "fractional_change": fractional_change,
+                "material_change": (abs(fractional_change) > HB_APERTURE_MATERIAL_FRACTION
+                                     if fractional_change is not None else None),
+            }
+        radius_checks.append({"radius_arcsec": float(radius),
+                              "N_apertures": int(len(check_rows)),
+                              "comparisons": comparisons,
+                              "central_normalization_change": changes})
+
+    filter_info = {
+        "on": {"path": str(on_filter_path), **on_integration},
+        "off": {"path": str(off_filter_path), **off_integration},
+        "definition": "each relative response is normalized to peak one and integrated with the calibrated VIRUS SCI over wavelength using the trapezoidal rule",
+    }
+    return {
+        "status": "authoritative absolute-normalization diagnostic",
+        "comparison_scope": "6-arcsec bright-region apertures; morphology-only pixel comparison remains separate",
+        "surface_brightness_units": "erg s-1 cm-2 arcsec-2",
+        "aperture_integrated_flux_units": "erg s-1 cm-2",
+        "aperture_radius_arcsec": HB_APERTURE_RADIUS_ARCSEC,
+        "aperture_radius_pixels": {
+            "BS_ON_native": HB_APERTURE_RADIUS_ARCSEC / float(on_scale),
+            "BS_OFF_native": HB_APERTURE_RADIUS_ARCSEC / float(off_scale),
+            "VIRUS_common": radius_pixels,
+        },
+        "native_pixel_scales_arcsec": {"BS_ON": float(on_scale), "BS_OFF": float(off_scale),
+                                        "VIRUS_common": float(common_pixel_scale)},
+        "native_pixel_areas_arcsec2": {"BS_ON": float(on_area), "BS_OFF": float(off_area),
+                                        "VIRUS_common": float(common_pixel_area)},
+        "external_noise": noise_info,
+        "bright_region_selection": {
+            "method": "deterministic descending-flux local maxima in the sky-subtracted/reprojected BS ON-OFF image, followed by greedy non-overlap selection",
+            "detection_image": "sky-subtracted/reprojected BS ON-OFF surface brightness",
+            "detection_snr_definition": "per-common-grid pixel BS ON-OFF divided by the outer-sky noise estimate",
+            "external_detection_snr_threshold": HB_APERTURE_EXTERNAL_SNR_MIN,
+            "support_threshold_fraction": HB_APERTURE_SUPPORT_MIN,
+            "local_maximum_window_pixels": int(peak_size),
+            "candidate_pixels": int(np.sum(detection)),
+            "local_maxima": int(np.sum(local_maximum)),
+            "selected_apertures": int(len(primary_rows)),
+        },
+        "filter_response_integration": filter_info,
+        "comparisons": primary_comparisons,
+        "surface_brightness_bins": _hbeta_surface_brightness_bins(primary_rows),
+        "material_change_threshold_fraction": HB_APERTURE_MATERIAL_FRACTION,
+        "aperture_radius_robustness": radius_checks,
+        "apertures": primary_rows,
+    }
+
+
 def _connected_regions(mask, significance, minimum_area):
     components, n = label(mask, structure=np.ones((3, 3), dtype=bool))
     rows = []
@@ -844,6 +1220,7 @@ def _hbeta_validation(virus, virus_var, virus_snr, ew, external, external_suppor
                                                     args.hbeta_snr, args.min_hbeta_ew)
     return {"virus_smoothed": virus_sm, "external_smoothed": ext_sm,
             "residual": residual, "residual_significance": residual_significance,
+            "comparison_scope": "morphology-only smoothed pixel comparison; not the authoritative absolute normalization",
             "global_robust_through_zero_morphology_scale": scale,
             "morphology_scale_samples": int(scale_keep.sum()),
             "coherent_regions": regions, "coherent_mask": coherent,
@@ -861,11 +1238,11 @@ def _plot_hbeta(hb, map_header, output_dir):
     fig, axes = plt.subplots(2, 2, figsize=(12, 9), constrained_layout=True)
     all_stats = hb["absolute_flux_all_high_SN"]
     ew_stats = hb["absolute_flux_high_EW"]
-    images = [(hb["external_smoothed"], "External Hbeta SB"),
-              (hb["virus_smoothed"], "VIRUS Hbeta"),
+    images = [(hb["external_smoothed"], "External Hbeta SB (morphology-only)"),
+              (hb["virus_smoothed"], "VIRUS Hbeta (morphology-only)"),
               (hb["residual"], "VIRUS - morphology-scaled external"),
               (hb["arrays"]["all_ratio"],
-               "VIRUS / external ratio\nrobust location=%.4g; median=%.4g" %
+               "VIRUS / external pixel ratio (morphology-only)\nrobust location=%.4g; median=%.4g" %
                (all_stats["robust_location"], all_stats["median"]))]
     for ax, (data, title) in zip(axes.flat, images):
         im = ax.imshow(data, origin="lower", cmap="magma" if "ratio" not in title else "coolwarm")
@@ -873,8 +1250,8 @@ def _plot_hbeta(hb, map_header, output_dir):
     fig.savefig(output_dir / "hbeta_external_vs_virus.png", dpi=160); plt.close(fig)
     fig, axes = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
     for ax, mask, title, stats in (
-            (axes[0], hb["arrays"]["all_mask"], "All high-S/N Hbeta", all_stats),
-            (axes[1], hb["arrays"]["ew_mask"], "High-EW Hbeta", ew_stats)):
+            (axes[0], hb["arrays"]["all_mask"], "All high-S/N Hbeta (morphology-only)", all_stats),
+            (axes[1], hb["arrays"]["ew_mask"], "High-EW Hbeta (morphology-only)", ew_stats)):
         x = hb["external_smoothed"][mask]; y = hb["virus_smoothed"][mask]
         ax.scatter(x, y, s=5, alpha=.35, rasterized=True)
         if x.size:
@@ -886,6 +1263,53 @@ def _plot_hbeta(hb, map_header, output_dir):
                      (title, stats["robust_location"], stats["median"]))
         ax.legend(loc="best")
     fig.savefig(output_dir / "hbeta_bright_region_flux_comparison.png", dpi=160); plt.close(fig)
+
+
+def _plot_hbeta_aperture_surface_brightness(aperture, output_dir):
+    definitions = (
+        ("VIRUS_ON_over_BS_ON", "VIRUS ON / BS ON"),
+        ("VIRUS_OFF_over_BS_OFF", "VIRUS OFF / BS OFF"),
+        ("VIRUS_ON_MINUS_OFF_over_BS_ON_MINUS_OFF", "VIRUS ON-OFF / BS ON-OFF"),
+        ("VIRUS_HBETA_LINE_over_BS_ON_MINUS_OFF", "VIRUS Hbeta line / BS ON-OFF"),
+    )
+    bins = aperture["surface_brightness_bins"]
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8), constrained_layout=True)
+    for ax, (key, label) in zip(axes.flat, definitions):
+        x = []
+        y = []
+        yerr_low = []
+        yerr_high = []
+        labels = []
+        for index, row in enumerate(bins, start=1):
+            lower = row["surface_brightness_lower"]
+            upper = row["surface_brightness_upper"]
+            stats = row["ratios"].get(key, {})
+            location = stats.get("robust_location")
+            p16 = stats.get("p16")
+            p84 = stats.get("p84")
+            if (lower is None or upper is None or location is None or
+                    p16 is None or p84 is None or lower <= 0 or upper <= 0):
+                continue
+            x.append(np.sqrt(lower * upper))
+            y.append(location)
+            yerr_low.append(max(0.0, location - p16))
+            yerr_high.append(max(0.0, p84 - location))
+            labels.append("Q%d" % index)
+        if x:
+            ax.errorbar(x, y, yerr=np.vstack((yerr_low, yerr_high)),
+                        fmt="o", capsize=4, label="robust location; p16--p84")
+            ax.set_xscale("log")
+            ax.set_xticks(x)
+            ax.set_xticklabels(labels)
+        ax.axhline(1.0, color="tab:red", linestyle="--", label="unity")
+        ax.set_title(label)
+        ax.set_xlabel("BS ON-OFF surface brightness")
+        ax.set_ylabel("aperture flux ratio")
+        ax.grid(alpha=.25)
+        ax.legend(loc="best")
+    fig.suptitle("Hbeta absolute normalization versus surface brightness")
+    fig.savefig(output_dir / "hbeta_aperture_ratio_vs_surface_brightness.png", dpi=160)
+    plt.close(fig)
 
 
 def _plot_balmer(balmer, output_dir, args):
@@ -950,7 +1374,8 @@ def _plot_oiii_ratio_vs_signal(oiii, output_dir):
             ax.scatter(x[median_finite], median[median_finite], marker="x",
                        color="tab:gray", label="median")
         ax.axhline(2.98, color="tab:red", linestyle="--", label="theory 2.98")
-        ax.set_xticks(x, labels)
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels)
         ax.set_xlabel(xlabel)
         ax.set_ylabel("F5007 / F4959")
         ax.grid(alpha=.25)
@@ -1139,6 +1564,26 @@ def _markdown(summary):
     ebv_diff = balmer["E_BV_gamma_minus_delta"]
     oiii_ratio = oiii["median_5007_over_4959"]
     overall_lsf = lsf["overall_fwhm"]
+    aperture = hb.get("aperture_comparison", {})
+    aperture_comparisons = aperture.get("comparisons", {})
+    aperture_lines = []
+    if aperture_comparisons:
+        aperture_lines.append(
+            "- Authoritative 6-arcsec aperture normalization: N=%d; aperture ratio robust locations and robust through-zero slopes are reported below." %
+            aperture.get("bright_region_selection", {}).get("selected_apertures", 0))
+        for key in ("VIRUS_ON_over_BS_ON", "VIRUS_OFF_over_BS_OFF",
+                    "VIRUS_ON_MINUS_OFF_over_BS_ON_MINUS_OFF",
+                    "VIRUS_HBETA_LINE_over_BS_ON_MINUS_OFF"):
+            comparison = aperture_comparisons[key]
+            aperture_lines.append(
+                "- %s: robust location=%s, median=%s, robust scatter=%s, slope=%s." %
+                (comparison["label"], comparison["robust_location"],
+                 comparison["median"], comparison["robust_scatter"],
+                 comparison["robust_through_zero_slope"]))
+        aperture_lines.append(
+            "- Four equal-population aperture surface-brightness bins and 4/8-arcsec robustness checks are in the JSON; the diagnostic plot is `hbeta_aperture_ratio_vs_surface_brightness.png`.")
+    else:
+        aperture_lines.append("- Aperture absolute-normalization diagnostic was not available in this validation summary.")
     lines = ["# M101 referee validation and public release", "",
              "This report is downstream validation and packaging of the accepted current-model production cube. No calibration was refit and no production SCI voxel was changed.", "",
              "## Production calibration provenance", "",
@@ -1157,11 +1602,12 @@ def _markdown(summary):
              "- Coherent candidate regions: %d; morphology scale (diagnostic only): %s." %
              (len(hb["coherent_regions"]), hb["global_robust_through_zero_morphology_scale"]),
              "- Hbeta candidates are flagged for inspection only; this script does not mask or interpolate Hbeta.", "",
-             "## Independent Hbeta imaging comparison", "",
-             "- All high-S/N samples: N=%d, robust location VIRUS/external=%s, median=%s, p16/p84=%s/%s, robust scatter=%s." %
+             "## Hbeta absolute normalization: bright-region apertures", ""] + aperture_lines + [
+             "", "## Hbeta morphology-only pixel comparison", "",
+             "- All high-S/N morphology-only pixels: N=%d, robust location VIRUS/external=%s, median=%s, p16/p84=%s/%s, robust scatter=%s." %
              (hb_all["mask_count"], hb_all["robust_location"], hb_all["median"],
               hb_all["p16"], hb_all["p84"], hb_all["robust_scatter"]),
-             "- High-EW subset (EW >= %s A): N=%d, robust location=%s, median=%s, p16/p84=%s/%s, robust scatter=%s." %
+             "- High-EW morphology-only subset (EW >= %s A): N=%d, robust location=%s, median=%s, p16/p84=%s/%s, robust scatter=%s." %
              (summary["configuration"]["min_hbeta_ew"], hb_ew["mask_count"],
               hb_ew["robust_location"], hb_ew["median"], hb_ew["p16"],
               hb_ew["p84"], hb_ew["robust_scatter"]),
@@ -1223,6 +1669,31 @@ def _print_oiii_ratio_signal_tables(oiii):
         values = [row["quantile_bin"], row["surface_brightness_lower"],
                   row["surface_brightness_upper"]] + [row[key] for key in fields]
         print("\t".join(str(value) for value in values))
+
+
+def _print_hbeta_aperture_tables(aperture):
+    keys = ("VIRUS_ON_over_BS_ON", "VIRUS_OFF_over_BS_OFF",
+            "VIRUS_ON_MINUS_OFF_over_BS_ON_MINUS_OFF",
+            "VIRUS_HBETA_LINE_over_BS_ON_MINUS_OFF")
+    print("Hbeta bright-region aperture normalization (6 arcsec)")
+    print("comparison\tN apertures\trobust ratio\tmedian ratio\trobust scatter\trobust through-zero slope")
+    for key in keys:
+        row = aperture["comparisons"][key]
+        print("%s\t%s\t%s\t%s\t%s\t%s" %
+              (row["label"], row["N"], row["robust_location"], row["median"],
+               row["robust_scatter"], row["robust_through_zero_slope"]))
+    print("Hbeta aperture ratios versus BS ON-OFF surface brightness")
+    print("bin\tSB lower\tSB upper\tN\t%s" % "\t".join(key + " robust location" for key in keys))
+    for row in aperture["surface_brightness_bins"]:
+        values = [row["quantile_bin"], row["surface_brightness_lower"],
+                  row["surface_brightness_upper"], row["N"]]
+        values.extend(row["ratios"].get(key, {}).get("robust_location") for key in keys)
+        print("\t".join(str(value) for value in values))
+    for check in aperture["aperture_radius_robustness"]:
+        material = [key for key, value in check["central_normalization_change"].items()
+                    if value["material_change"]]
+        print("Hbeta %g-arcsec check: N=%d; material central-normalization changes=%s" %
+              (check["radius_arcsec"], check["N_apertures"], material or "none"))
 
 
 def main():
@@ -1316,9 +1787,17 @@ def main():
     hb = _hbeta_validation(line_products["Hbeta_4861"]["flux"], line_products["Hbeta_4861"]["variance"],
                            line_products["Hbeta_4861"]["snr"], line_products["Hbeta_4861"]["ew"],
                            absolute_external, external_support, args, pixel_scale, output_dir, map_header)
+    hb["aperture_comparison"] = _hbeta_aperture_validation(
+        arrays["SCI"], arrays["DQ"], wave, sci_scale, celestial, pixel_scale,
+        _pixel_area_arcsec2(celestial), on_target, off_target, on_fp, off_fp,
+        on_scale, off_scale, on_area, off_area,
+        line_products["Hbeta_4861"]["flux"],
+        {"on": args.hb_on_filter, "off": args.hb_off_filter},
+        args.outer_sky_radius_arcmin, on_sky, off_sky, on_wcs, off_wcs)
     _write_image(output_dir / "hbeta_residual_map.fits", hb["residual"],
                  _map_header(map_header, "erg s-1 cm-2 arcsec-2", "Hbeta morphology residual"))
     _plot_hbeta(hb, map_header, output_dir)
+    _plot_hbeta_aperture_surface_brightness(hb["aperture_comparison"], output_dir)
     balmer = _balmer_validation(line_products, args); _plot_balmer(balmer, output_dir, args)
     oiii = _oiii_validation(line_products, args)
     _write_image(output_dir / "oiii5007_ratio_map.fits", oiii["ratio"], _map_header(map_header, "dimensionless", "OIII 5007/4959 ratio"))
@@ -1420,16 +1899,18 @@ def main():
     (output_dir / "referee_validation_summary.md").write_text(markdown)
     hbeta_all = summary["hbeta_validation"]["absolute_flux_all_high_SN"]
     hbeta_ew = summary["hbeta_validation"]["absolute_flux_high_EW"]
+    hbeta_aperture = summary["hbeta_validation"]["aperture_comparison"]
     gamma = summary["balmer_validation"]["median_Hgamma_over_Hbeta"]
     delta = summary["balmer_validation"]["median_Hdelta_over_Hbeta"]
     ebv_difference = summary["balmer_validation"]["E_BV_gamma_minus_delta"]
     oiii_ratio = summary["oiii_validation"]["median_5007_over_4959"]
     overall_lsf = summary["lsf"]["overall_fwhm"]
-    print("Hbeta: N=%d; robust location=%s; median=%s; robust scatter=%s; "
+    print("Hbeta morphology-only pixels: N=%d; robust location=%s; median=%s; robust scatter=%s; "
           "high-EW robust location=%s; high-EW median=%s; coherent regions=%d" %
           (hbeta_all["mask_count"], hbeta_all["robust_location"], hbeta_all["median"],
            hbeta_all["robust_scatter"], hbeta_ew["robust_location"],
            hbeta_ew["median"], len(summary["hbeta_validation"]["coherent_regions"])))
+    _print_hbeta_aperture_tables(hbeta_aperture)
     print("Balmer: N=%d; robust locations Hgamma/Hbeta=%s Hdelta/Hbeta=%s; "
           "medians=%s/%s; robust dE(B-V)=%s; median=%s; robust scatter=%s" %
           (summary["balmer_validation"]["N_high_quality_samples"],
