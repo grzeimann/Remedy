@@ -739,6 +739,8 @@ def _oiii_validation(line_products, args):
             & (a["snr"] > 0))
     ratio = np.full(a["flux"].shape, np.nan, dtype=float)
     ratio[good] = a["flux"][good] / b["flux"][good]
+    ratio_vs_snr, ratio_vs_surface_brightness = _oiii_ratio_signal_summaries(
+        ratio, b["snr"], b["flux"], good)
     residual = a["flux"] - args.oiii_ratio * b["flux"]
     residual_variance = a["variance"] + args.oiii_ratio ** 2 * b["variance"]
     residual_significance = np.full(residual.shape, np.nan, dtype=float)
@@ -753,8 +755,63 @@ def _oiii_validation(line_products, args):
             "candidate_mask": candidate, "coherent_mask": coherent,
             "coherent_regions": regions,
             "DQ_voxels_assigned": int(coherent.sum()) * len(a["line_planes"]),
+            "ratio_vs_4959_snr": ratio_vs_snr,
+            "ratio_vs_4959_surface_brightness": ratio_vs_surface_brightness,
             "status": ("N coherent candidate regions detected and requiring inspection" if regions
                        else "no coherent 5007 residual-deficit regions detected")}
+
+
+def _oiii_ratio_summary(values, reference_ratio=2.98):
+    stats = finite_stats(values)
+    result = {key: stats[key] for key in
+              ("N", "median", "robust_location", "robust_scatter", "p16", "p84")}
+    location = stats["robust_location"]
+    result["robust_location_minus_2_98"] = (
+        float(location - reference_ratio) if location is not None else None)
+    return result
+
+
+def _oiii_ratio_signal_summaries(ratio, snr, surface_brightness, good):
+    """Summarize the existing valid OIII population by signal, without refitting."""
+    snr_bins = ((5.0, 7.5), (7.5, 10.0), (10.0, 20.0),
+                (20.0, 50.0), (50.0, None))
+    snr_rows = []
+    for lower, upper in snr_bins:
+        selected = good & (snr >= lower)
+        if upper is not None:
+            selected &= snr < upper
+        row = {"snr_lower": lower, "snr_upper": upper}
+        row.update(_oiii_ratio_summary(ratio[selected]))
+        snr_rows.append(row)
+
+    valid_ratio = np.asarray(ratio[good], dtype=float)
+    valid_surface = np.asarray(surface_brightness[good], dtype=float)
+    surface_rows = []
+    if valid_surface.size:
+        order = np.argsort(valid_surface, kind="mergesort")
+        for quantile_index, ranks in enumerate(np.array_split(np.arange(order.size), 5), start=1):
+            if ranks.size == 0:
+                row = {"quantile_bin": quantile_index,
+                       "surface_brightness_lower": None,
+                       "surface_brightness_upper": None}
+                row.update(_oiii_ratio_summary([]))
+                surface_rows.append(row)
+                continue
+            selected_values = valid_ratio[order[ranks]]
+            surface_values = valid_surface[order[ranks]]
+            row = {"quantile_bin": quantile_index,
+                   "surface_brightness_lower": float(np.min(surface_values)),
+                   "surface_brightness_upper": float(np.max(surface_values))}
+            row.update(_oiii_ratio_summary(selected_values))
+            surface_rows.append(row)
+    else:
+        for quantile_index in range(1, 6):
+            row = {"quantile_bin": quantile_index,
+                   "surface_brightness_lower": None,
+                   "surface_brightness_upper": None}
+            row.update(_oiii_ratio_summary([]))
+            surface_rows.append(row)
+    return snr_rows, surface_rows
 
 
 def _hbeta_validation(virus, virus_var, virus_snr, ew, external, external_support, args,
@@ -869,6 +926,45 @@ def _plot_oiii(oiii, output_dir, args):
     axes[2].imshow(oiii["coherent_mask"], origin="lower", cmap="gray_r")
     axes[2].set_title("flagged coherent regions")
     fig.savefig(output_dir / "oiii5007_doublet_validation.png", dpi=160); plt.close(fig)
+
+
+def _plot_oiii_ratio_vs_signal(oiii, output_dir):
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5), constrained_layout=True)
+
+    def plot_rows(ax, rows, labels, xlabel):
+        x = np.arange(len(rows), dtype=float)
+        location = np.array([row["robust_location"] for row in rows], dtype=float)
+        median = np.array([row["median"] for row in rows], dtype=float)
+        p16 = np.array([row["p16"] for row in rows], dtype=float)
+        p84 = np.array([row["p84"] for row in rows], dtype=float)
+        finite = np.isfinite(location) & np.isfinite(p16) & np.isfinite(p84)
+        lower = np.maximum(0.0, location - p16)
+        upper = np.maximum(0.0, p84 - location)
+        if np.any(finite):
+            ax.errorbar(x[finite], location[finite],
+                        yerr=np.vstack((lower[finite], upper[finite])),
+                        fmt="o", color="tab:blue", capsize=4,
+                        label="robust location; p16--p84")
+        median_finite = np.isfinite(median)
+        if np.any(median_finite):
+            ax.scatter(x[median_finite], median[median_finite], marker="x",
+                       color="tab:gray", label="median")
+        ax.axhline(2.98, color="tab:red", linestyle="--", label="theory 2.98")
+        ax.set_xticks(x, labels)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("F5007 / F4959")
+        ax.grid(alpha=.25)
+        ax.legend(loc="best")
+
+    plot_rows(axes[0], oiii["ratio_vs_4959_snr"],
+              ["5--7.5", "7.5--10", "10--20", "20--50", ">=50"],
+              "F4959 S/N bin")
+    plot_rows(axes[1], oiii["ratio_vs_4959_surface_brightness"],
+              ["Q1", "Q2", "Q3", "Q4", "Q5"],
+              "F4959 surface-brightness quantile bin")
+    fig.suptitle("[O III] 5007/4959 ratio versus F4959 signal")
+    fig.savefig(output_dir / "oiii5007_4959_ratio_vs_signal.png", dpi=160)
+    plt.close(fig)
 
 
 def _lsf_summary(path, wave, output_dir):
@@ -1113,6 +1209,22 @@ def _markdown(summary):
     return "\n".join(lines)
 
 
+def _print_oiii_ratio_signal_tables(oiii):
+    fields = ("N", "median", "robust_location", "robust_scatter",
+              "p16", "p84", "robust_location_minus_2_98")
+    print("OIII ratio versus F4959 S/N")
+    print("S/N lower\tS/N upper\t" + "\t".join(fields))
+    for row in oiii["ratio_vs_4959_snr"]:
+        values = [row["snr_lower"], row["snr_upper"]] + [row[key] for key in fields]
+        print("\t".join(str(value) for value in values))
+    print("OIII ratio versus F4959 surface brightness")
+    print("quantile\tSB lower\tSB upper\t" + "\t".join(fields))
+    for row in oiii["ratio_vs_4959_surface_brightness"]:
+        values = [row["quantile_bin"], row["surface_brightness_lower"],
+                  row["surface_brightness_upper"]] + [row[key] for key in fields]
+        print("\t".join(str(value) for value in values))
+
+
 def main():
     parser = ArgumentParser(description=__doc__)
     parser.add_argument("--cube", required=True); parser.add_argument("--variance", required=True)
@@ -1213,6 +1325,7 @@ def main():
     _write_image(output_dir / "oiii5007_residual_significance.fits", oiii["residual_significance"], _map_header(map_header, "sigma", "OIII 5007 - R*4959 residual significance"))
     _write_image(output_dir / "oiii5007_defect_mask.fits", oiii["coherent_mask"].astype(np.uint8), _map_header(map_header, "bit mask", "OIII 5007 validation defect mask"), dtype=np.uint8)
     _plot_oiii(oiii, output_dir, args)
+    _plot_oiii_ratio_vs_signal(oiii, output_dir)
     oii = line_products["OII_3727"]
     oii_valid = np.isfinite(oii["flux"]) & np.isfinite(oii["snr"])
     oii_high = oii_valid & (oii["snr"] >= 5)
@@ -1329,6 +1442,7 @@ def main():
            oiii_ratio["robust_location"], oiii_ratio["median"],
            oiii_ratio["robust_scatter"], len(summary["oiii_validation"]["coherent_regions"]),
            summary["release_dq_bit5_voxels"]))
+    _print_oiii_ratio_signal_tables(summary["oiii_validation"])
     print("Release: dimensions=%s; input=%d; retained=%d; shots=%d; valid SCI=%d; "
           "finite VAR fraction=%s; LSF robust location/median/range=%s/%s/%s A" %
           (summary["cube_validation"]["cube_dimensions"], summary["spectrum_accounting"]["N_input_fiber_spectra"],
