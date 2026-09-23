@@ -87,10 +87,10 @@ def json_safe(value):
         return {str(k): json_safe(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [json_safe(v) for v in value]
+    if isinstance(value, (float, np.floating)):
+        return float(value) if np.isfinite(value) else None
     if isinstance(value, (np.integer,)):
         return int(value)
-    if isinstance(value, (np.floating,)):
-        return float(value) if np.isfinite(value) else None
     if isinstance(value, (np.bool_,)):
         return bool(value)
     if isinstance(value, Path):
@@ -702,8 +702,9 @@ def _balmer_validation(line_products, args):
         vb = hg["variance"] / hb["flux"] ** 2 + hg["flux"] ** 2 * hb["variance"] / hb["flux"] ** 4
         vd = hd["variance"] / hb["flux"] ** 2 + hd["flux"] ** 2 * hb["variance"] / hb["flux"] ** 4
     k = _calzetti_k(np.array([4340.47, 4101.74, 4861.33]), args.calzetti_rv)
-    e_gamma = -2.5 * np.log10(rb / args.caseb_hgamma_hbeta) / (k[0] - k[2])
-    e_delta = -2.5 * np.log10(rd / args.caseb_hdelta_hbeta) / (k[1] - k[2])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        e_gamma = -2.5 * np.log10(rb / args.caseb_hgamma_hbeta) / (k[0] - k[2])
+        e_delta = -2.5 * np.log10(rd / args.caseb_hdelta_hbeta) / (k[1] - k[2])
     e_gamma_sigma = 2.5 / np.log(10.0) * np.sqrt(vb) / rb / abs(k[0] - k[2])
     e_delta_sigma = 2.5 / np.log(10.0) * np.sqrt(vd) / rd / abs(k[1] - k[2])
     difference = e_gamma - e_delta
