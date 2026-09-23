@@ -62,6 +62,7 @@ HB_APERTURE_SUPPORT_MIN = 0.95
 HB_APERTURE_MIN_CENTER_SEPARATION_ARCSEC = 12.0
 HB_APERTURE_DETECTION_SMOOTH_ARCSEC = 3.0
 HB_APERTURE_SUBPIXELS = 5
+HB_APERTURE_MAX_BLANK_GRID_POSITIONS = 512
 HB_APERTURE_MATERIAL_FRACTION = 0.05
 DQ_INSUFFICIENT_SUPPORT = np.uint16(1 << 0)
 DQ_VAR_INCOMPLETE = np.uint16(1 << 1)
@@ -930,6 +931,13 @@ def _blank_aperture_noise(bs_difference, on_wcs, off_wcs, radius_arcsec,
     outer = field_radius >= float(outer_radius_arcmin) + radius_guard
     ras = np.asarray(grid_ra[outer], dtype=float)
     decs = np.asarray(grid_dec[outer], dtype=float)
+    outer_grid_count = int(ras.size)
+    if ras.size > HB_APERTURE_MAX_BLANK_GRID_POSITIONS:
+        sample_index = np.linspace(
+            0, ras.size - 1, HB_APERTURE_MAX_BLANK_GRID_POSITIONS,
+            dtype=int)
+        ras = ras[sample_index]
+        decs = decs[sample_index]
     on_flux, on_support = _measure_fractional_apertures_batch(
         on_image, on_wcs, on_image.shape, ras, decs, radius_arcsec, on_area)
     off_flux, off_support = _measure_fractional_apertures_batch(
@@ -977,7 +985,9 @@ def _blank_aperture_noise(bs_difference, on_wcs, off_wcs, radius_arcsec,
         "robust_scatter": float(scatter),
         "center_separation_arcsec": HB_APERTURE_MIN_CENTER_SEPARATION_ARCSEC,
         "grid_step_pixels": int(step),
-        "N_outer_grid_positions": int(ras.size),
+        "N_outer_grid_positions": outer_grid_count,
+        "N_outer_grid_positions_evaluated": int(ras.size),
+        "outer_grid_position_cap": HB_APERTURE_MAX_BLANK_GRID_POSITIONS,
     }
 
 
@@ -1027,6 +1037,52 @@ def _measure_filter_matched_aperture(ra, dec, radius_arcsec,
         "support_ok": bool(support_ok),
         **support,
     }
+
+
+def _measure_filter_matched_apertures_batch(ras, decs, radius_arcsec,
+                                            on_sky, off_sky, on_wcs, off_wcs,
+                                            virus_on, virus_off, virus_wcs,
+                                            virus_on_support, virus_off_support,
+                                            on_area, off_area, virus_area):
+    ras = np.asarray(ras, dtype=float).ravel()
+    decs = np.asarray(decs, dtype=float).ravel()
+    bs_on_flux, bs_on_support = _measure_fractional_apertures_batch(
+        on_sky, on_wcs, on_sky.shape, ras, decs, radius_arcsec, on_area)
+    bs_off_flux, bs_off_support = _measure_fractional_apertures_batch(
+        off_sky, off_wcs, off_sky.shape, ras, decs, radius_arcsec, off_area)
+    virus_on_flux, virus_on_support_fraction = _measure_fractional_apertures_batch(
+        virus_on, virus_wcs, virus_on.shape, ras, decs, radius_arcsec,
+        virus_area, value_scale=virus_area, support=virus_on_support)
+    virus_off_flux, virus_off_support_fraction = _measure_fractional_apertures_batch(
+        virus_off, virus_wcs, virus_off.shape, ras, decs, radius_arcsec,
+        virus_area, value_scale=virus_area, support=virus_off_support)
+    rows = []
+    aperture_area = float(np.pi * radius_arcsec ** 2)
+    for index, (ra, dec) in enumerate(zip(ras, decs)):
+        support = {
+            "support_fraction_BS_ON": float(bs_on_support[index]),
+            "support_fraction_BS_OFF": float(bs_off_support[index]),
+            "support_fraction_VIRUS_ON": float(virus_on_support_fraction[index]),
+            "support_fraction_VIRUS_OFF": float(virus_off_support_fraction[index]),
+        }
+        support["support_fraction_VIRUS"] = min(
+            support["support_fraction_VIRUS_ON"], support["support_fraction_VIRUS_OFF"])
+        support_ok = min(support.values()) >= HB_APERTURE_SUPPORT_MIN
+        bs_difference = bs_on_flux[index] - bs_off_flux[index]
+        virus_difference = virus_on_flux[index] - virus_off_flux[index]
+        rows.append({
+            "RA": float(ra), "Dec": float(dec),
+            "aperture_radius_arcsec": float(radius_arcsec),
+            "BS_ON": float(bs_on_flux[index]), "BS_OFF": float(bs_off_flux[index]),
+            "BS_ON_MINUS_OFF": float(bs_difference),
+            "VIRUS_ON": float(virus_on_flux[index]), "VIRUS_OFF": float(virus_off_flux[index]),
+            "VIRUS_ON_MINUS_OFF": float(virus_difference),
+            "BS_ON_MINUS_OFF_surface_brightness": float(bs_difference / aperture_area),
+            "aperture_area_arcsec2": aperture_area,
+            "support_ok": bool(support_ok),
+            **support,
+        })
+    return rows
 
 
 def _hbeta_aperture_comparisons(rows):
@@ -1254,23 +1310,25 @@ def _hbeta_filter_matched_validation(sci, dq, wave, sci_scale, virus_wcs,
     blank_noise, noise_info = _blank_aperture_noise(
         bs_difference, on_wcs, off_wcs, HB_APERTURE_RADIUS_ARCSEC,
         outer_radius_arcmin, on_sky, off_sky, on_area, off_area)
+    candidate_ras = np.asarray([row[0] for row in candidate_world], dtype=float)
+    candidate_decs = np.asarray([row[1] for row in candidate_world], dtype=float)
+    candidate_measurements = _measure_filter_matched_apertures_batch(
+        candidate_ras, candidate_decs, HB_APERTURE_RADIUS_ARCSEC,
+        on_sky, off_sky, on_wcs, off_wcs, virus_on, virus_off, virus_wcs,
+        virus_on_support, virus_off_support, on_area, off_area, common_pixel_area)
     selected_rows = []
     selected_world = []
     support_pass = 0
     nonoverlap_count = 0
     selection_started = perf_counter()
-    for ra, dec, x, y in candidate_world:
+    for candidate_index, (ra, dec, x, y) in enumerate(candidate_world):
         if any(float(_angular_separation_arcsec(ra, dec, old_ra, old_dec)) <
                HB_APERTURE_MIN_CENTER_SEPARATION_ARCSEC
                for old_ra, old_dec, _, _ in selected_world):
             continue
         nonoverlap_count += 1
-        row = _measure_filter_matched_aperture(
-            ra, dec, HB_APERTURE_RADIUS_ARCSEC,
-            on_sky, off_sky, on_wcs, off_wcs, virus_on, virus_off, virus_wcs,
-            virus_on_support, virus_off_support, on_area, off_area,
-            common_pixel_area)
-        if row is None or not row["support_ok"]:
+        row = candidate_measurements[candidate_index]
+        if not row["support_ok"]:
             continue
         support_pass += 1
         row["BS_ON_MINUS_OFF_SNR"] = row["BS_ON_MINUS_OFF"] / blank_noise
@@ -1296,14 +1354,13 @@ def _hbeta_filter_matched_validation(sci, dq, wave, sci_scale, virus_wcs,
         if radius == HB_APERTURE_RADIUS_ARCSEC:
             radius_rows_data = selected_rows
         else:
-            radius_rows_data = []
-            for ra, dec, _, _ in selected_world:
-                row = _measure_filter_matched_aperture(
-                    ra, dec, radius, on_sky, off_sky, on_wcs, off_wcs,
-                    virus_on, virus_off, virus_wcs, virus_on_support,
-                    virus_off_support, on_area, off_area, common_pixel_area)
-                if row is not None and row["support_ok"]:
-                    radius_rows_data.append(row)
+            selected_ras = np.asarray([row[0] for row in selected_world], dtype=float)
+            selected_decs = np.asarray([row[1] for row in selected_world], dtype=float)
+            all_radius_rows = _measure_filter_matched_apertures_batch(
+                selected_ras, selected_decs, radius, on_sky, off_sky, on_wcs,
+                off_wcs, virus_on, virus_off, virus_wcs, virus_on_support,
+                virus_off_support, on_area, off_area, common_pixel_area)
+            radius_rows_data = [row for row in all_radius_rows if row["support_ok"]]
             for row in radius_rows_data:
                 row["R_ON"] = row["VIRUS_ON"] / row["BS_ON"] if row["BS_ON"] > 0 else np.nan
                 row["R_OFF"] = row["VIRUS_OFF"] / row["BS_OFF"] if row["BS_OFF"] > 0 else np.nan
