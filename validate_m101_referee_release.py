@@ -38,7 +38,7 @@ from astropy.table import Table
 from astropy.wcs import WCS
 from astropy.wcs.utils import proj_plane_pixel_scales
 from reproject import reproject_interp
-from scipy.ndimage import gaussian_filter, label, find_objects, maximum_filter
+from scipy.ndimage import convolve, gaussian_filter, label, find_objects, maximum_filter
 
 import diagnose_m101_hierarchical as validated_m101
 from m101_calibration_utils import robust_location
@@ -816,6 +816,28 @@ def _measure_fractional_aperture(image, wcs, shape, ra, dec, radius_arcsec,
             "total_fraction": total_fraction}
 
 
+def _native_fractional_aperture_kernel(wcs, radius_arcsec):
+    """Build one native-pixel fractional disk kernel for fast preselection."""
+    scales = np.asarray(proj_plane_pixel_scales(wcs), dtype=float) * 3600.0
+    if (scales.size != 2 or not np.all(np.isfinite(scales)) or
+            np.any(scales <= 0)):
+        raise ValueError("invalid native pixel scales for aperture kernel")
+    half_x = int(np.ceil(float(radius_arcsec) / scales[0])) + 2
+    half_y = int(np.ceil(float(radius_arcsec) / scales[1])) + 2
+    pixel_y, pixel_x = np.mgrid[-half_y:half_y + 1, -half_x:half_x + 1]
+    offsets = ((np.arange(HB_APERTURE_SUBPIXELS, dtype=float) + 0.5) /
+               float(HB_APERTURE_SUBPIXELS) - 0.5)
+    dx = ((pixel_x[..., None, None] + offsets[None, None, :, None]) *
+          scales[0])
+    dy = ((pixel_y[..., None, None] + offsets[None, None, None, :]) *
+          scales[1])
+    kernel = np.mean(dx * dx + dy * dy <= float(radius_arcsec) ** 2,
+                     axis=(-2, -1)).astype(float)
+    if not np.isfinite(kernel).all() or not np.any(kernel > 0):
+        raise ValueError("failed to build native aperture kernel")
+    return kernel
+
+
 def _measure_fractional_apertures_batch(image, wcs, shape, ras, decs,
                                         radius_arcsec, pixel_area,
                                         value_scale=1.0, support=None,
@@ -989,6 +1011,30 @@ def _blank_aperture_noise(bs_difference, on_wcs, off_wcs, radius_arcsec,
         "N_outer_grid_positions_evaluated": int(ras.size),
         "outer_grid_position_cap": HB_APERTURE_MAX_BLANK_GRID_POSITIONS,
     }
+
+
+def _greedy_nonoverlap_candidate_indices(candidate_world):
+    """Retain brightest-first candidates with the required angular spacing."""
+    retained = []
+    occupied = {}
+    cell_size = float(HB_APERTURE_MIN_CENTER_SEPARATION_ARCSEC)
+    cos_dec = np.cos(np.deg2rad(M101_DEC_DEG))
+    for index, (ra, dec, _, _) in enumerate(candidate_world):
+        plane_x = (float(ra) - M101_RA_DEG) * cos_dec * 3600.0
+        plane_y = (float(dec) - M101_DEC_DEG) * 3600.0
+        cell = (int(np.floor(plane_x / cell_size)),
+                int(np.floor(plane_y / cell_size)))
+        nearby = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                nearby.extend(occupied.get((cell[0] + dx, cell[1] + dy), ()))
+        if any(float(_angular_separation_arcsec(
+                ra, dec, old_ra, old_dec)) < cell_size
+               for old_ra, old_dec in nearby):
+            continue
+        occupied.setdefault(cell, []).append((float(ra), float(dec)))
+        retained.append(index)
+    return np.asarray(retained, dtype=int)
 
 
 def _measure_filter_matched_aperture(ra, dec, radius_arcsec,
@@ -1303,13 +1349,38 @@ def _hbeta_filter_matched_validation(sci, dq, wave, sci_scale, virus_wcs,
     detection_sigma = (HB_APERTURE_DETECTION_SMOOTH_ARCSEC / 2.354820045 /
                        float(on_scale))
     detection_image = _smooth_nan(bs_difference, detection_sigma)
+    blank_noise, noise_info = _blank_aperture_noise(
+        bs_difference, on_wcs, off_wcs, HB_APERTURE_RADIUS_ARCSEC,
+        outer_radius_arcmin, on_sky, off_sky, on_area, off_area)
+    fast_kernel_started = perf_counter()
+    aperture_kernel = _native_fractional_aperture_kernel(
+        on_wcs, HB_APERTURE_RADIUS_ARCSEC)
+    finite_pair = np.isfinite(on_sky) & np.isfinite(off_sky)
+    finite_difference = np.where(finite_pair, bs_difference, 0.0)
+    fast_aperture_flux = convolve(
+        finite_difference, aperture_kernel, mode="constant", cval=0.0)
+    fast_support = convolve(
+        finite_pair.astype(float), aperture_kernel, mode="constant", cval=0.0)
+    fast_support /= float(np.sum(aperture_kernel))
+    fast_aperture_snr = fast_aperture_flux / float(blank_noise)
+    _timing("Hbeta fast native-grid aperture convolution", fast_kernel_started)
+
+    fast_selection_started = perf_counter()
     finite_detection = np.isfinite(detection_image)
     peak_values = np.where(finite_detection, detection_image, -np.inf)
     peak_size = max(3, 2 * int(np.ceil(HB_APERTURE_RADIUS_ARCSEC / float(on_scale))) + 1)
-    local_maximum = (finite_detection & (detection_image > 0) &
-                     (peak_values == maximum_filter(peak_values, size=peak_size,
-                                                    mode="constant", cval=-np.inf)))
-    peak_y, peak_x = np.where(local_maximum)
+    old_local_maximum = (finite_detection & (detection_image > 0) &
+                         (peak_values == maximum_filter(peak_values, size=peak_size,
+                                                        mode="constant", cval=-np.inf)))
+    fast_snr_mask = (finite_detection & (detection_image > 0) &
+                     np.isfinite(fast_aperture_snr) &
+                     (fast_aperture_snr >= 5.0))
+    fast_peak_values = np.where(fast_snr_mask, detection_image, -np.inf)
+    fast_local_maximum = (fast_snr_mask &
+                          (fast_peak_values == maximum_filter(
+                              fast_peak_values, size=peak_size,
+                              mode="constant", cval=-np.inf)))
+    peak_y, peak_x = np.where(fast_local_maximum)
     candidate_world = []
     if peak_y.size:
         order = np.lexsort((peak_x, peak_y, -peak_values[peak_y, peak_x]))
@@ -1320,77 +1391,73 @@ def _hbeta_filter_matched_validation(sci, dq, wave, sci_scale, virus_wcs,
             (float(ra), float(dec), int(x), int(y))
             for ra, dec, x, y in zip(ordered_ra, ordered_dec,
                                      ordered_x, ordered_y)]
+    nonoverlap_index = _greedy_nonoverlap_candidate_indices(candidate_world)
+    nonoverlap_world = [candidate_world[int(index)] for index in nonoverlap_index]
+    old_local_maximum_count = int(np.sum(old_local_maximum))
+    fast_local_maximum_count = int(np.sum(fast_local_maximum))
+    _timing("Hbeta fast local-max/preselection", fast_selection_started)
+    del (detection_image, peak_values, fast_peak_values, fast_aperture_flux,
+         fast_support, fast_aperture_snr, finite_pair, finite_difference,
+         old_local_maximum, fast_local_maximum, fast_snr_mask)
 
-    blank_noise, noise_info = _blank_aperture_noise(
-        bs_difference, on_wcs, off_wcs, HB_APERTURE_RADIUS_ARCSEC,
-        outer_radius_arcmin, on_sky, off_sky, on_area, off_area)
-    candidate_ras = np.asarray([row[0] for row in candidate_world], dtype=float)
-    candidate_decs = np.asarray([row[1] for row in candidate_world], dtype=float)
-    candidate_started = perf_counter()
-    candidate_bs_on, candidate_bs_on_support = _measure_fractional_apertures_batch(
-        on_sky, on_wcs, on_sky.shape, candidate_ras, candidate_decs,
+    exact_difference_started = perf_counter()
+    candidate_ras = np.asarray([row[0] for row in nonoverlap_world], dtype=float)
+    candidate_decs = np.asarray([row[1] for row in nonoverlap_world], dtype=float)
+    exact_bs_difference, exact_bs_support = _measure_fractional_apertures_batch(
+        bs_difference, on_wcs, bs_difference.shape, candidate_ras, candidate_decs,
         HB_APERTURE_RADIUS_ARCSEC, on_area)
-    candidate_bs_off, candidate_bs_off_support = _measure_fractional_apertures_batch(
-        off_sky, off_wcs, off_sky.shape, candidate_ras, candidate_decs,
-        HB_APERTURE_RADIUS_ARCSEC, off_area)
-    candidate_bs_snr = (candidate_bs_on - candidate_bs_off) / blank_noise
-    bs_eligible = (
-        np.isfinite(candidate_bs_on) & np.isfinite(candidate_bs_off) &
-        (candidate_bs_on_support >= HB_APERTURE_SUPPORT_MIN) &
-        (candidate_bs_off_support >= HB_APERTURE_SUPPORT_MIN) &
-        np.isfinite(candidate_bs_snr) &
-        (candidate_bs_snr >= HB_APERTURE_EXTERNAL_SNR_MIN))
-    _timing("Hbeta candidate BS aperture preselection", candidate_started)
+    exact_bs_snr = exact_bs_difference / float(blank_noise)
+    exact_pass = (np.isfinite(exact_bs_difference) &
+                  (exact_bs_support >= HB_APERTURE_SUPPORT_MIN) &
+                  np.isfinite(exact_bs_snr) &
+                  (exact_bs_snr >= HB_APERTURE_EXTERNAL_SNR_MIN))
+    exact_index = np.flatnonzero(exact_pass)
+    _timing("Hbeta exact BS difference S/N stage", exact_difference_started)
 
-    candidate_measurements = [None] * len(candidate_world)
-    eligible_index = np.flatnonzero(bs_eligible)
-    virus_started = perf_counter()
-    if eligible_index.size:
-        eligible_ras = candidate_ras[eligible_index]
-        eligible_decs = candidate_decs[eligible_index]
-        candidate_virus_on, candidate_virus_on_support = _measure_fractional_apertures_batch(
-            virus_on, virus_wcs, virus_on.shape, eligible_ras, eligible_decs,
-            HB_APERTURE_RADIUS_ARCSEC, common_pixel_area,
-            value_scale=common_pixel_area, support=virus_on_support)
-        candidate_virus_off, candidate_virus_off_support = _measure_fractional_apertures_batch(
-            virus_off, virus_wcs, virus_off.shape, eligible_ras, eligible_decs,
-            HB_APERTURE_RADIUS_ARCSEC, common_pixel_area,
-            value_scale=common_pixel_area, support=virus_off_support)
-        eligible_rows = _assemble_filter_matched_aperture_rows(
-            eligible_ras, eligible_decs, HB_APERTURE_RADIUS_ARCSEC,
-            candidate_bs_on[eligible_index], candidate_bs_off[eligible_index],
-            candidate_virus_on, candidate_virus_off,
-            candidate_bs_on_support[eligible_index],
-            candidate_bs_off_support[eligible_index],
-            candidate_virus_on_support, candidate_virus_off_support)
-        for index, row in zip(eligible_index, eligible_rows):
-            candidate_measurements[int(index)] = row
-    _timing("Hbeta candidate VIRUS aperture measurements", virus_started)
+    exact_ras = candidate_ras[exact_index]
+    exact_decs = candidate_decs[exact_index]
+    final_bs_started = perf_counter()
+    final_bs_on, final_bs_on_support = _measure_fractional_apertures_batch(
+        on_sky, on_wcs, on_sky.shape, exact_ras, exact_decs,
+        HB_APERTURE_RADIUS_ARCSEC, on_area)
+    final_bs_off, final_bs_off_support = _measure_fractional_apertures_batch(
+        off_sky, off_wcs, off_sky.shape, exact_ras, exact_decs,
+        HB_APERTURE_RADIUS_ARCSEC, off_area)
+    _timing("Hbeta final BS ON/OFF photometry", final_bs_started)
+
+    final_virus_started = perf_counter()
+    final_virus_on, final_virus_on_support = _measure_fractional_apertures_batch(
+        virus_on, virus_wcs, virus_on.shape, exact_ras, exact_decs,
+        HB_APERTURE_RADIUS_ARCSEC, common_pixel_area,
+        value_scale=common_pixel_area, support=virus_on_support)
+    final_virus_off, final_virus_off_support = _measure_fractional_apertures_batch(
+        virus_off, virus_wcs, virus_off.shape, exact_ras, exact_decs,
+        HB_APERTURE_RADIUS_ARCSEC, common_pixel_area,
+        value_scale=common_pixel_area, support=virus_off_support)
+    _timing("Hbeta final VIRUS ON/OFF photometry", final_virus_started)
+    final_rows = _assemble_filter_matched_aperture_rows(
+        exact_ras, exact_decs, HB_APERTURE_RADIUS_ARCSEC,
+        final_bs_on, final_bs_off, final_virus_on, final_virus_off,
+        final_bs_on_support, final_bs_off_support,
+        final_virus_on_support, final_virus_off_support)
     selected_rows = []
     selected_world = []
     support_pass = 0
-    nonoverlap_count = 0
     selection_started = perf_counter()
-    for candidate_index, (ra, dec, x, y) in enumerate(candidate_world):
-        if any(float(_angular_separation_arcsec(ra, dec, old_ra, old_dec)) <
-               HB_APERTURE_MIN_CENTER_SEPARATION_ARCSEC
-               for old_ra, old_dec, _, _ in selected_world):
-            continue
-        nonoverlap_count += 1
-        row = candidate_measurements[candidate_index]
-        if row is None:
-            continue
+    for candidate_position, row in zip(exact_index, final_rows):
+        candidate_index = int(nonoverlap_index[int(candidate_position)])
+        ra, dec, x, y = candidate_world[candidate_index]
         if not row["support_ok"]:
             continue
         support_pass += 1
         row["BS_ON_MINUS_OFF_SNR"] = row["BS_ON_MINUS_OFF"] / blank_noise
-        if (not np.isfinite(row["BS_ON_MINUS_OFF_SNR"]) or
-                row["BS_ON_MINUS_OFF_SNR"] < HB_APERTURE_EXTERNAL_SNR_MIN):
-            continue
+        row["_exact_bs_difference"] = float(exact_bs_difference[candidate_position])
         row["region_id"] = int(len(selected_rows) + 1)
         row["BS_ON_pixel_x"] = x; row["BS_ON_pixel_y"] = y
         selected_rows.append(row)
         selected_world.append((ra, dec, x, y))
+
+    nonoverlap_count = int(nonoverlap_index.size)
 
     for row in selected_rows:
         row["R_ON"] = (row["VIRUS_ON"] / row["BS_ON"]
@@ -1399,6 +1466,26 @@ def _hbeta_filter_matched_validation(sci, dq, wave, sci_scale, virus_wcs,
                          if row["BS_OFF"] > 0 else np.nan)
         row["R_DIFF"] = (row["VIRUS_ON_MINUS_OFF"] / row["BS_ON_MINUS_OFF"]
                           if row["BS_ON_MINUS_OFF"] > 0 else np.nan)
+    difference_abs = []
+    difference_fractional = []
+    for row in selected_rows:
+        reference = float(row["_exact_bs_difference"])
+        measured = float(row["BS_ON_MINUS_OFF"])
+        if np.isfinite(reference) and np.isfinite(measured):
+            error = abs(measured - reference)
+            difference_abs.append(error)
+            difference_fractional.append(
+                error / max(abs(reference), np.finfo(float).tiny))
+    exact_difference_validation = {
+        "N": int(len(difference_abs)),
+        "max_absolute_difference": (float(max(difference_abs))
+                                     if difference_abs else None),
+        "max_fractional_difference": (float(max(difference_fractional))
+                                       if difference_fractional else None),
+        "definition": "final separately measured BS_ON - BS_OFF minus the exact BS_difference aperture used for S/N preselection",
+    }
+    for row in selected_rows:
+        row.pop("_exact_bs_difference", None)
     primary_comparisons = _hbeta_aperture_comparisons(selected_rows)
     tertiles = _hbeta_surface_brightness_tertiles(selected_rows)
     radius_rows = []
@@ -1476,20 +1563,25 @@ def _hbeta_filter_matched_validation(sci, dq, wave, sci_scale, virus_wcs,
                                         "VIRUS": float(common_pixel_area)},
         "empirical_noise": {**noise_info, "sigma_aperture_flux": float(blank_noise)},
         "bright_region_selection": {
-            "method": "deterministic local maxima in the modestly smoothed native BS ON-OFF image, sorted by brightness and greedily retained with non-overlap",
+            "method": "deterministic local maxima in the modestly smoothed native BS ON-OFF image, fast native-grid aperture S/N preselection, then exact sky-coordinate aperture selection",
             "detection_image": "sky-subtracted calibrated native BS ON-OFF",
             "detection_smoothing_fwhm_arcsec": HB_APERTURE_DETECTION_SMOOTH_ARCSEC,
             "external_detection_snr_definition": "native BS ON-OFF 6-arcsec aperture flux divided by empirical blank-aperture scatter",
             "external_detection_snr_threshold": HB_APERTURE_EXTERNAL_SNR_MIN,
+            "fast_preselection_snr_threshold": 5.0,
             "minimum_center_separation_arcsec": HB_APERTURE_MIN_CENTER_SEPARATION_ARCSEC,
             "support_threshold_fraction": HB_APERTURE_SUPPORT_MIN,
-            "candidate_regions": int(len(candidate_world)),
+            "candidate_regions": old_local_maximum_count,
+            "old_positive_local_maxima": old_local_maximum_count,
+            "fast_snr_prefilter_candidates": fast_local_maximum_count,
             "nonoverlap_candidates": int(nonoverlap_count),
+            "exact_bs_snr_candidates": int(exact_index.size),
             "passing_support": int(support_pass),
             "passing_snr": int(len(selected_rows)),
             "selected_regions": int(len(selected_rows)),
             "local_maximum_window_pixels": int(peak_size),
         },
+        "exact_bs_difference_validation": exact_difference_validation,
         "filter_response_integration": {
             "on": {"path": str(on_filter_path), **on_integration},
             "off": {"path": str(off_filter_path), **off_integration},
@@ -2120,6 +2212,10 @@ def _print_hbeta_aperture_tables(aperture):
         print("radius %g arcsec material changes (>%.0f%%): %s" %
               (check["radius_arcsec"], 100.0 * HB_APERTURE_MATERIAL_FRACTION,
                material or "none"))
+    exact_check = aperture.get("exact_bs_difference_validation", {})
+    print("Hbeta exact BS-difference validation: N=%s; max absolute difference=%s; max fractional difference=%s" %
+          (exact_check.get("N"), exact_check.get("max_absolute_difference"),
+           exact_check.get("max_fractional_difference")))
     primary = aperture["primary_6arcsec"]
     on_location = primary["VIRUS_ON_over_BS_ON"]["robust_location"]
     off_location = primary["VIRUS_OFF_over_BS_OFF"]["robust_location"]
