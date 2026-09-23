@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Validate and package the completed M101 VIRUS cube.
+"""Validate and package the completed current-model M101 VIRUS cube.
 
 This is intentionally a downstream QA/release script.  It never imports the
-Bayesian fitter or the cube builder, refits a calibration, changes SCI, or
-interpolates a line.  It uses the independent Burrell Schmidt Hbeta images,
-atomic line physics, propagated cube uncertainties, and the validated H5
-bookkeeping as the acceptance standards.
+cube builder, refits a calibration, changes production SCI, or interpolates a
+line.  It uses the independent Burrell Schmidt Hbeta images, atomic line
+physics, propagated cube uncertainties, and the same shared hardware registry
+as the production cube for H5 bookkeeping.
 
 Burrell Schmidt provenance (Garner et al. 2022, ApJ 941, 182): the imaging
 pixel scale is approximately 1.45 arcsec pixel^-1.  Hbeta-on has central
@@ -40,9 +40,10 @@ from reproject import reproject_interp
 from scipy.ndimage import gaussian_filter, label, find_objects
 
 import diagnose_m101_hierarchical as validated_m101
+from m101_hardware_exclusions import HARDWARE_EXCLUSIONS, hardware_excluded
 
 
-SCRIPT_VERSION = "1.0"
+SCRIPT_VERSION = "1.1"
 SPEED_OF_LIGHT_KM_S = 299792.458
 M101_RA_DEG = 210.800
 M101_DEC_DEG = 54.333
@@ -55,6 +56,7 @@ BS_ABSOLUTE_CALIBRATION_FRACTION = 0.05
 DQ_INSUFFICIENT_SUPPORT = np.uint16(1 << 0)
 DQ_VAR_INCOMPLETE = np.uint16(1 << 1)
 DQ_OIII5007_VALIDATION = np.uint16(1 << 5)
+HARDWARE_REGISTRY_PATH = Path(hardware_excluded.__code__.co_filename).resolve()
 
 LINES = {
     "OII_3727": (3727.0, 10.0),
@@ -120,6 +122,49 @@ def _file_identity(path):
     stat = path.stat()
     return {"path": str(path), "size": int(stat.st_size),
             "mtime_ns": int(stat.st_mtime_ns)}
+
+
+def _persistent_hardware_match(h5_name, group):
+    """Classify a group using persistent records from the shared registry."""
+    physical = (int(group["specid"]), int(group["ifuslot"]),
+                int(group["ifuid"]), str(group["amp"]).upper())
+    for record in HARDWARE_EXCLUSIONS:
+        if record.get("scope") != "fit_and_cube" or "specid" not in record:
+            continue
+        if "h5" in record and Path(str(h5_name)).name != record["h5"]:
+            continue
+        if physical == (int(record["specid"]), int(record["ifuslot"]),
+                        int(record["ifuid"]), str(record["amp"]).upper()):
+            return True
+    return False
+
+
+def _validate_current_model_summary(summary):
+    """Require the provenance fields that identify the accepted cube model."""
+    model = summary.get("model", {})
+    exposure_scale = summary.get("exposure_scale", {})
+    hardware = summary.get("hardware_exclusions", {})
+    qa = summary.get("qa", {})
+    checks = {
+        "model.name": model.get("name") == "current_staged_m101_v1",
+        "model.pca_coefficients_applied": model.get("pca_coefficients_applied") is False,
+        "exposure_scale.SB_iterations_applied": exposure_scale.get("SB_iterations_applied") == 2,
+        "exposure_scale.third_iteration_applied": exposure_scale.get("third_iteration_applied") is False,
+        "exposure_scale.sky_reestimated_after_scale": exposure_scale.get(
+            "sky_reestimated_after_scale") is False,
+        "exposure_scale.errors_scaled": exposure_scale.get("errors_scaled") is True,
+        "exposure_scale.sigma_g_added_to_fiber_errors": exposure_scale.get(
+            "sigma_g_added_to_fiber_errors") is False,
+        "hardware_exclusions.purpose": hardware.get("purpose") == "cube",
+        "hardware_exclusions.registry": bool(hardware.get("registry")),
+        "qa.automatic_rejection": qa.get("automatic_rejection") is False,
+    }
+    failed = [name for name, passed in checks.items() if not passed]
+    if failed:
+        raise ValueError(
+            "cube summary is not from the accepted current-model production path: %s"
+            % ", ".join(failed))
+    return {"checks": checks, "status": "accepted current-model provenance"}
 
 
 def _read_image_hdu(path, label, require_celestial=True):
@@ -315,7 +360,9 @@ def _spectrum_accounting(h5_glob):
     paths = sorted(Path(path).expanduser().resolve() for path in glob.glob(h5_glob))
     if not paths:
         raise ValueError("no H5 files matched --h5-glob=%s" % h5_glob)
-    total_input = total_masked = amplifier_observations = shots = 0
+    total_input = total_masked = total_historical = total_persistent = 0
+    total_masked_groups = total_historical_groups = total_persistent_groups = 0
+    amplifier_observations = shots = 0
     per_file = []
     exposure_ids = set()
     for path in paths:
@@ -326,28 +373,72 @@ def _spectrum_accounting(h5_glob):
             groups, labels = validated_m101.build_groups(info)
             if labels.shape[0] != info.nrows:
                 raise ValueError("validated exposure labels do not match Info rows: %s" % path)
-            if "ifuslot" not in info.colnames or "amp" not in info.colnames:
-                raise ValueError("Info lacks ifuslot/amp: %s" % path)
-            ifuslot = np.asarray(info.cols.ifuslot[:])
-            amp = np.asarray([validated_m101.as_text(v) for v in info.cols.amp[:]])
-            masked = validated_m101.masked_rows(path, ifuslot, amp)
+            h5_name = path.name
+            h5_date = h5_name[:8]
+            if len(h5_date) != 8 or not h5_date.isdigit():
+                raise ValueError("H5 basename does not begin with a UT date: %s" % h5_name)
+            masked = np.zeros(info.nrows, dtype=bool)
+            persistent_masked = np.zeros(info.nrows, dtype=bool)
+            historical_masked = np.zeros(info.nrows, dtype=bool)
+            masked_groups = historical_groups = persistent_groups = 0
+            for group in groups:
+                excluded = hardware_excluded(
+                    date=h5_date, h5=h5_name, specid=group["specid"],
+                    ifuslot=group["ifuslot"], ifuid=group["ifuid"],
+                    amp=group["amp"], purpose="cube")
+                if not excluded:
+                    continue
+                indices = np.asarray(group["indices"], dtype=int)
+                masked[indices] = True
+                masked_groups += 1
+                if _persistent_hardware_match(h5_name, group):
+                    persistent_masked[indices] = True
+                    persistent_groups += 1
+                else:
+                    historical_masked[indices] = True
+                    historical_groups += 1
             survey_exposures = [int(row["exp"]) for row in h5.root.Survey]
             if len(set(survey_exposures)) != len(survey_exposures):
                 raise ValueError("duplicate Survey exposure in %s" % path)
             total_input += int(info.nrows)
             total_masked += int(masked.sum())
+            total_historical += int(historical_masked.sum())
+            total_persistent += int(persistent_masked.sum())
+            total_masked_groups += masked_groups
+            total_historical_groups += historical_groups
+            total_persistent_groups += persistent_groups
             amplifier_observations += len(groups)
             shots += len(survey_exposures)
             exposure_ids.update((path.name, exp) for exp in survey_exposures)
             per_file.append({"file": str(path), "info_rows": int(info.nrows),
-                             "hardware_date_masked": int(masked.sum()),
+                             "hardware_excluded_fiber_rows": int(masked.sum()),
+                             "historical_hardware_excluded_fiber_rows": int(historical_masked.sum()),
+                             "persistent_hardware_excluded_fiber_rows": int(persistent_masked.sum()),
+                             "hardware_excluded_groups": int(masked_groups),
+                             "historical_hardware_excluded_groups": int(historical_groups),
+                             "persistent_hardware_excluded_groups": int(persistent_groups),
+                             # Retain the old field name for consumers of the
+                             # pre-registry accounting output.
+                             "hardware_date_masked": int(historical_masked.sum()),
                              "retained_rows": int(info.nrows - masked.sum()),
                              "amplifier_observations": len(groups),
                              "survey_exposures": survey_exposures})
     return {"N_H5": len(paths), "N_input_fiber_spectra": total_input,
-            "N_hardware_date_masked": total_masked,
+            "N_hardware_excluded_fiber_rows": total_masked,
+            "N_historical_hardware_excluded_fiber_rows": total_historical,
+            "N_persistent_hardware_excluded_fiber_rows": total_persistent,
+            "N_hardware_excluded_groups": total_masked_groups,
+            "N_historical_hardware_excluded_groups": total_historical_groups,
+            "N_persistent_hardware_excluded_groups": total_persistent_groups,
+            # Compatibility alias; this now means historical-only exclusions.
+            "N_hardware_date_masked": total_historical,
             "N_retained_fiber_spectra": total_input - total_masked,
             "N_exposures_shots": shots, "N_amplifier_observations": amplifier_observations,
+            "hardware_registry": _file_identity(HARDWARE_REGISTRY_PATH),
+            "hardware_registry_purpose": "cube",
+            "hardware_registry_records": int(len(HARDWARE_EXCLUSIONS)),
+            "persistent_hardware_registry_records": int(sum(
+                "specid" in record for record in HARDWARE_EXCLUSIONS)),
             "input_h5_files": [str(p) for p in paths], "per_file": per_file}
 
 
@@ -805,8 +896,11 @@ def _write_release(path, arrays, sci_header, lsf_rows, info, oiii_mask, wave):
     header = sci_header.copy()
     header["EXTNAME"] = "SCI"
     header.add_history("Cube reconstructed from calibrated VIRUS fiber spectra.")
-    header.add_history("Final Bayesian amplifier calibration used z_post, colorless p, and alpha*K(lambda)*f(q).")
-    header.add_history("Low-p_good spectra were retained; p_good was QA, not a data mask.")
+    header.add_history("Current M101 staged model: frozen M, alpha q correction, persistent mu_a, and final exposure sky.")
+    header.add_history("Two median-one physical-amplifier-collapsed LOO SB exposure-scale iterations applied.")
+    header.add_history("Final exposure correction = 1/(g1_rel*g2_rel); sky was scaled and not re-estimated.")
+    header.add_history("g3 was measured as closure QA only and was not applied.")
+    header.add_history("Shared hardware registry exclusions and reviewed QA decisions were inherited from production.")
     header.add_history("VARIANCE/DQ/COVERAGE/NCONTRIB ancillary extensions are included.")
     header.add_history("[O III] 5007 bright-line artifact was explicitly retested against 4959.")
     header.add_history("Hbeta was independently validated against Burrell Schmidt imaging.")
@@ -871,10 +965,22 @@ def _markdown(summary):
     balmer = summary["balmer_validation"]; oiii = summary["oiii_validation"]
     counts = summary["spectrum_accounting"]
     lsf = summary["lsf"]
+    production = summary["production_cube_provenance"]
     def val(obj, key="median"):
         return obj.get(key) if isinstance(obj, dict) else obj
     lines = ["# M101 referee validation and public release", "",
-             "This report is downstream validation and packaging. No Bayesian calibration was refit and no SCI voxel was changed.", "",
+             "This report is downstream validation and packaging of the accepted current-model production cube. No calibration was refit and no production SCI voxel was changed.", "",
+             "## Production calibration provenance", "",
+             "- Model: `%s`; exposure correction: `%s`." %
+             (production["model_name"], production["exposure_scale_correction"]),
+             "- Applied SB iterations: %d; third iteration applied: %s; sky re-estimated after scaling: %s." %
+             (production["SB_iterations_applied"], production["third_iteration_applied"],
+              production["sky_reestimated_after_scale"]),
+             "- Hardware registry: `%s`; purpose=`%s`; persistent excluded groups=%d." %
+             (counts["hardware_registry"]["path"], counts["hardware_registry_purpose"],
+              counts["N_persistent_hardware_excluded_groups"]),
+             "- Explicit post-QA rejection groups inherited from production: %d." %
+             production["explicit_qa_rejected_groups"], "",
              "## Hbeta bright-line validation", "",
              "- Status: **%s**." % hb["status"],
              "- Coherent candidate regions: %d; morphology scale (diagnostic only): %s." %
@@ -917,10 +1023,12 @@ def _markdown(summary):
              (lsf["usable_unblended_rows"], lsf["median_FWHM_A"], lsf["range_FWHM_A"]),
              "- LSF files: `m101_lsf_summary.csv`, `m101_lsf_interpolated.csv`, `m101_lsf_summary.png`.", "",
              "## Input/retained spectrum accounting", "",
-             "- H5=%d; input fiber spectra=%d; hardware/date masked=%d; retained=%d; shots=%d; amplifier observations=%d." %
-             (counts["N_H5"], counts["N_input_fiber_spectra"], counts["N_hardware_date_masked"],
+             "- H5=%d; input fiber spectra=%d; hardware excluded=%d; historical=%d; persistent=%d; retained=%d; shots=%d; amplifier observations=%d." %
+             (counts["N_H5"], counts["N_input_fiber_spectra"], counts["N_hardware_excluded_fiber_rows"],
+              counts["N_historical_hardware_excluded_fiber_rows"],
+              counts["N_persistent_hardware_excluded_fiber_rows"],
               counts["N_retained_fiber_spectra"], counts["N_exposures_shots"], counts["N_amplifier_observations"]),
-             "- Low-p_good, compact external-image, and external_valid failures are not called rejected spectra.", "",
+             "- Hardware exclusions are separate from explicit post-iteration-2 QA rejection decisions.", "",
              "## Release DQ definitions", "",
              "- Existing bits 0--4 are retained. New bit 5 is residual bright-line [O III] 5007 deficit identified by the post-reduction 5007/4959 validation.",
              "- SCI was not removed, interpolated, or replaced by this script.", ""]
@@ -964,7 +1072,26 @@ def main():
         cube_summary = json.loads(cube_summary_path.read_text())
     except Exception as exc:
         raise ValueError("could not read cube summary JSON: %s" % cube_summary_path) from exc
+    production_provenance = _validate_current_model_summary(cube_summary)
     accounting = _spectrum_accounting(args.h5_glob)
+    production_hardware = cube_summary["hardware_exclusions"]
+    accounting_pairs = {
+        "hardware_excluded_groups": accounting["N_hardware_excluded_groups"],
+        "persistent_hardware_excluded_groups": accounting[
+            "N_persistent_hardware_excluded_groups"],
+        "hardware_excluded_fiber_rows": accounting[
+            "N_hardware_excluded_fiber_rows"],
+        "persistent_hardware_excluded_fiber_rows": accounting[
+            "N_persistent_hardware_excluded_fiber_rows"],
+    }
+    production_pairs = {
+        key: int(production_hardware.get(key, -1)) for key in accounting_pairs
+    }
+    if accounting_pairs != production_pairs:
+        raise ValueError(
+            "hardware accounting does not match the production summary: "
+            "computed=%s production=%s" % (accounting_pairs, production_pairs))
+    production_provenance["hardware_accounting_matches"] = True
     on, on_header, on_wcs, on_scale, on_path = _read_image_hdu(args.hb_on_image, "Hbeta-on image")
     off, off_header, off_wcs, off_scale, off_path = _read_image_hdu(args.hb_off_image, "Hbeta-off image")
     on_area = _pixel_area_arcsec2(on_wcs)
@@ -1027,16 +1154,45 @@ def main():
     with open(lsf_csv, newline="") as handle:
         lsf_rows = list(csv.DictReader(handle))
     _plot_release_qa(arrays, {**lsf, "dq_bits": cube_validation["DQ_counts_by_bit"]}, output_dir)
+    exposure_scale = cube_summary["exposure_scale"]
+    qa_production = cube_summary["qa"]
+    production_release_info = {
+        "model_name": cube_summary["model"]["name"],
+        "exposure_scale_method": exposure_scale["method"],
+        "exposure_scale_correction": exposure_scale["correction"],
+        "SB_iterations_applied": int(exposure_scale["SB_iterations_applied"]),
+        "third_iteration_applied": bool(exposure_scale["third_iteration_applied"]),
+        "sky_reestimated_after_scale": bool(exposure_scale["sky_reestimated_after_scale"]),
+        "explicit_qa_rejected_groups": int(
+            qa_production.get("rejection", {}).get("rejected_groups", 0)),
+        "explicit_qa_rejected_fiber_rows": int(
+            qa_production.get("rejection", {}).get("rejected_fiber_rows", 0)),
+        "qa_reject_file_used": bool(qa_production.get("reject_file_used", False)),
+        "qa_reject_file": qa_production.get("reject_file"),
+        "hardware_registry": accounting["hardware_registry"],
+    }
     release_info = {"N_H5": accounting["N_H5"], "N_exposures_shots": accounting["N_exposures_shots"],
                     "N_input_fiber_spectra": accounting["N_input_fiber_spectra"],
                     "N_retained_fiber_spectra": accounting["N_retained_fiber_spectra"],
-                    "N_hardware_date_masked": accounting["N_hardware_date_masked"],
+                    "N_hardware_excluded_fiber_rows": accounting[
+                        "N_hardware_excluded_fiber_rows"],
+                    "N_historical_hardware_excluded_fiber_rows": accounting[
+                        "N_historical_hardware_excluded_fiber_rows"],
+                    "N_persistent_hardware_excluded_fiber_rows": accounting[
+                        "N_persistent_hardware_excluded_fiber_rows"],
+                    "N_hardware_excluded_groups": accounting[
+                        "N_hardware_excluded_groups"],
+                    "N_historical_hardware_excluded_groups": accounting[
+                        "N_historical_hardware_excluded_groups"],
+                    "N_persistent_hardware_excluded_groups": accounting[
+                        "N_persistent_hardware_excluded_groups"],
                     "N_amplifier_observations": accounting["N_amplifier_observations"],
                     "cube_dimensions": cube_validation["cube_dimensions"],
                     "wavelength": cube_validation["wavelength"],
                     "spatial_pixel_scale_arcsec": pixel_scale,
                     "SCI_BUNIT": str(headers["SCI"].get("BUNIT", "")),
-                    "calibration_provenance": "completed Bayesian from-fit cube; validation did not refit",
+                    "calibration_provenance": "completed current-model cube; validation did not refit",
+                    "production_cube_provenance": production_release_info,
                     "validation_script_version": SCRIPT_VERSION,
                     "validation_utc": datetime.now(timezone.utc).isoformat(),
                     "DQ_bit5_count": int(np.sum((release_dq & DQ_OIII5007_VALIDATION) != 0))}
@@ -1045,6 +1201,10 @@ def main():
                "created_utc": datetime.now(timezone.utc).isoformat(), "release_cube": str(release_path),
                "inputs": {key: _file_identity(path) for key, path in paths.items()},
                "cube_summary": {"path": str(cube_summary_path), "source": cube_summary},
+               "production_cube_provenance": {
+                   **production_release_info,
+                   **production_provenance,
+               },
                "cube_validation": cube_validation,
                "spectrum_accounting": accounting,
                "external_hbeta": {"on": {"path": str(on_path), "pixel_scale_arcsec": on_scale, "pixel_area_arcsec2": on_area, "units": on_decision,
