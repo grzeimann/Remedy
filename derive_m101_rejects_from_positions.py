@@ -125,6 +125,29 @@ def _key_dict(key):
     return {field: key[index] for index, field in enumerate(GROUP_FIELDS)}
 
 
+def _production_gaussian_weight(production, fiber_x, fiber_y, pixel_x,
+                                 pixel_y, sigma):
+    """Use the production kernel across builder revisions.
+
+    Current local builders expose ``production_gaussian_weight``.  Older
+    TACC copies have the same private axis kernel used by
+    ``_gaussian_splat_shot_xy`` but do not expose the scalar wrapper.  The
+    final expression is the exact production axis formula, not an alternate
+    reconstruction approximation.
+    """
+    public = getattr(production, "production_gaussian_weight", None)
+    if public is not None:
+        return float(public(fiber_x, fiber_y, pixel_x, pixel_y, sigma))
+    axis = getattr(production, "_production_gaussian_axis_weight", None)
+    if axis is not None:
+        return float(axis(float(fiber_x), float(pixel_x), float(sigma)) *
+                     axis(float(fiber_y), float(pixel_y), float(sigma)))
+    return float(np.exp(-0.5 * (float(pixel_x) - float(fiber_x)) ** 2 /
+                        float(sigma) ** 2) *
+                 np.exp(-0.5 * (float(pixel_y) - float(fiber_y)) ** 2 /
+                        float(sigma) ** 2))
+
+
 def _summary_path(summary, *keys):
     value = summary
     for key in keys:
@@ -477,7 +500,8 @@ def _deposits_at_pixel(production, x, y, values, target_ix, target_iy, sigma, ar
     if not np.any(supported):
         return np.empty(0, dtype=int), np.empty(0), np.empty(0)
     weights = np.asarray([
-        production.production_gaussian_weight(x[index], y[index], target_x, target_y, sigma)
+        _production_gaussian_weight(
+            production, x[index], y[index], target_x, target_y, sigma)
         for index in indices
     ], dtype=float)
     weighted = weights * np.asarray(values[indices], dtype=float) / float(area)
@@ -1191,8 +1215,9 @@ def _fiber_rows_for_aggregate(production, records, aggregate, target, wave_index
     for local, row_index in enumerate(row_indices):
         if int(row_index) not in selected_rows:
             continue
-        weight = production.production_gaussian_weight(
-            x[local], y[local], target["ix"] + 1, target["iy"] + 1, sigma)
+        weight = _production_gaussian_weight(
+            production, x[local], y[local], target["ix"] + 1,
+            target["iy"] + 1, sigma)
         if not np.isfinite(values[local]):
             continue
         result.append({"row_index": int(row_index), "weight": float(weight),
