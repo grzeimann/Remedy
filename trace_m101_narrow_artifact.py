@@ -216,6 +216,9 @@ def _load_production_module(source_dir):
     spec = importlib.util.spec_from_file_location("m101_production_builder", path)
     module = importlib.util.module_from_spec(spec)
     sys.path.insert(0, str(source_dir))
+    # Python 3.9 dataclasses resolves postponed annotations through
+    # sys.modules while the dynamically loaded module is being executed.
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
