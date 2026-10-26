@@ -349,8 +349,8 @@ def _model_paths(summary, source_dir, production_dir):
         "amp_means": source_dir / "m101-amp-residual-pca-final/amp_residual_pca_models.npz",
         "fq_template": None,
         "blank_file": None,
-        "on_filter": None,
-        "off_filter": None,
+        "on_filter": production_dir / "M101_Hb_on.fits",
+        "off_filter": production_dir / "M101_Hb_off.fits",
         "exposure_scale": None,
     }
     result = {}
@@ -472,8 +472,12 @@ def _calibrate_narrow_inputs(production, model, h5files, target_indices,
 
     if scale_rows is None:
         say("production exposure-scale CSV was unavailable; deriving the exact two-pass scales")
-        on_filter = production.frozen_parent._default_input("on_filter")
-        off_filter = production.frozen_parent._default_input("off_filter")
+        on_filter = production_dir / "M101_Hb_on.fits"
+        off_filter = production_dir / "M101_Hb_off.fits"
+        if not on_filter.exists():
+            on_filter = production.frozen_parent._default_input("on_filter")
+        if not off_filter.exists():
+            off_filter = production.frozen_parent._default_input("off_filter")
         if not on_filter or not off_filter:
             raise FileNotFoundError("cannot derive exposure scales: ON/OFF filters unavailable")
         on_values = production.validated_m101.read_filter(on_filter)
