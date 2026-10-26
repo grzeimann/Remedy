@@ -449,6 +449,7 @@ def _calibrate_narrow_inputs(production, model, h5files, target_indices,
                 "original_spectra": spectra.astype(np.float32).copy(),
                 "errors": errors.astype(np.float32), "ra": ra, "dec": dec,
                 "labels": labels, "surveys": surveys, "groups": groups,
+                "q_rows": np.asarray(q_rows, dtype=int),
                 "hardware_bad": hardware_bad,
                 "corrected_total": np.asarray(corrected_total, dtype=np.float32),
                 "sky_by_exposure": {int(k): np.asarray(v, dtype=np.float32)
