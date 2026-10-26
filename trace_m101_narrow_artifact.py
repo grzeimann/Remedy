@@ -349,8 +349,8 @@ def _model_paths(summary, source_dir, production_dir):
         "amp_means": source_dir / "m101-amp-residual-pca-final/amp_residual_pca_models.npz",
         "fq_template": None,
         "blank_file": None,
-        "on_filter": production_dir / "M101_Hb_on.fits",
-        "off_filter": production_dir / "M101_Hb_off.fits",
+        "on_filter": production_dir / "hbeta_on_filter.dat",
+        "off_filter": production_dir / "hbeta_off_filter.dat",
         "exposure_scale": None,
     }
     result = {}
@@ -360,7 +360,11 @@ def _model_paths(summary, source_dir, production_dir):
             if path is None:
                 path = _summary_path(summary, "exposure_scale_csv")
         elif name in ("on_filter", "off_filter"):
-            path = _summary_path(summary, "filters", name.upper())
+            # These are the ASCII H-beta response curves, not the FITS image
+            # products M101_Hb_on/off.fits.  Prefer the explicit production
+            # directory files over stale absolute paths in older summaries.
+            path = default if default.exists() else _summary_path(
+                summary, "filters", name.upper())
         elif name == "blank_file":
             path = _summary_path(summary, "provenance", "blank_file")
             if path is None:
@@ -425,7 +429,8 @@ def _load_model(production, paths, h5files):
 
 def _calibrate_narrow_inputs(production, model, h5files, target_indices,
                              control_indices, scale_rows, production_dir,
-                             bootstrap_draws):
+                             bootstrap_draws, on_filter_path=None,
+                             off_filter_path=None):
     say("loading/calibrating affected fiber wavelengths")
     narrow = []
     full_records = []
@@ -472,8 +477,12 @@ def _calibrate_narrow_inputs(production, model, h5files, target_indices,
 
     if scale_rows is None:
         say("production exposure-scale CSV was unavailable; deriving the exact two-pass scales")
-        on_filter = production_dir / "M101_Hb_on.fits"
-        off_filter = production_dir / "M101_Hb_off.fits"
+        on_filter = on_filter_path
+        off_filter = off_filter_path
+        if on_filter is None or not on_filter.exists():
+            on_filter = production_dir / "hbeta_on_filter.dat"
+        if off_filter is None or not off_filter.exists():
+            off_filter = production_dir / "hbeta_off_filter.dat"
         if not on_filter.exists():
             on_filter = production.frozen_parent._default_input("on_filter")
         if not off_filter.exists():
@@ -860,7 +869,8 @@ def main():
     scale_rows = _load_scale_rows(paths["exposure_scale"], h5files)
     narrow, scale_rows = _calibrate_narrow_inputs(
         production, model, h5files, target_indices, control_indices,
-        scale_rows, production_dir, args.bootstrap_draws)
+        scale_rows, production_dir, args.bootstrap_draws,
+        paths["on_filter"], paths["off_filter"])
     _attach_surveys(narrow, h5files)
     rows, ranked = _group_rows(
         narrow, TARGET_WAVELENGTHS, CONTROL_WAVELENGTHS, thresholds, regions,
