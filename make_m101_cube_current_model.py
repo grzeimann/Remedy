@@ -101,6 +101,8 @@ Q_MAX = 75
 M101_SKY_MIN_FINITE_FRACTION = 0.8
 M101_SKY_MIN_FIBERS = 20
 GAUSSIAN_FWHM_ARCSEC = 1.8
+SCI_BUNIT = "1e-17 erg s-1 cm-2 Angstrom-1 arcsec-2"
+VAR_BUNIT = "1e-34 erg2 s-2 cm-4 Angstrom-2 arcsec-4"
 QA_NUMERICAL_FLOOR = np.finfo(float).eps
 QA_WARN_Z = 5.0
 QA_BANDS = ("ON", "OFF")
@@ -1502,6 +1504,55 @@ def _load_qa_reject_file(path):
     return keys, path
 
 
+def _load_spectral_reject_file(path, tolerance=1.e-6):
+    """Read a reviewed list of exact physical-amplifier/wavelength masks."""
+    if path is None:
+        return set(), None
+    path = Path(path).expanduser().resolve()
+    required = {
+        "H5", "exposure", "SPECID", "IFUSLOT", "IFUID", "AMP",
+        "wavelength_A",
+    }
+    entries = set()
+    with path.open(newline="") as stream:
+        reader = csv.DictReader(stream)
+        missing = required - set(reader.fieldnames or ())
+        if missing:
+            raise ValueError(
+                "spectral reject file lacks columns: %s" % sorted(missing))
+        for row_number, row in enumerate(reader, start=2):
+            try:
+                h5 = Path(row["H5"]).name
+                exposure = int(row["exposure"])
+                specid = int(row["SPECID"])
+                ifuslot = int(row["IFUSLOT"])
+                ifuid = int(row["IFUID"])
+                amp = str(row["AMP"]).strip().upper()
+                wavelength = float(row["wavelength_A"])
+            except (TypeError, ValueError, KeyError) as exc:
+                raise ValueError(
+                    "malformed spectral reject row %d: %s" %
+                    (row_number, exc)) from exc
+            if not h5 or not amp or not np.isfinite(wavelength):
+                raise ValueError(
+                    "malformed spectral reject row %d: empty key or non-finite "
+                    "wavelength" % row_number)
+            distance = np.abs(DEF_WAVE - wavelength)
+            matches = np.flatnonzero(distance <= tolerance)
+            if matches.size != 1:
+                raise ValueError(
+                    "spectral reject row %d wavelength %.12g does not map "
+                    "uniquely to DEF_WAVE within %.3g A" %
+                    (row_number, wavelength, tolerance))
+            entry = (h5, exposure, specid, ifuslot, ifuid, amp,
+                     int(matches[0]))
+            if entry in entries:
+                raise ValueError("duplicate spectral reject entry: %s" %
+                                 (entry,))
+            entries.add(entry)
+    return entries, path
+
+
 def _qa_band_scalar(spectrum, responses):
     values, _ = collapse_many(
         np.asarray(spectrum, dtype=float)[None, :], responses)
@@ -2004,6 +2055,48 @@ def _apply_qa_rejection(records, qa_rows, reject_keys):
     return {
         "rejected_groups": int(len(found)),
         "rejected_fiber_rows": int(rejected_rows),
+    }
+
+
+def _apply_spectral_rejection(records, spectral_reject_entries):
+    """Apply reviewed exact wavelength masks after QA and before reconstruction."""
+    groups = {}
+    for record in records:
+        for group in record["groups"]:
+            key = _qa_group_key(record["h5file"].name, group)
+            groups[key] = (record, group)
+
+    found = set()
+    fiber_wavelength_cells = 0
+    physical_amplifiers = set()
+    wavelengths = set()
+    for entry in spectral_reject_entries:
+        group_key = entry[:6]
+        wave_index = int(entry[6])
+        match = groups.get(group_key)
+        if match is None:
+            raise ValueError(
+                "spectral reject file contains a group absent from selected "
+                "inputs: %s" % (group_key,))
+        record, group = match
+        indices = np.asarray(group["indices"], dtype=int)
+        record["spectra"][indices, wave_index] = np.nan
+        record["errors"][indices, wave_index] = np.nan
+        found.add(entry)
+        fiber_wavelength_cells += int(indices.size)
+        physical_amplifiers.add(entry[2:6])
+        wavelengths.add(float(DEF_WAVE[wave_index]))
+
+    missing = set(spectral_reject_entries) - found
+    if missing:
+        raise ValueError(
+            "spectral reject file contains unmatched entries: %s" %
+            sorted(missing))
+    return {
+        "rejected_group_wavelength_entries": int(len(found)),
+        "rejected_fiber_wavelength_cells": int(fiber_wavelength_cells),
+        "unique_physical_amplifiers": int(len(physical_amplifiers)),
+        "wavelengths_A": sorted(wavelengths),
     }
 
 
@@ -2933,9 +3026,10 @@ def _write_cube_products(surname, cube, variancecube, dqcube, weightcube,
     header.pop("CDELT2", None)
     header["CRPIX1"] = (n + 1) / 2.0
     header["CRPIX2"] = (n + 1) / 2.0
-    header["CDELT3"] = float(DEF_WAVE[1] - DEF_WAVE[0])
     header["CRPIX3"] = 1.0
     header["CRVAL3"] = float(DEF_WAVE[0])
+    header["CD3_3"] = float(DEF_WAVE[1] - DEF_WAVE[0])
+    header.pop("CDELT3", None)
     header["CTYPE1"] = "RA---TAN"
     header["CTYPE2"] = "DEC--TAN"
     header["CTYPE3"] = "WAVE"
@@ -2943,6 +3037,7 @@ def _write_cube_products(surname, cube, variancecube, dqcube, weightcube,
     header["CUNIT2"] = "deg"
     header["CUNIT3"] = "Angstrom"
     header["SPECSYS"] = "TOPOCENT"
+    header["BUNIT"] = SCI_BUNIT
     header["CALMOD"] = "M101CUR1"
     header["NMSUP"] = int(summary["preflight"]["groups_with_frozen_M"])
     header["NMMISS"] = int(summary["preflight"]["groups_without_frozen_M_masked"])
@@ -2976,6 +3071,23 @@ def _write_cube_products(surname, cube, variancecube, dqcube, weightcube,
             "Rejected amplifier/exposure groups=%d; rejected fiber rows=%d." % (
                 summary["qa"]["rejection"]["rejected_groups"],
                 summary["qa"]["rejection"]["rejected_fiber_rows"]),
+            "Reviewed wavelength-specific rejection file: %s." % (
+                "used" if summary["spectral_rejection"]["spectral_reject_file_used"]
+                else "not used"),
+            "Rejected group-wavelength entries=%d; fiber-wavelength cells=%d." % (
+                summary["spectral_rejection"]["rejected_group_wavelength_entries"],
+                summary["spectral_rejection"]["rejected_fiber_wavelength_cells"]),
+            "Fiber radius = 0.75 arcsec; fiber area = 1.76714586764 arcsec^2.",
+            "Output pixel scale = 1 arcsec/pixel.",
+            "Gaussian reconstruction FWHM = 1.8 arcsec.",
+            "ERROR = sqrt(VAR).",
+            "VAR stores diagonal per-voxel variance only.",
+            "Spatial covariance introduced by reconstruction is not encoded.",
+            "For large spatial sums, sqrt(sum(VAR)) neglects spatial covariance.",
+            "Gaussian beam area ~= 1.133 * 1.8^2 = 3.67 arcsec^2; "
+            "for 1 arcsec spaxels first-order uncertainty correction is "
+            "sqrt(3.67) ~= 1.9.",
+            "1.9 is an approximate rule of thumb, not full covariance propagation.",
             "--make-lsf %s." % ("enabled" if summary["lsf"]["enabled"] else "disabled"),
             "Gaussian subpixel reconstruction; NCONTRIB >= 2 required for valid SCI."):
         header.add_history(text)
@@ -2988,13 +3100,13 @@ def _write_cube_products(surname, cube, variancecube, dqcube, weightcube,
         np.asarray(cube, dtype=np.float32), header=header).writeto(
             "%s_cube.fits" % surname, overwrite=True)
     variance_header = header.copy()
-    variance_header["BUNIT"] = "SCI units squared"
+    variance_header["BUNIT"] = VAR_BUNIT
     variance_header["EXTNAME"] = "VARIANCE"
     fits.PrimaryHDU(
         np.asarray(variancecube, dtype=np.float32), header=variance_header).writeto(
             "%s_variance_cube.fits" % surname, overwrite=True)
     error_header = header.copy()
-    error_header["BUNIT"] = "SCI units"
+    error_header["BUNIT"] = SCI_BUNIT
     error_header["EXTNAME"] = "ERROR"
     fits.PrimaryHDU(
         np.sqrt(np.asarray(variancecube, dtype=np.float32)),
@@ -3078,6 +3190,9 @@ def _parse_args():
     parser.add_argument(
         "--qa-reject-file", default=None,
         help="reviewed CSV of explicit H5/exposure/physical-amplifier rejections")
+    parser.add_argument(
+        "--spectral-reject-file", default=None,
+        help="reviewed CSV of explicit H5/exposure/physical-amplifier/wavelength rejections")
     parser.add_argument(
         "--make-lsf", action="store_true",
         help="Also propagate master-arc features sparsely and write empirical FWHM products")
@@ -3202,11 +3317,16 @@ def main():
         raise RuntimeError("filter-derived band responses disagree with the frozen band cache")
     qa_responses = np.asarray(band_responses[-2:], dtype=float)
     reject_keys, reject_path = _load_qa_reject_file(args.qa_reject_file)
+    spectral_reject_entries, spectral_reject_path = _load_spectral_reject_file(
+        args.spectral_reject_file)
     print("  ON filter           : %s" % Path(on_filter).expanduser().resolve(), flush=True)
     print("  OFF filter          : %s" % Path(off_filter).expanduser().resolve(), flush=True)
     print("  final QA            : %s; explicit reject groups=%d" %
           ("report-only" if args.qa_report_only else "enabled", len(reject_keys)),
           flush=True)
+    print("  spectral rejection  : %s; explicit group-wavelength entries=%d" %
+          ("enabled" if spectral_reject_path is not None else "not used",
+           len(spectral_reject_entries)), flush=True)
     print("  make-lsf            : %s" %
           ("enabled" if args.make_lsf else "disabled"), flush=True)
 
@@ -3298,6 +3418,8 @@ def main():
         for field_name in exposure_scale_qa_fields:
             row[field_name] = scale[field_name]
     qa_rejection = _apply_qa_rejection(records, qa_rows, reject_keys)
+    spectral_rejection = _apply_spectral_rejection(
+        records, spectral_reject_entries)
     qa_summary["reject_file_used"] = bool(reject_path is not None)
     qa_summary["reject_file"] = (_file_identity(reject_path)
                                  if reject_path is not None else None)
@@ -3319,6 +3441,16 @@ def main():
            qa_summary["without_direct_blank_qa"],
            qa_rejection["rejected_groups"], qa_rejection["rejected_fiber_rows"],
            time.perf_counter() - qa_started), flush=True)
+    spectral_rejection["spectral_reject_file_used"] = bool(
+        spectral_reject_path is not None)
+    spectral_rejection["spectral_reject_file"] = (
+        _file_identity(spectral_reject_path)
+        if spectral_reject_path is not None else None)
+    print("[cube] reviewed spectral rejection: %d group-wavelength entries; "
+          "%d fiber-wavelength cells; %d physical amplifiers" % (
+              spectral_rejection["rejected_group_wavelength_entries"],
+              spectral_rejection["rejected_fiber_wavelength_cells"],
+              spectral_rejection["unique_physical_amplifiers"]), flush=True)
 
     ra0, dec0, size_arcsec, n, xg, yg, xgrid, ygrid, tp = _parse_image_geometry(
         args.image_center_size, args.pixel_scale)
@@ -3520,6 +3652,7 @@ def main():
         "response_composition_validation": composition,
         "blank_loader": blank_provenance,
         "hardware_exclusions": hardware_exclusion_summary,
+        "spectral_rejection": spectral_rejection,
         "preflight": preflight,
         "coverage_table": str(coverage_path.resolve()),
         "calibration_summary_table": str(calibration_path.resolve()),
