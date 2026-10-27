@@ -179,6 +179,15 @@ def _resolve_path(data_dir, value):
     return path.resolve()
 
 
+def _resolve_input_path(data_dir, value):
+    """Resolve a product path, accepting a flat m101_recon layout too."""
+    path = _resolve_path(data_dir, value)
+    if path.exists() or Path(value).expanduser().is_absolute():
+        return path
+    flat_path = data_dir / Path(value).name
+    return flat_path.resolve() if flat_path.exists() else path
+
+
 def _first_existing(data_dir, names):
     for name in names:
         path = _resolve_path(data_dir, name)
@@ -528,33 +537,34 @@ def main():
     if missing_h5:
         raise FileNotFoundError("required M101 H5 files are missing: %s" % missing_h5)
 
-    fq_path = (_resolve_path(data_dir, args.fq_template) if args.fq_template else
+    fq_path = (_resolve_input_path(data_dir, args.fq_template) if args.fq_template else
                _first_existing(data_dir, ("common_fq_template.csv",
                                           "m101_plots/common_fq_template.csv",
                                           "m101_band_initializer/common_fq_template.csv")))
     if fq_path is None:
         raise FileNotFoundError(
             "fixed f(q) template not found; pass --fq-template common_fq_template.csv")
-    blank_path = (_resolve_path(data_dir, args.external_blank_fibers)
+    blank_path = (_resolve_input_path(data_dir, args.external_blank_fibers)
                   if args.external_blank_fibers else
                   _first_existing(data_dir, (
+                      "external_blank_fibers.csv.gz",
                       "external_blank_sky_diagnostic/external_blank_fibers.csv.gz",
                       "m101_plots/external_blank_sky_diagnostic/external_blank_fibers.csv.gz")))
     if blank_path is None:
         raise FileNotFoundError(
             "external blank-fiber table not found; pass --external-blank-fibers")
-    scale_path = (_resolve_path(data_dir, args.exposure_scale_csv)
+    scale_path = (_resolve_input_path(data_dir, args.exposure_scale_csv)
                   if args.exposure_scale_csv else
                   _first_existing(data_dir, ("m101_cube_current_model_exposure_scale.csv",)))
     exposure_scales, scale_applied, scale_description = _load_exposure_scales(
         scale_path, REQUIRED_H5_NAMES) if scale_path is not None else (
             {}, False, "not found; scalar exposure scaling omitted")
 
-    state_path = _resolve_path(data_dir, args.state)
-    band_cache_path = _resolve_path(data_dir, args.band_cache)
-    alpha_fits_path = _resolve_path(data_dir, args.alpha_fits)
-    alpha_summary_path = _resolve_path(data_dir, args.alpha_summary)
-    amp_means_path = _resolve_path(data_dir, args.amp_residual_models)
+    state_path = _resolve_input_path(data_dir, args.state)
+    band_cache_path = _resolve_input_path(data_dir, args.band_cache)
+    alpha_fits_path = _resolve_input_path(data_dir, args.alpha_fits)
+    alpha_summary_path = _resolve_input_path(data_dir, args.alpha_summary)
+    amp_means_path = _resolve_input_path(data_dir, args.amp_residual_models)
 
     state, response, composition, _ = current_model._load_frozen_response(state_path)
     identity_map, _, _, _ = current_model._load_identity_map(band_cache_path, h5_paths)
