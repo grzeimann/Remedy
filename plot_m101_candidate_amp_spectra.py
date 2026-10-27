@@ -11,15 +11,16 @@ Run from the M101 reduction directory, for example::
     cd /work/03730/gregz/maverick/m101_recon
     python /work/03730/gregz/maverick/Remedy/plot_m101_candidate_amp_spectra.py
 
-The expected production products and the nine required H5 files are resolved
-relative to the current working directory.  Product paths can be overridden
-for a different TACC layout with the command-line options below.
+The expected production products and candidate H5 files are resolved relative
+to the current working directory. Product paths can be overridden for a
+different TACC layout with the command-line options below.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+from collections import defaultdict
 from pathlib import Path
 import warnings
 
@@ -44,7 +45,7 @@ PLOT_WAVE_MIN = 3470.0
 PLOT_WAVE_MAX = 5540.0
 MIN_BIWEIGHT_FIBERS = 3
 
-REQUIRED_H5_NAMES = (
+FIXED_H5_NAMES = (
     "20200430_0000020.h5",
     "20200430_0000021.h5",
     "20200430_0000022.h5",
@@ -56,9 +57,10 @@ REQUIRED_H5_NAMES = (
     "20200710_0000014.h5",
 )
 
-# This table is the complete scientific input to the diagnostic.  It is
-# deliberately not derived from positions or from a rejection file.
-LOCATIONS = (
+# These seven tables are the fixed scientific input to the original
+# diagnostic. The two dynamic locations are added only after their geometry
+# query and are never inferred from a rejection file.
+FIXED_LOCATIONS = (
     {
         "x": 759,
         "y": 1007,
@@ -131,6 +133,12 @@ LOCATIONS = (
     },
 )
 
+DYNAMIC_LOCATION_COORDINATES = ((247, 391), (319, 711))
+DYNAMIC_WAVELENGTH = 4882.0
+DYNAMIC_RADIUS_ARCSEC = 2.0
+DYNAMIC_EXCLUDED_H5 = "20200523_0000023.h5"
+VALID_AMPS = {"LL", "LU", "RL", "RU"}
+
 METRIC_FIELDS = (
     "DS9_X", "DS9_Y", "H5", "exposure", "SPECID", "IFUSLOT", "IFUID",
     "AMP", "n_fibers", "median_3540_5480", "sigma_MAD_3540_5480",
@@ -139,26 +147,52 @@ METRIC_FIELDS = (
 )
 
 
-def validate_candidate_table():
-    """Validate the immutable seven-location candidate table."""
-    if len(LOCATIONS) != 7:
-        raise AssertionError("candidate table must contain exactly seven locations")
-    coordinates = {(int(row["x"]), int(row["y"])) for row in LOCATIONS}
-    if len(coordinates) != 7:
+def validate_candidate_table(locations=None, available_h5_names=None):
+    """Validate the fixed seven tables and, when supplied, all nine locations."""
+    if len(FIXED_LOCATIONS) != 7:
+        raise AssertionError("fixed candidate table must contain exactly seven locations")
+    fixed_coordinates = {(int(row["x"]), int(row["y"]))
+                         for row in FIXED_LOCATIONS}
+    if len(fixed_coordinates) != 7:
+        raise AssertionError("fixed candidate locations must be unique")
+    if fixed_coordinates & set(DYNAMIC_LOCATION_COORDINATES):
+        raise AssertionError("dynamic location overlaps a fixed location")
+
+    locations = tuple(FIXED_LOCATIONS if locations is None else locations)
+    if len(locations) not in (7, 9):
+        raise AssertionError("candidate table must contain seven or nine locations")
+    coordinates = {(int(row["x"]), int(row["y"])) for row in locations}
+    if len(coordinates) != len(locations):
         raise AssertionError("candidate locations must be unique")
-    required = set(REQUIRED_H5_NAMES)
+    if len(locations) == 9 and set(DYNAMIC_LOCATION_COORDINATES) - coordinates:
+        raise AssertionError("the nine-location table lacks a dynamic location")
+
+    fixed_used = {
+        candidate["H5"]
+        for location in FIXED_LOCATIONS
+        for candidate in location["candidates"]
+    }
+    if not fixed_used <= set(FIXED_H5_NAMES):
+        raise AssertionError("fixed candidate table contains an unexpected H5")
+
     used = set()
-    for location in LOCATIONS:
+    for location in locations:
         if not location["candidates"]:
             raise AssertionError("each location needs at least one candidate")
         for candidate in location["candidates"]:
             used.add(candidate["H5"])
-            if candidate["H5"] not in required:
-                raise AssertionError("candidate H5 is outside the required set")
-            if candidate["AMP"] not in {"LL", "LU", "RL", "RU"}:
+            if str(candidate["AMP"]).upper() not in VALID_AMPS:
                 raise AssertionError("unexpected amplifier orientation")
-    if used != required:
-        raise AssertionError("candidate table does not cover the nine required H5 files")
+    if available_h5_names is not None and not used <= set(available_h5_names):
+        missing = sorted(used - set(available_h5_names))
+        raise AssertionError("candidate H5 files do not exist: %s" % missing)
+
+
+def _location_with_candidates(x, y, candidates, geometry_candidates=None):
+    location = {"x": int(x), "y": int(y), "candidates": tuple(candidates)}
+    if geometry_candidates is not None:
+        location["geometry_candidates"] = tuple(geometry_candidates)
+    return location
 
 
 def _physical_key(candidate):
@@ -194,6 +228,121 @@ def _first_existing(data_dir, names):
         if path.exists():
             return path
     return None
+
+
+def _collapse_geometry_matches(matches):
+    """Collapse nearby fibers to physical amplifier candidates."""
+    grouped = defaultdict(lambda: {
+        "exposures": set(), "n_fibers": 0, "min_separation_arcsec": np.inf,
+    })
+    for row in matches:
+        key = (
+            Path(row["H5"]).name, int(row["SPECID"]), int(row["IFUSLOT"]),
+            int(row["IFUID"]), str(row["AMP"]).upper(),
+        )
+        state = grouped[key]
+        state["exposures"].add(int(row["exposure"]))
+        state["n_fibers"] += 1
+        state["min_separation_arcsec"] = min(
+            state["min_separation_arcsec"], float(row["separation_arcsec"]))
+
+    result = []
+    for key, state in grouped.items():
+        candidate = {
+            "H5": key[0], "SPECID": key[1], "IFUSLOT": key[2],
+            "IFUID": key[3], "AMP": key[4],
+        }
+        result.append({
+            "candidate": candidate,
+            "exposures": tuple(sorted(state["exposures"])),
+            "n_fibers": int(state["n_fibers"]),
+            "min_separation_arcsec": float(state["min_separation_arcsec"]),
+        })
+    return sorted(result, key=lambda row: (
+        row["min_separation_arcsec"], row["candidate"]["H5"],
+        row["candidate"]["SPECID"], row["candidate"]["IFUSLOT"],
+        row["candidate"]["IFUID"], row["candidate"]["AMP"],
+    ))
+
+
+def _discover_dynamic_locations(data_dir, cube_path):
+    """Find candidates for only the two new positions using light geometry."""
+    import tables
+    from astropy.io import fits
+    import query_m101_fibers_near_pixel as geometry_query
+
+    astrometry_cls, extract_cls, build_groups, _, _ = (
+        geometry_query._load_project_helpers())
+    with fits.open(cube_path, memmap=True) as hdul:
+        header = hdul[0].header
+        targets = {
+            coordinates: geometry_query.cube_pixel_to_sky(header, *coordinates)
+            for coordinates in DYNAMIC_LOCATION_COORDINATES
+        }
+
+    h5_paths = sorted(data_dir.glob("20*.h5"))
+    h5_paths = [path for path in h5_paths if path.name != DYNAMIC_EXCLUDED_H5]
+    if not h5_paths:
+        raise ValueError("no normal 20*.h5 files found in %s" % data_dir)
+
+    locations = []
+    for coordinates in DYNAMIC_LOCATION_COORDINATES:
+        target_ra, target_dec = targets[coordinates]
+        matches = []
+        for h5_path in h5_paths:
+            with tables.open_file(str(h5_path), mode="r") as h5:
+                if not {"Info", "Survey"}.issubset(h5.root._v_children):
+                    raise ValueError("%s needs Info and Survey tables" % h5_path.name)
+                info = h5.root.Info
+                groups, _labels = build_groups(info)
+                native_ra = np.asarray(info.cols.ra[:], dtype=float)
+                native_dec = np.asarray(info.cols.dec[:], dtype=float)
+                if native_ra.shape != native_dec.shape or native_ra.size != info.nrows:
+                    raise ValueError("%s Info RA/Dec row alignment is invalid" %
+                                     h5_path.name)
+                survey_by_exposure = geometry_query._survey_by_exposure(
+                    h5.root.Survey)
+                adr_by_exposure = {
+                    exposure: geometry_query._adr_offset_at_wavelength(
+                        survey_row, DYNAMIC_WAVELENGTH, astrometry_cls, extract_cls)
+                    for exposure, survey_row in survey_by_exposure.items()
+                }
+
+                for group in groups:
+                    exposure = int(group["exposure"])
+                    if exposure not in survey_by_exposure:
+                        raise ValueError("%s Survey has no exposure %d" %
+                                         (h5_path.name, exposure))
+                    indices = np.asarray(group["indices"], dtype=int)
+                    dra, ddec = adr_by_exposure[exposure]
+                    ra_at_wave = native_ra[indices] - dra
+                    dec_at_wave = native_dec[indices] - ddec
+                    separation = geometry_query.angular_separation_arcsec(
+                        ra_at_wave, dec_at_wave, target_ra, target_dec)
+                    selected = np.isfinite(separation) & (
+                        separation <= DYNAMIC_RADIUS_ARCSEC)
+                    if not np.any(selected):
+                        continue
+                    amp = str(group["amp"]).upper()
+                    for local in np.flatnonzero(selected):
+                        matches.append({
+                            "H5": h5_path.name, "exposure": exposure,
+                            "SPECID": int(group["specid"]),
+                            "IFUSLOT": int(group["ifuslot"]),
+                            "IFUID": int(group["ifuid"]), "AMP": amp,
+                            "separation_arcsec": float(separation[local]),
+                        })
+
+        geometry_candidates = _collapse_geometry_matches(matches)
+        if not geometry_candidates:
+            raise ValueError(
+                "no geometry candidates within %.1f arcsec for DS9 (%d,%d)" %
+                (DYNAMIC_RADIUS_ARCSEC, coordinates[0], coordinates[1]))
+        locations.append(_location_with_candidates(
+            coordinates[0], coordinates[1],
+            [row["candidate"] for row in geometry_candidates],
+            geometry_candidates=geometry_candidates))
+    return tuple(locations)
 
 
 def _load_exposure_scales(path, required_h5_names):
@@ -429,6 +578,27 @@ def _write_summary(path, location_rows, scale_description):
     ]
     for location, rows in location_rows:
         lines.append("DS9 (%d,%d)" % (location["x"], location["y"]))
+        geometry_candidates = location.get("geometry_candidates")
+        if geometry_candidates is not None:
+            lines.extend([
+                "  Geometry candidates discovered within 2 arcsec at 4882 A",
+                "  H5 | SPECID | IFUSLOT | IFUID | AMP | exposures represented | "
+                "nearby fibers | minimum separation_arcsec",
+            ])
+            for geometry_row in geometry_candidates:
+                candidate = geometry_row["candidate"]
+                lines.append(
+                    "  %s | %d | %d | %d | %s | %s | %d | %.8g" % (
+                        candidate["H5"], candidate["SPECID"],
+                        candidate["IFUSLOT"], candidate["IFUID"],
+                        candidate["AMP"],
+                        ",".join(str(exposure)
+                                 for exposure in geometry_row["exposures"]),
+                        geometry_row["n_fibers"],
+                        geometry_row["min_separation_arcsec"],
+                    )
+                )
+            lines.append("")
         ordered = sorted(
             rows,
             key=lambda row: (
@@ -454,8 +624,44 @@ def _write_summary(path, location_rows, scale_description):
 
 
 def _synthetic_tests():
-    """Small local-only tests for robust collapse, metrics, and wavelength mask."""
+    """Small local-only tests for table shape, geometry collapse, and metrics."""
     validate_candidate_table()
+    if len(FIXED_LOCATIONS) != 7:
+        raise AssertionError("fixed location count is not seven")
+    synthetic_dynamic = (
+        _location_with_candidates(
+            247, 391,
+            ({"H5": "dynamic_a.h5", "SPECID": 1, "IFUSLOT": 2,
+              "IFUID": 3, "AMP": "LL"},)),
+        _location_with_candidates(
+            319, 711,
+            ({"H5": "dynamic_b.h5", "SPECID": 4, "IFUSLOT": 5,
+              "IFUID": 6, "AMP": "RU"},)),
+    )
+    requested = FIXED_LOCATIONS + synthetic_dynamic
+    validate_candidate_table(
+        requested, available_h5_names=set(FIXED_H5_NAMES) |
+        {"dynamic_a.h5", "dynamic_b.h5"})
+    if len(requested) != 9:
+        raise AssertionError("total requested location count is not nine")
+
+    collapsed = _collapse_geometry_matches([
+        {"H5": "x.h5", "exposure": 1, "SPECID": 1, "IFUSLOT": 2,
+         "IFUID": 3, "AMP": "LL", "separation_arcsec": 1.25},
+        {"H5": "x.h5", "exposure": 2, "SPECID": 1, "IFUSLOT": 2,
+         "IFUID": 3, "AMP": "LL", "separation_arcsec": .75},
+        {"H5": "x.h5", "exposure": 1, "SPECID": 1, "IFUSLOT": 2,
+         "IFUID": 3, "AMP": "LU", "separation_arcsec": 1.50},
+    ])
+    if len(collapsed) != 2 or next(
+            row for row in collapsed if row["candidate"]["AMP"] == "LU")[
+                "n_fibers"] != 1:
+        raise AssertionError("2-arcsec candidate collapse is incorrect")
+    ll = next(row for row in collapsed if row["candidate"]["AMP"] == "LL")
+    if ll["exposures"] != (1, 2) or not np.isclose(
+            ll["min_separation_arcsec"], .75):
+        raise AssertionError("candidate exposure/separation collapse is incorrect")
+
     synthetic_wave = np.array([3470.0, 3540.0, 4000.0, 5480.0, 5540.0])
     if not np.array_equal(
             (synthetic_wave >= STAT_WAVE_MIN) & (synthetic_wave <= STAT_WAVE_MAX),
@@ -503,6 +709,8 @@ def _parse_args():
     parser.add_argument("--data-dir", default=".",
                         help="TACC m101_recon directory (default: current directory)")
     parser.add_argument("--output-dir", default="m101_candidate_amp_spectra")
+    parser.add_argument("--cube", default="m101_virus_v2_rebuild_cube.fits",
+                        help="production cube used only for the dynamic-position WCS")
     parser.add_argument("--state", default="m101_onoff_hierarchy/m101_onoff_state.json")
     parser.add_argument("--band-cache", default="m101_band_initializer/m101_band_cache.npz")
     parser.add_argument("--alpha-fits",
@@ -528,14 +736,33 @@ def main():
         _synthetic_tests()
         return
 
-    validate_candidate_table()
     data_dir = Path(args.data_dir).expanduser().resolve()
     output_dir = _resolve_path(data_dir, args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    h5_paths = [data_dir / name for name in REQUIRED_H5_NAMES]
+
+    cube_path = _resolve_input_path(data_dir, args.cube)
+    if not cube_path.is_file() and args.cube == "m101_virus_v2_rebuild_cube.fits":
+        cube_path = (_first_existing(
+            data_dir, ("m101_virus_v2_rebuild_cube.fits",
+                       "m101_plots/m101_virus_v2_rebuild_cube.fits"))
+                     or cube_path)
+    if not cube_path.is_file():
+        raise FileNotFoundError("production cube for dynamic WCS is missing: %s" %
+                                cube_path)
+
+    # The original seven tables are retained verbatim. Only the two new
+    # locations perform the lightweight 4882-A geometry search.
+    dynamic_locations = _discover_dynamic_locations(data_dir, cube_path)
+    locations = tuple(FIXED_LOCATIONS) + tuple(dynamic_locations)
+    candidate_h5_names = tuple(sorted({candidate["H5"]
+                                       for location in locations
+                                       for candidate in location["candidates"]}))
+    h5_paths = [data_dir / name for name in candidate_h5_names]
     missing_h5 = [str(path) for path in h5_paths if not path.is_file()]
     if missing_h5:
-        raise FileNotFoundError("required M101 H5 files are missing: %s" % missing_h5)
+        raise FileNotFoundError("candidate M101 H5 files are missing: %s" % missing_h5)
+    validate_candidate_table(locations,
+                             available_h5_names={path.name for path in h5_paths})
 
     fq_path = (_resolve_input_path(data_dir, args.fq_template) if args.fq_template else
                _first_existing(data_dir, ("common_fq_template.csv",
@@ -557,7 +784,7 @@ def main():
                   if args.exposure_scale_csv else
                   _first_existing(data_dir, ("m101_cube_current_model_exposure_scale.csv",)))
     exposure_scales, scale_applied, scale_description = _load_exposure_scales(
-        scale_path, REQUIRED_H5_NAMES) if scale_path is not None else (
+        scale_path, candidate_h5_names) if scale_path is not None else (
             {}, False, "not found; scalar exposure scaling omitted")
 
     state_path = _resolve_input_path(data_dir, args.state)
@@ -579,13 +806,13 @@ def main():
     # applies calibration and normal exposure sky subtraction only.  Gather
     # candidates by H5 first so each required H5 is opened/calibrated once.
     candidates_by_h5 = {}
-    for location in LOCATIONS:
+    for location in locations:
         for candidate in location["candidates"]:
             candidates_by_h5.setdefault(candidate["H5"], {})[
                 _physical_key(candidate)] = candidate
 
     candidate_spectra = {}
-    for h5_name in REQUIRED_H5_NAMES:
+    for h5_name in candidate_h5_names:
         candidates = list(candidates_by_h5.get(h5_name, {}).values())
         if not candidates:
             continue
@@ -600,7 +827,7 @@ def main():
 
     candidate_rows_by_location = []
     all_metric_rows = []
-    for location in LOCATIONS:
+    for location in locations:
         location_rows = []
         for candidate in location["candidates"]:
             physical = _physical_key(candidate)
@@ -638,7 +865,8 @@ def main():
     _write_summary(output_dir / "m101_candidate_amp_spectral_summary.txt",
                    [(location, rows) for location, _, rows in candidate_rows_by_location],
                    scale_description)
-    print("wrote seven diagnostic figures and two reports to %s" % output_dir)
+    print("wrote %d diagnostic figures and two reports to %s" %
+          (len(candidate_rows_by_location), output_dir))
     print("exposure scaling: %s" % scale_description)
     print("frozen response composition: %s" % composition.get(
         "composition_matches_stored_cumulative", False))
