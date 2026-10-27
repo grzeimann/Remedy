@@ -1,0 +1,639 @@
+#!/usr/bin/env python3
+"""Plot calibrated spectra for the manually selected M101 amp candidates.
+
+This is intentionally a small, report-only diagnostic.  It uses the current
+M101 calibration reader from :mod:`make_m101_cube_current_model` through the
+normal per-exposure sky subtraction, but it does not read or apply either
+reviewed rejection file and it does not reconstruct a cube.
+
+Run from the M101 reduction directory, for example::
+
+    cd /work/03730/gregz/maverick/m101_recon
+    python /work/03730/gregz/maverick/Remedy/plot_m101_candidate_amp_spectra.py
+
+The expected production products and the nine required H5 files are resolved
+relative to the current working directory.  Product paths can be overridden
+for a different TACC layout with the command-line options below.
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+from pathlib import Path
+import warnings
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+
+try:
+    from astropy.stats import biweight_location
+except ImportError:  # pragma: no cover - current Remedy environments have astropy
+    biweight_location = None
+
+import make_m101_cube_current_model as current_model
+
+
+WAVE = np.asarray(current_model.DEF_WAVE, dtype=float)
+EXPOSURES = (1, 2, 3)
+STAT_WAVE_MIN = 3540.0
+STAT_WAVE_MAX = 5480.0
+PLOT_WAVE_MIN = 3470.0
+PLOT_WAVE_MAX = 5540.0
+MIN_BIWEIGHT_FIBERS = 3
+
+REQUIRED_H5_NAMES = (
+    "20200430_0000020.h5",
+    "20200430_0000021.h5",
+    "20200430_0000022.h5",
+    "20200517_0000014.h5",
+    "20200521_0000021.h5",
+    "20200523_0000024.h5",
+    "20200625_0000017.h5",
+    "20200710_0000013.h5",
+    "20200710_0000014.h5",
+)
+
+# This table is the complete scientific input to the diagnostic.  It is
+# deliberately not derived from positions or from a rejection file.
+LOCATIONS = (
+    {
+        "x": 759,
+        "y": 1007,
+        "candidates": (
+            {"H5": "20200430_0000020.h5", "SPECID": 38,
+             "IFUSLOT": 96, "IFUID": 14, "AMP": "LU"},
+        ),
+    },
+    {
+        "x": 780,
+        "y": 960,
+        "candidates": (
+            {"H5": "20200430_0000022.h5", "SPECID": 38,
+             "IFUSLOT": 96, "IFUID": 14, "AMP": "LU"},
+            {"H5": "20200625_0000017.h5", "SPECID": 404,
+             "IFUSLOT": 73, "IFUID": 71, "AMP": "LL"},
+            {"H5": "20200625_0000017.h5", "SPECID": 404,
+             "IFUSLOT": 73, "IFUID": 71, "AMP": "LU"},
+        ),
+    },
+    {
+        "x": 745,
+        "y": 915,
+        "candidates": (
+            {"H5": "20200710_0000013.h5", "SPECID": 330,
+             "IFUSLOT": 92, "IFUID": 75, "AMP": "RU"},
+            {"H5": "20200517_0000014.h5", "SPECID": 203,
+             "IFUSLOT": 86, "IFUID": 31, "AMP": "RU"},
+        ),
+    },
+    {
+        "x": 14,
+        "y": 280,
+        "candidates": (
+            {"H5": "20200430_0000021.h5", "SPECID": 38,
+             "IFUSLOT": 96, "IFUID": 14, "AMP": "LU"},
+        ),
+    },
+    {
+        "x": 1121,
+        "y": 465,
+        "candidates": (
+            {"H5": "20200710_0000014.h5", "SPECID": 412,
+             "IFUSLOT": 13, "IFUID": 43, "AMP": "LL"},
+            {"H5": "20200521_0000021.h5", "SPECID": 202,
+             "IFUSLOT": 35, "IFUID": 74, "AMP": "LU"},
+        ),
+    },
+    {
+        "x": 1084,
+        "y": 449,
+        "candidates": (
+            {"H5": "20200430_0000022.h5", "SPECID": 302,
+             "IFUSLOT": 36, "IFUID": 41, "AMP": "LL"},
+            {"H5": "20200625_0000017.h5", "SPECID": 412,
+             "IFUSLOT": 13, "IFUID": 43, "AMP": "LL"},
+            {"H5": "20200430_0000022.h5", "SPECID": 302,
+             "IFUSLOT": 36, "IFUID": 41, "AMP": "LU"},
+        ),
+    },
+    {
+        "x": 1071,
+        "y": 150,
+        "candidates": (
+            {"H5": "20200523_0000024.h5", "SPECID": 51,
+             "IFUSLOT": 105, "IFUID": 51, "AMP": "LL"},
+            {"H5": "20200710_0000013.h5", "SPECID": 412,
+             "IFUSLOT": 13, "IFUID": 43, "AMP": "LL"},
+        ),
+    },
+)
+
+METRIC_FIELDS = (
+    "DS9_X", "DS9_Y", "H5", "exposure", "SPECID", "IFUSLOT", "IFUID",
+    "AMP", "n_fibers", "median_3540_5480", "sigma_MAD_3540_5480",
+    "std_3540_5480", "RMS_3540_5480", "finite_wavelength_samples",
+    "exposure_scale_applied",
+)
+
+
+def validate_candidate_table():
+    """Validate the immutable seven-location candidate table."""
+    if len(LOCATIONS) != 7:
+        raise AssertionError("candidate table must contain exactly seven locations")
+    coordinates = {(int(row["x"]), int(row["y"])) for row in LOCATIONS}
+    if len(coordinates) != 7:
+        raise AssertionError("candidate locations must be unique")
+    required = set(REQUIRED_H5_NAMES)
+    used = set()
+    for location in LOCATIONS:
+        if not location["candidates"]:
+            raise AssertionError("each location needs at least one candidate")
+        for candidate in location["candidates"]:
+            used.add(candidate["H5"])
+            if candidate["H5"] not in required:
+                raise AssertionError("candidate H5 is outside the required set")
+            if candidate["AMP"] not in {"LL", "LU", "RL", "RU"}:
+                raise AssertionError("unexpected amplifier orientation")
+    if used != required:
+        raise AssertionError("candidate table does not cover the nine required H5 files")
+
+
+def _physical_key(candidate):
+    return (int(candidate["SPECID"]), int(candidate["IFUSLOT"]),
+            int(candidate["IFUID"]), str(candidate["AMP"]).upper())
+
+
+def _candidate_label(candidate):
+    return "%s | %d/%d/%d/%s" % (
+        candidate["H5"], candidate["SPECID"], candidate["IFUSLOT"],
+        candidate["IFUID"], str(candidate["AMP"]).upper())
+
+
+def _resolve_path(data_dir, value):
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = data_dir / path
+    return path.resolve()
+
+
+def _first_existing(data_dir, names):
+    for name in names:
+        path = _resolve_path(data_dir, name)
+        if path.exists():
+            return path
+    return None
+
+
+def _load_exposure_scales(path, required_h5_names):
+    """Read existing final relative scales without refitting them.
+
+    The production current-model table stores the two-pass quantity
+    ``cumulative_relative_scale``.  A diagnostic table that only stores
+    ``exposure_correction`` is also accepted when explicitly supplied.
+    """
+    if path is None:
+        return {}, False, "not found; scalar exposure scaling omitted"
+    path = Path(path).resolve()
+    with path.open(newline="") as stream:
+        reader = csv.DictReader(stream)
+        fields = set(reader.fieldnames or ())
+        scale_field = None
+        for name in ("cumulative_relative_scale", "exposure_correction"):
+            if name in fields:
+                scale_field = name
+                break
+        if scale_field is None:
+            raise ValueError("exposure scale table lacks a usable scale column: %s" % path)
+        result = {}
+        for row in reader:
+            key = (Path(row["H5"]).name, int(row["exposure"]))
+            if key in result:
+                raise ValueError("duplicate exposure scale row: %s" % (key,))
+            value = float(row[scale_field])
+            if not np.isfinite(value) or value == 0.0:
+                raise ValueError("invalid exposure scale for %s: %r" % (key, value))
+            # cumulative_relative_scale is the divisor applied to the
+            # already sky-subtracted calibrated spectra.  A legacy diagnostic
+            # exposure_correction is already the multiplicative correction.
+            result[key] = (1.0 / value if scale_field == "cumulative_relative_scale"
+                           else value)
+    expected = {(name, exposure) for name in required_h5_names
+                for exposure in EXPOSURES}
+    if not expected.issubset(result):
+        missing = sorted(expected - set(result))
+        raise ValueError("exposure scale table is missing required rows: %s" % missing[:8])
+    return result, True, "%s (%s)" % (path, scale_field)
+
+
+def _robust_location_by_wavelength(values):
+    """Robust location over fibers, with median fallback at weak support."""
+    values = np.asarray(values, dtype=float)
+    if values.ndim != 2 or values.shape[1] != WAVE.size:
+        raise ValueError("fiber spectra must have shape (N, %d)" % WAVE.size)
+    finite_count = np.sum(np.isfinite(values), axis=0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        if biweight_location is None:
+            result = np.full(WAVE.shape, np.nan, dtype=float)
+        else:
+            try:
+                result = np.asarray(
+                    biweight_location(values, axis=0, ignore_nan=True), dtype=float)
+            except (TypeError, ValueError, FloatingPointError):
+                result = np.full(WAVE.shape, np.nan, dtype=float)
+    if result.shape != WAVE.shape:
+        result = np.full(WAVE.shape, np.nan, dtype=float)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        medians = np.nanmedian(values, axis=0)
+    fallback = (finite_count < MIN_BIWEIGHT_FIBERS) | ~np.isfinite(result)
+    result[fallback] = medians[fallback]
+    return result
+
+
+def _spectral_metrics(spectrum):
+    """Calculate the requested wavelength-domain metrics."""
+    spectrum = np.asarray(spectrum, dtype=float)
+    statistic_mask = ((WAVE >= STAT_WAVE_MIN) & (WAVE <= STAT_WAVE_MAX) &
+                      np.isfinite(spectrum))
+    values = spectrum[statistic_mask]
+    if values.size == 0:
+        return {
+            "median_3540_5480": np.nan,
+            "sigma_MAD_3540_5480": np.nan,
+            "std_3540_5480": np.nan,
+            "RMS_3540_5480": np.nan,
+            "finite_wavelength_samples": 0,
+        }
+    center = float(np.median(values))
+    residual = values - center
+    residual_center = float(np.median(residual))
+    mad = float(np.median(np.abs(residual - residual_center)))
+    return {
+        "median_3540_5480": center,
+        "sigma_MAD_3540_5480": 1.4826 * mad,
+        "std_3540_5480": float(np.std(residual)),
+        "RMS_3540_5480": float(np.sqrt(np.mean(residual ** 2))),
+        "finite_wavelength_samples": int(values.size),
+    }
+
+
+def _candidate_spectra_for_h5(h5_name, calibrated_spectra, groups, candidates,
+                              exposure_scales):
+    """Extract and robustly collapse only candidate amplifier groups."""
+    groups_by_key = {}
+    for group in groups:
+        key = (int(group["exposure"]), int(group["specid"]),
+               int(group["ifuslot"]), int(group["ifuid"]),
+               str(group["amp"]).upper())
+        groups_by_key[key] = group
+
+    result = {}
+    for candidate in candidates:
+        physical = _physical_key(candidate)
+        for exposure in EXPOSURES:
+            key = (exposure,) + physical
+            if key not in groups_by_key:
+                raise ValueError("candidate group absent from %s: %s" % (h5_name, key))
+            group = groups_by_key[key]
+            indices = np.asarray(group["indices"], dtype=int)
+            fibers = np.asarray(calibrated_spectra[indices], dtype=float)
+            spectrum = _robust_location_by_wavelength(fibers)
+            scale_key = (h5_name, exposure)
+            scale_applied = scale_key in exposure_scales
+            if scale_applied:
+                spectrum = spectrum * float(exposure_scales[scale_key])
+            metrics = _spectral_metrics(spectrum)
+            finite_fiber_rows = np.any(np.isfinite(fibers), axis=1)
+            result[(physical, exposure)] = {
+                "candidate": dict(candidate),
+                "exposure": int(exposure),
+                "spectrum": spectrum,
+                "n_fibers": int(np.count_nonzero(finite_fiber_rows)),
+                "exposure_scale_applied": bool(scale_applied),
+                **metrics,
+            }
+    return result
+
+
+def _robust_limits(series, lower=0.5, upper=99.5):
+    values = np.concatenate([
+        np.asarray(item, dtype=float)[
+            (WAVE >= PLOT_WAVE_MIN) & (WAVE <= PLOT_WAVE_MAX) &
+            np.isfinite(item)]
+        for item in series
+    ]) if series else np.asarray([], dtype=float)
+    if values.size == 0:
+        return -1.0, 1.0
+    lo, hi = np.percentile(values, (lower, upper))
+    if not np.isfinite(lo) or not np.isfinite(hi):
+        return -1.0, 1.0
+    span = hi - lo
+    if span <= 0.0:
+        span = max(abs(float(lo)) * 0.05, 1.0)
+    padding = 0.08 * span
+    return float(lo - padding), float(hi + padding)
+
+
+def _plot_location(location, rows, output_path, scale_description):
+    colors = plt.get_cmap("tab10")(np.linspace(0.05, 0.85, len(location["candidates"])))
+    line_styles = {1: "-", 2: "--", 3: ":"}
+    fig, axes = plt.subplots(2, 1, figsize=(15.5, 10.0), sharex=True,
+                             gridspec_kw={"height_ratios": (1.25, 1.0)})
+    top, bottom = axes
+    top_series = []
+    bottom_series = []
+    physical_to_color = {
+        _physical_key(candidate): colors[index]
+        for index, candidate in enumerate(location["candidates"])
+    }
+
+    for candidate in location["candidates"]:
+        physical = _physical_key(candidate)
+        color = physical_to_color[physical]
+        for exposure in EXPOSURES:
+            row = rows[(physical, exposure)]
+            spectrum = np.asarray(row["spectrum"], dtype=float)
+            center = float(row["median_3540_5480"])
+            shape = spectrum - center if np.isfinite(center) else spectrum
+            label = (
+                "%s | e%d | N=%d | sigmaMAD=%.4g | std=%.4g" %
+                (_candidate_label(candidate), exposure, row["n_fibers"],
+                 row["sigma_MAD_3540_5480"], row["std_3540_5480"])
+            )
+            top.plot(WAVE, spectrum, color=color, linestyle=line_styles[exposure],
+                     linewidth=1.05, alpha=0.92, label=label)
+            bottom.plot(WAVE, shape, color=color, linestyle=line_styles[exposure],
+                        linewidth=1.05, alpha=0.92)
+            top_series.append(spectrum)
+            bottom_series.append(shape)
+
+    for axis in axes:
+        axis.axvline(STAT_WAVE_MIN, color="0.55", linestyle="--", linewidth=.7)
+        axis.axvline(STAT_WAVE_MAX, color="0.55", linestyle="--", linewidth=.7)
+        axis.set_xlim(PLOT_WAVE_MIN, PLOT_WAVE_MAX)
+        axis.grid(True, alpha=.20)
+        axis.tick_params(labelsize=9)
+    top.set_ylim(*_robust_limits(top_series))
+    bottom.set_ylim(*_robust_limits(bottom_series))
+    top.set_ylabel("calibrated sky-subtracted spectrum", fontsize=10)
+    bottom.set_ylabel("spectrum - own median", fontsize=10)
+    bottom.set_xlabel("wavelength [Angstrom]", fontsize=10)
+    top.set_title("robust location across all fibers in each amp; "
+                  "scatter measured over 3540-5480 A", fontsize=10)
+    top.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), borderaxespad=0.0,
+               fontsize=8.1, frameon=True)
+    fig.suptitle("M101 candidate amplifier spectra — DS9 (%d,%d)" %
+                 (location["x"], location["y"]), fontsize=15, y=.985)
+    fig.text(.01, .012, "Exposure scaling applied: %s. "
+             "Vertical lines mark the metric interval; robust percentile y-limits "
+             "can clip isolated extremes." % scale_description,
+             fontsize=8.5, ha="left")
+    fig.subplots_adjust(left=.07, right=.68, top=.91, bottom=.08, hspace=.08)
+    fig.savefig(output_path, dpi=180)
+    plt.close(fig)
+
+
+def _write_metrics(path, rows):
+    with Path(path).open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=METRIC_FIELDS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in METRIC_FIELDS})
+
+
+def _write_summary(path, location_rows, scale_description):
+    lines = [
+        "M101 candidate amplifier spectral diagnostic",
+        "",
+        "This report lists candidates in increasing sigma_MAD only; it does not",
+        "classify any candidate as good or bad and does not apply a rejection.",
+        "Calibration: current multiplicative model, alpha correction, persistent",
+        "mean amplifier residual correction, and normal per-exposure sky subtraction.",
+        "Reviewed QA and spectral rejection files were not read.",
+        "Exposure scaling: %s" % scale_description,
+        "Metric interval: 3540-5480 Angstrom only.",
+        "",
+    ]
+    for location, rows in location_rows:
+        lines.append("DS9 (%d,%d)" % (location["x"], location["y"]))
+        ordered = sorted(
+            rows,
+            key=lambda row: (
+                not np.isfinite(row["sigma_MAD_3540_5480"]),
+                row["sigma_MAD_3540_5480"]
+                if np.isfinite(row["sigma_MAD_3540_5480"]) else np.inf,
+                row["candidate"]["H5"], row["exposure"],
+            ),
+        )
+        for row in ordered:
+            lines.append(
+                "  %s | e%d | N=%d | median=%.8g | sigmaMAD=%.8g | "
+                "std=%.8g | RMS=%.8g | finite=%d | scale=%s" % (
+                    _candidate_label(row["candidate"]), row["exposure"],
+                    row["n_fibers"], row["median_3540_5480"],
+                    row["sigma_MAD_3540_5480"], row["std_3540_5480"],
+                    row["RMS_3540_5480"], row["finite_wavelength_samples"],
+                    row["exposure_scale_applied"],
+                )
+            )
+        lines.append("")
+    Path(path).write_text("\n".join(lines))
+
+
+def _synthetic_tests():
+    """Small local-only tests for robust collapse, metrics, and wavelength mask."""
+    validate_candidate_table()
+    synthetic_wave = np.array([3470.0, 3540.0, 4000.0, 5480.0, 5540.0])
+    if not np.array_equal(
+            (synthetic_wave >= STAT_WAVE_MIN) & (synthetic_wave <= STAT_WAVE_MAX),
+            np.array([False, True, True, True, False])):
+        raise AssertionError("3540-5480 wavelength mask is incorrect")
+
+    original_wave = WAVE.copy()
+    try:
+        # Test the robust collapse against one strong fiber outlier.
+        values = np.vstack([
+            np.full(WAVE.size, 2.0),
+            np.full(WAVE.size, 2.1),
+            np.full(WAVE.size, 1.9),
+            np.full(WAVE.size, 2.0),
+        ])
+        values[0, 10] = 1.0e6
+        collapsed = _robust_location_by_wavelength(values)
+        if not np.isfinite(collapsed).all() or collapsed[10] > 3.0:
+            raise AssertionError("synthetic robust amplifier spectrum failed")
+
+        # Test exactly the requested metric definitions and interval.
+        metric_wave = np.array([3470.0, 3540.0, 4000.0, 5480.0, 5540.0])
+        metric_spectrum = np.array([10.0, 1.0, 3.0, 5.0, 100.0])
+        saved_wave = globals()["WAVE"]
+        globals()["WAVE"] = metric_wave
+        metrics = _spectral_metrics(metric_spectrum)
+        globals()["WAVE"] = saved_wave
+        if metrics["finite_wavelength_samples"] != 3:
+            raise AssertionError("metric wavelength mask selected the wrong samples")
+        if not np.isclose(metrics["median_3540_5480"], 3.0):
+            raise AssertionError("metric center is incorrect")
+        if not np.isclose(metrics["sigma_MAD_3540_5480"], 1.4826 * 2.0):
+            raise AssertionError("sigma_MAD is incorrect")
+        if not np.isclose(metrics["std_3540_5480"], np.sqrt(8.0 / 3.0)):
+            raise AssertionError("standard deviation is incorrect")
+        if not np.isclose(metrics["RMS_3540_5480"], np.sqrt(8.0 / 3.0)):
+            raise AssertionError("RMS is incorrect")
+    finally:
+        globals()["WAVE"] = original_wave
+    print("synthetic tests: PASS")
+
+
+def _parse_args():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--data-dir", default=".",
+                        help="TACC m101_recon directory (default: current directory)")
+    parser.add_argument("--output-dir", default="m101_candidate_amp_spectra")
+    parser.add_argument("--state", default="m101_onoff_hierarchy/m101_onoff_state.json")
+    parser.add_argument("--band-cache", default="m101_band_initializer/m101_band_cache.npz")
+    parser.add_argument("--alpha-fits",
+                        default="m101_alpha_template_bands/alpha_template_fits.csv")
+    parser.add_argument("--alpha-summary",
+                        default="m101_alpha_same_amp_loo/alpha_physical_amp_summary.csv")
+    parser.add_argument("--amp-residual-models",
+                        default="m101-amp-residual-pca-final/amp_residual_pca_models.npz")
+    parser.add_argument("--fq-template", default=None,
+                        help="fixed f(q) CSV; defaults to common_fq_template.csv")
+    parser.add_argument("--external-blank-fibers", default=None,
+                        help="external blank-fiber CSV.GZ; defaults to the established path")
+    parser.add_argument("--exposure-scale-csv", default=None,
+                        help="existing exposure-scale CSV; omitted when not found")
+    parser.add_argument("--self-test", action="store_true",
+                        help="run synthetic tests without reading H5 files")
+    return parser.parse_args()
+
+
+def main():
+    args = _parse_args()
+    if args.self_test:
+        _synthetic_tests()
+        return
+
+    validate_candidate_table()
+    data_dir = Path(args.data_dir).expanduser().resolve()
+    output_dir = _resolve_path(data_dir, args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    h5_paths = [data_dir / name for name in REQUIRED_H5_NAMES]
+    missing_h5 = [str(path) for path in h5_paths if not path.is_file()]
+    if missing_h5:
+        raise FileNotFoundError("required M101 H5 files are missing: %s" % missing_h5)
+
+    fq_path = (_resolve_path(data_dir, args.fq_template) if args.fq_template else
+               _first_existing(data_dir, ("common_fq_template.csv",
+                                          "m101_plots/common_fq_template.csv",
+                                          "m101_band_initializer/common_fq_template.csv")))
+    if fq_path is None:
+        raise FileNotFoundError(
+            "fixed f(q) template not found; pass --fq-template common_fq_template.csv")
+    blank_path = (_resolve_path(data_dir, args.external_blank_fibers)
+                  if args.external_blank_fibers else
+                  _first_existing(data_dir, (
+                      "external_blank_sky_diagnostic/external_blank_fibers.csv.gz",
+                      "m101_plots/external_blank_sky_diagnostic/external_blank_fibers.csv.gz")))
+    if blank_path is None:
+        raise FileNotFoundError(
+            "external blank-fiber table not found; pass --external-blank-fibers")
+    scale_path = (_resolve_path(data_dir, args.exposure_scale_csv)
+                  if args.exposure_scale_csv else
+                  _first_existing(data_dir, ("m101_cube_current_model_exposure_scale.csv",)))
+    exposure_scales, scale_applied, scale_description = _load_exposure_scales(
+        scale_path, REQUIRED_H5_NAMES) if scale_path is not None else (
+            {}, False, "not found; scalar exposure scaling omitted")
+
+    state_path = _resolve_path(data_dir, args.state)
+    band_cache_path = _resolve_path(data_dir, args.band_cache)
+    alpha_fits_path = _resolve_path(data_dir, args.alpha_fits)
+    alpha_summary_path = _resolve_path(data_dir, args.alpha_summary)
+    amp_means_path = _resolve_path(data_dir, args.amp_residual_models)
+
+    state, response, composition, _ = current_model._load_frozen_response(state_path)
+    identity_map, _, _, _ = current_model._load_identity_map(band_cache_path, h5_paths)
+    alpha_direct, _ = current_model._load_alpha_fits(alpha_fits_path)
+    alpha_history, _ = current_model._load_alpha_history(alpha_summary_path)
+    amp_means, _, _, _ = current_model._load_amp_means(amp_means_path)
+    fq_template, historical_f0, _ = current_model._load_fq(fq_path)
+    blank_masks, _ = current_model.frozen_parent.m101_blank_fibers.load(
+        blank_path, h5_paths)
+
+    # No QA or spectral-rejection CSV is read here.  The current-model helper
+    # applies calibration and normal exposure sky subtraction only.  Gather
+    # candidates by H5 first so each required H5 is opened/calibrated once.
+    candidates_by_h5 = {}
+    for location in LOCATIONS:
+        for candidate in location["candidates"]:
+            candidates_by_h5.setdefault(candidate["H5"], {})[
+                _physical_key(candidate)] = candidate
+
+    candidate_spectra = {}
+    for h5_name in REQUIRED_H5_NAMES:
+        candidates = list(candidates_by_h5.get(h5_name, {}).values())
+        if not candidates:
+            continue
+        h5_path = data_dir / h5_name
+        calibrated = current_model._calibrate_h5_current(
+            h5_path, identity_map, response, alpha_direct, alpha_history,
+            amp_means, fq_template, historical_f0, blank_masks[h5_name],
+            current_model.M101_SKY_MIN_FIBERS)
+        spectra, _, _, _, _, _, _, _, _, groups, _, _, _ = calibrated
+        candidate_spectra[h5_name] = _candidate_spectra_for_h5(
+            h5_name, spectra, groups, candidates, exposure_scales)
+
+    candidate_rows_by_location = []
+    all_metric_rows = []
+    for location in LOCATIONS:
+        location_rows = []
+        for candidate in location["candidates"]:
+            physical = _physical_key(candidate)
+            for exposure in EXPOSURES:
+                row = candidate_spectra[candidate["H5"]][(physical, exposure)]
+                location_rows.append(row)
+                all_metric_rows.append({
+                    "DS9_X": int(location["x"]),
+                    "DS9_Y": int(location["y"]),
+                    "H5": row["candidate"]["H5"],
+                    "exposure": row["exposure"],
+                    "SPECID": row["candidate"]["SPECID"],
+                    "IFUSLOT": row["candidate"]["IFUSLOT"],
+                    "IFUID": row["candidate"]["IFUID"],
+                    "AMP": row["candidate"]["AMP"],
+                    "n_fibers": row["n_fibers"],
+                    "median_3540_5480": row["median_3540_5480"],
+                    "sigma_MAD_3540_5480": row["sigma_MAD_3540_5480"],
+                    "std_3540_5480": row["std_3540_5480"],
+                    "RMS_3540_5480": row["RMS_3540_5480"],
+                    "finite_wavelength_samples": row["finite_wavelength_samples"],
+                    "exposure_scale_applied": row["exposure_scale_applied"],
+                })
+        row_lookup = {(_physical_key(row["candidate"]), row["exposure"]): row
+                      for row in location_rows}
+        candidate_rows_by_location.append((location, row_lookup, location_rows))
+
+    for location, row_lookup, location_rows in candidate_rows_by_location:
+        output_path = output_dir / ("amp_spectra_x%d_y%d.png" %
+                                    (location["x"], location["y"]))
+        _plot_location(location, row_lookup, output_path, scale_description)
+
+    _write_metrics(output_dir / "m101_candidate_amp_spectral_metrics.csv",
+                   all_metric_rows)
+    _write_summary(output_dir / "m101_candidate_amp_spectral_summary.txt",
+                   [(location, rows) for location, _, rows in candidate_rows_by_location],
+                   scale_description)
+    print("wrote seven diagnostic figures and two reports to %s" % output_dir)
+    print("exposure scaling: %s" % scale_description)
+    print("frozen response composition: %s" % composition.get(
+        "composition_matches_stored_cumulative", False))
+    print("loaded model state: %s" % state.get("schema_version", "unknown"))
+
+
+if __name__ == "__main__":
+    main()
