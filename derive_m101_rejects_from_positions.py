@@ -588,6 +588,160 @@ def _target_wave_groups(production, record, positions, target, exposure, wave_in
     return aggregates, fiber_rows
 
 
+def _parse_single_position(value):
+    """Parse one manually supplied DS9 position without expanding the list."""
+    if value is None:
+        return None
+    parts = str(value).replace(",", " ").split()
+    if len(parts) != 2:
+        raise ValueError("--single-spectral-position must be X,Y")
+    try:
+        x, y = (int(part) for part in parts)
+    except ValueError as exc:
+        raise ValueError("--single-spectral-position must contain integer DS9 coordinates") from exc
+    if x < 1 or y < 1:
+        raise ValueError("DS9 coordinates must be positive 1-based integers")
+    return x, y
+
+
+def _run_single_spectral_query(production, records, geometry, cube_context,
+                               def_wave, point, pixel_scale):
+    """Print raw position attribution using the existing query machinery.
+
+    This deliberately stops before candidate ranking/decision logic and before
+    any output rejection CSV is opened.  The per-shot rows are exactly the
+    aggregates returned by ``_target_wave_groups``; the second table only
+    removes exposure from the grouping key.
+    """
+    x, y = point
+    target = {"x": x, "y": y, "ix": int(round(x)) - 1,
+              "iy": int(round(y)) - 1}
+    waves = SPECTRAL_INSPECTION_WAVELENGTHS
+    sigma = (production.GAUSSIAN_FWHM_ARCSEC / 2.35) / pixel_scale
+    target_values = cube_context["target_cube"][("SPECTRAL_4882", 0)]
+    raw_by_wave = {}
+    for wave in waves:
+        wave_index = _wave_index(def_wave, wave)
+        aggregates = []
+        for record_index, record in enumerate(records):
+            for exposure in production.EXPOSURES:
+                positions = _positions_for_wave(
+                    production, record, exposure, wave_index, geometry["tp"])
+                one, _ = _target_wave_groups(
+                    production, record, positions, target, exposure, wave_index,
+                    "SPECTRAL_4882", target_values[wave], np.nan, np.nan, None)
+                for aggregate in one:
+                    aggregate["record_index"] = record_index
+                    aggregate["exposure"] = int(exposure)
+                aggregates.extend(one)
+        raw_by_wave[wave] = aggregates
+
+    raw_rows = []
+    for wave in waves:
+        rows = raw_by_wave[wave]
+        total_abs = float(sum(abs(row["group_weighted"]) for row in rows))
+        for row in rows:
+            key = row["key"]
+            raw_rows.append({
+                "H5": key[0], "exposure": key[1], "SPECID": key[2],
+                "IFUSLOT": key[3], "IFUID": key[4], "AMP": key[5],
+                "wavelength_A": int(wave),
+                "gaussian_reconstruction_weight": row["group_weight"],
+                "weighted_contribution": row["group_weighted"],
+                # This is the existing machinery's per-H5/exposure shot share.
+                "contribution_fraction": row["contribution_fraction"],
+                "global_contribution_fraction": (
+                    abs(row["group_weighted"]) / total_abs
+                    if total_abs > 0.0 else np.nan),
+                "group_value": row["group_value"],
+                "shot_reconstructed_value": row["shot_value"],
+                "n_fibers": row["n_fibers"],
+                "record_index": row["record_index"],
+            })
+
+    physical_keys = sorted({
+        (row["H5"], row["SPECID"], row["IFUSLOT"], row["IFUID"], row["AMP"])
+        for row in raw_rows
+    }, key=str)
+    collapsed_rows = []
+    for physical in physical_keys:
+        for wave in waves:
+            matching = [row for row in raw_rows
+                        if (row["H5"], row["SPECID"], row["IFUSLOT"],
+                            row["IFUID"], row["AMP"]) == physical and
+                        row["wavelength_A"] == wave]
+            group_weight = float(sum(row["gaussian_reconstruction_weight"]
+                                     for row in matching))
+            weighted = float(sum(row["weighted_contribution"] for row in matching))
+            exposures = sorted({int(row["exposure"]) for row in matching})
+            total_abs = float(sum(abs(row["weighted_contribution"])
+                                  for row in raw_by_wave[wave]))
+            collapsed_rows.append({
+                "H5": physical[0], "SPECID": physical[1],
+                "IFUSLOT": physical[2], "IFUID": physical[3], "AMP": physical[4],
+                "exposures": ";".join(str(item) for item in exposures),
+                "wavelength_A": int(wave),
+                "gaussian_reconstruction_weight": group_weight,
+                "weighted_contribution": weighted,
+                "contribution_fraction": (abs(weighted) / total_abs
+                                           if total_abs > 0.0 else np.nan),
+                "n_exposure_groups": len(matching),
+            })
+
+    def _row_text(row, collapsed=False):
+        if collapsed:
+            return ("%(H5)s %(SPECID)d %(IFUSLOT)d %(IFUID)d %(AMP)s "
+                    "%(exposures)s %(wavelength_A)d %(gaussian_reconstruction_weight).8g "
+                    "%(weighted_contribution).8g %(contribution_fraction).7g" % row)
+        return ("%(H5)s %(exposure)d %(SPECID)d %(IFUSLOT)d %(IFUID)d %(AMP)s "
+                "%(wavelength_A)d %(gaussian_reconstruction_weight).8g "
+                "%(weighted_contribution).8g %(contribution_fraction).7g "
+                "%(global_contribution_fraction).7g" % row)
+
+    print("[position-trace] SINGLE RAW SPECTRAL_4882 QUERY")
+    print("[position-trace] DS9=(%d,%d), NumPy ix,iy=(%d,%d); sigma=%.9g pixels; "
+          "FWHM=%.3g arcsec; pixel_scale=%.3g arcsec" %
+          (x, y, target["ix"], target["iy"], sigma,
+           production.GAUSSIAN_FWHM_ARCSEC, pixel_scale))
+    print("[position-trace] observed cube SCI by wavelength:")
+    print("wavelength_A SCI")
+    for wave in waves:
+        print("%d %.8g" % (wave, target_values[wave]))
+    print("[position-trace] raw exposure-level contributors; all rows have "
+          "nonzero exact production-kernel deposition")
+    print("H5 exposure SPECID IFUSLOT IFUID AMP wavelength_A GaussianWeight "
+          "weightedContribution contributionFraction globalContributionFraction")
+    for row in raw_rows:
+        print(_row_text(row))
+
+    top_4882 = sorted(
+        (row for row in raw_rows if row["wavelength_A"] == 4882),
+        key=lambda row: abs(row["weighted_contribution"]), reverse=True)
+    print("[position-trace] top raw contributors at 4882 A (ranked by absolute "
+          "weighted contribution)")
+    print("H5 exposure SPECID IFUSLOT IFUID AMP wavelength_A GaussianWeight "
+          "weightedContribution contributionFraction globalContributionFraction")
+    for row in top_4882:
+        print(_row_text(row))
+
+    top_physical = sorted(
+        (row for row in collapsed_rows if row["wavelength_A"] == 4882),
+        key=lambda row: abs(row["weighted_contribution"]), reverse=True)
+    print("[position-trace] H5 + physical-amplifier collapsed summary; "
+          "exposures are combined and no uniqueness/decision rule is applied")
+    print("H5 SPECID IFUSLOT IFUID AMP exposures wavelength_A GaussianWeight "
+          "weightedContribution contributionFraction nExposureGroups")
+    for row in collapsed_rows:
+        print(_row_text(row, collapsed=True) + " %d" % row["n_exposure_groups"])
+    print("[position-trace] top collapsed physical amplifiers at 4882 A")
+    print("H5 SPECID IFUSLOT IFUID AMP exposures wavelength_A GaussianWeight "
+          "weightedContribution contributionFraction nExposureGroups")
+    for row in top_physical:
+        print(_row_text(row, collapsed=True) + " %d" % row["n_exposure_groups"])
+    print("[position-trace] RAW ATTRIBUTION ONLY: no AMBIGUOUS/UNAMBIGUOUS "
+          "classification, rejection recommendation, or rejection CSV write")
+
+
 def _annotate_candidates(groups_by_target, category, mask_waves, target_count):
     """Rank groups and assign conservative candidate statuses per target."""
     decisions = {}
@@ -897,6 +1051,9 @@ def _parse_args():
     parser.add_argument("--h5-glob", default=None)
     parser.add_argument("--pixel-scale", type=float, default=1.0)
     parser.add_argument("--bootstrap-draws", type=int, default=300)
+    parser.add_argument(
+        "--single-spectral-position", default=None, metavar="X,Y",
+        help="query one SPECTRAL_4882 DS9 position and print raw attribution only")
     parser.add_argument("--synthetic-test", action="store_true")
     return parser.parse_args()
 
@@ -911,6 +1068,7 @@ def main():
 
     production_dir = args.production_dir.expanduser().resolve()
     source_dir = args.source_dir.expanduser().resolve()
+    single_position = _parse_single_position(args.single_spectral_position)
     output_dir = production_dir / OUTPUT_DIR_NAME
     output_dir.mkdir(parents=True, exist_ok=True)
     summary_path = _find_summary(production_dir, args.summary)
@@ -930,8 +1088,11 @@ def main():
     with fits.open(cube_path, memmap=True) as hdul:
         cube_header = hdul[0].header.copy()
     geometry = _build_geometry(production, summary_data, cube_header, args.pixel_scale)
-    targets = {"SPECTRAL_4882": SPECTRAL_TARGETS,
-               "ALL_WAVELENGTH": ALL_WAVELENGTH_TARGETS}
+    if single_position is not None:
+        targets = {"SPECTRAL_4882": (single_position,)}
+    else:
+        targets = {"SPECTRAL_4882": SPECTRAL_TARGETS,
+                   "ALL_WAVELENGTH": ALL_WAVELENGTH_TARGETS}
     cube_context = _load_cube_context(
         cube_path, production, summary_data, targets,
         ALL_WAVELENGTHS, SPECTRAL_INSPECTION_WAVELENGTHS)
@@ -947,6 +1108,12 @@ def main():
     records, scale_rows = _calibrate_records(
         production, model, h5files, scale_rows, paths, production_dir,
         args.pixel_scale, args.bootstrap_draws)
+
+    if single_position is not None:
+        _run_single_spectral_query(
+            production, records, geometry, cube_context, def_wave,
+            single_position, args.pixel_scale)
+        return
 
     target_wave_lists = {"SPECTRAL_4882": SPECTRAL_INSPECTION_WAVELENGTHS,
                          "ALL_WAVELENGTH": ALL_WAVELENGTHS}
